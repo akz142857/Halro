@@ -17,7 +17,7 @@ backward-compatible API behavior take priority over feature count.
 
 Requirements:
 
-- Go 1.26.6 or later;
+- Go 1.26.9 or later;
 - Node.js 22 and npm for the Admin console;
 - Docker only for container validation.
 

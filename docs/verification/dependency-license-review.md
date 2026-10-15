@@ -30,6 +30,13 @@ module and lock files.
 | `golang.org/x/sys` | 0.48.0 | BSD-3-Clause | runtime |
 | `gopkg.in/yaml.v3` | 3.0.1 | MIT and Apache-2.0 | runtime |
 
+The 2026-10-15 refresh changes only the `go` directive in `go.mod`, from
+1.26.6 to 1.26.9, for standard-library fixes in `net/http` and `crypto/tls`.
+No module was added, removed, upgraded or relicensed; `go.sum` is unchanged.
+The same refresh moves the transitive `source-map-js` in
+`web/package-lock.json` from 1.2.1 to 1.2.2 (GHSA-68fv-2mgg-jv7q); it stays
+BSD-3-Clause and is a build/test-time dependency of Vite and jsdom.
+
 The 2026-08-28 refresh moved six direct versions and added, removed, and
 relicensed nothing: the module path sets in `go.mod` and `go.sum` are identical
 to the reviewed tree before it, so every row above is a version change rather
@@ -315,10 +322,10 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `742ec795e94a3945336be2f5e3a7b35d5209e180`
+- `go.mod`: `a5e3b273e15253a6cbb7e3aa02e9f20159cae9e9`
 - `go.sum`: `f2b3fdf9939c7cbef8048f41ac042bafb6165079`
 - `web/package.json`: `ef5d38e8a10ddb05637847ef44ad0ff3a5f5afab`
-- `web/package-lock.json`: `3a1d755426394151731995ee69f599a332bceed6`
+- `web/package-lock.json`: `19c43a7b7a606cbe2e5f631512a8728cbb5b4615`
 - `tests/compatibility/go/go.mod`: `738e441acd384f01b95150407cfad761111a63aa`
 - `tests/compatibility/go/go.sum`: `e41910b1dfe53890a0f3d9caa912db7a3f00c6c7`
 - `tests/compatibility/node/package.json`: `08df1b6dbf9e6b758d28cfbb16cba47d42d409f2`
