@@ -291,7 +291,7 @@ func (r *Runtime) collectSummaryRows(
 	if err := r.usage.Flush(); err != nil {
 		return nil, nil, err
 	}
-	if err := r.usageHistory.RollupRange(start, end, keep); err != nil {
+	if err := r.usage.History().RollupRange(start, end, keep); err != nil {
 		return nil, nil, err
 	}
 	rows := make([]summaryRow, 0, len(merged))

@@ -132,7 +132,6 @@ type Runtime struct {
 	backgroundCancel context.CancelFunc
 	backgroundWait   sync.WaitGroup
 	usage            *usage.Aggregate
-	usageHistory     *usage.HistoryStore
 	usageCollector   *usage.Collector
 	usageExporter    *usage.Exporter
 	periods          *budget.PeriodResolver
@@ -778,7 +777,6 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		setupToken:          setupToken,
 		setupTokenNeeded:    setupTokenNeeded,
 		usage:               usageAggregate,
-		usageHistory:        usageHistory,
 		usageCollector:      usageCollector,
 		usageExporter:       usageExporter,
 		periods:             periods,
@@ -1249,7 +1247,7 @@ func (r *Runtime) exportUsageParquet() {
 		r.logger.Warn("usage parquet export skipped; history write failed", "error", err)
 		return
 	}
-	if _, err := r.usageExporter.Export(r.usageHistory); err != nil {
+	if _, err := r.usageExporter.Export(r.usage.History()); err != nil {
 		r.logger.Warn("usage parquet export failed", "error", err)
 	}
 }
@@ -1501,7 +1499,7 @@ func (r *Runtime) Close() error {
 			auditErr,
 			captureErr,
 			historyErr,
-			r.usageHistory.Close(),
+			r.usage.History().Close(),
 			func() error {
 				r.providers.Close()
 				return nil

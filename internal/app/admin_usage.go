@@ -450,6 +450,9 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 			return
 		}
 	}
+	if query.Start.IsZero() && query.End.IsZero() {
+		query.Start = r.defaultUsageStart(time.Now())
+	}
 	timing, ok := r.writeTimeContext(writer, time.Now())
 	if !ok {
 		return
@@ -536,6 +539,9 @@ func (r *Runtime) adminUsageFailures(writer http.ResponseWriter, request *http.R
 			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid end timestamp"})
 			return
 		}
+	}
+	if query.Start.IsZero() && query.End.IsZero() {
+		query.Start = r.defaultUsageStart(time.Now())
 	}
 	timing, ok := r.writeTimeContext(writer, time.Now())
 	if !ok {
@@ -786,6 +792,13 @@ func configNodeKind(node *yaml.Node) string {
 		return "number"
 	}
 	return "text"
+}
+
+// defaultUsageStart is where a list that names no range begins: the console
+// window. The window no longer bounds what is kept — every attempt stays in
+// the history index — only what a list shows before the operator asks for more.
+func (r *Runtime) defaultUsageStart(now time.Time) time.Time {
+	return now.UTC().AddDate(0, 0, -r.consoleWindowDays())
 }
 
 // syncUsageAdmin brings the history index up to the Ledger before a read, so

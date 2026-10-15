@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
-	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/masterkey"
 	bbolt "go.etcd.io/bbolt"
 )
@@ -1093,6 +1092,31 @@ var migrations = []migration{
 	// is free" and admit exactly the duplicate upstream call the key was sent to
 	// prevent.
 	{version: 40, name: "provider_resource_idempotency_index", up: migrateProviderResourceIdempotencyIndex},
+	// The usage checkpoint and the daily rollup moved to the usage history
+	// index (history.db), which keeps every row on disk and is rebuilt from
+	// the Ledger. Their old home is cleared here rather than left behind: on a
+	// busy instance the checkpoint segments are gigabytes this file would
+	// otherwise carry, and back up, forever.
+	{version: 41, name: "drop_usage_derivatives", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_drop_usage_derivatives"); err != nil {
+			return err
+		}
+		meta := tx.Bucket(bucketMeta)
+		for _, key := range [][]byte{keyUsageCheckpoint, keyUsageRollupState} {
+			if err := meta.Delete(key); err != nil {
+				return err
+			}
+		}
+		for _, name := range [][]byte{bucketUsageDailyRollup, bucketUsageCheckpointSegments} {
+			if tx.Bucket(name) == nil {
+				continue
+			}
+			if err := tx.DeleteBucket(name); err != nil {
+				return err
+			}
+		}
+		return migrationStep(step, "after_drop_usage_derivatives")
+	}},
 }
 
 func migrateProviderResourceIdempotencyIndex(tx *bbolt.Tx, step func(string) error) error {
@@ -1352,11 +1376,6 @@ func patchJSONField(encoded json.RawMessage, name string, value any) (json.RawMe
 	}
 	object[name] = field
 	return json.Marshal(object)
-}
-
-type usageCheckpoint struct {
-	Watermark ledger.Watermark `json:"watermark"`
-	Payload   []byte           `json:"payload"`
 }
 
 type pricingIdempotencyRecord struct {
@@ -2018,8 +2037,6 @@ func requiredBuckets() [][]byte {
 		bucketModelCapabilityDetections,
 		bucketCapabilityDetectionIdem,
 		bucketCapabilityDetectionIndex,
-		bucketUsageDailyRollup,
-		bucketUsageCheckpointSegments,
 		bucketOutcomeDefinitions,
 		bucketRunGovernanceIdempotency,
 		bucketRunGovernanceIndex,

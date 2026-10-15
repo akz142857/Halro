@@ -1,8 +1,10 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/ledger"
@@ -15,7 +17,7 @@ import (
 // in-memory bookkeeping.
 func activeRequestsAfterReplay(t *testing.T, log *ledger.Log) uint64 {
 	t.Helper()
-	aggregate := usage.NewAggregate()
+	aggregate := newUsageAggregateForTest(t)
 	if _, err := log.Replay(ledger.Watermark{}, aggregate.Apply); err != nil {
 		t.Fatal(err)
 	}
@@ -78,4 +80,16 @@ func TestEmbeddingsBudgetRejectionDoesNotStayActive(t *testing.T) {
 	if active := activeRequestsAfterReplay(t, f.log); active != 0 {
 		t.Fatalf("budget-rejected embedding requests left %d of %d in flight", active, attempts)
 	}
+}
+
+// newUsageAggregateForTest is an empty usage aggregate over a history index in
+// the test's temporary directory.
+func newUsageAggregateForTest(t *testing.T) *usage.Aggregate {
+	t.Helper()
+	history, _, err := usage.OpenHistory(filepath.Join(t.TempDir(), "history.db"), bytes.Repeat([]byte{0x4b}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { history.Close() })
+	return usage.NewAggregate(history)
 }

@@ -202,6 +202,22 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	metricHeader(output, "halro_usage_history_building", "gauge",
 		"1 while the usage history index replays the Ledger after a start.")
 	fmt.Fprintf(output, "halro_usage_history_building %d\n", boolMetric(r.usageCollector.Building()))
+	writes := r.usage.History().WriteStats()
+	metricHeader(output, "halro_usage_history_commits_total", "counter",
+		"Batch transactions written to the usage history index.")
+	fmt.Fprintf(output, "halro_usage_history_commits_total %d\n", writes.Commits)
+	metricHeader(output, "halro_usage_history_commit_seconds_total", "counter",
+		"Time spent in usage history batch transactions, fsync included.")
+	fmt.Fprintf(output, "halro_usage_history_commit_seconds_total %.6f\n", writes.CommitSeconds)
+	metricHeader(output, "halro_usage_history_page_writes_total", "counter",
+		"Pages written to the usage history index.")
+	fmt.Fprintf(output, "halro_usage_history_page_writes_total %d\n", writes.PageWrites)
+	metricHeader(output, "halro_usage_history_free_pages", "gauge",
+		"Free pages the usage history index holds for reuse.")
+	fmt.Fprintf(output, "halro_usage_history_free_pages %d\n", writes.FreePages)
+	metricHeader(output, "halro_usage_history_file_bytes", "gauge",
+		"Size of the usage history index file.")
+	fmt.Fprintf(output, "halro_usage_history_file_bytes %d\n", writes.FileBytes)
 	// The WAL's own shape. Active bytes is what sealing bounds; sealed bytes is
 	// what it moved out of the way and is still keeping. Read together they say
 	// whether the growth an operator is watching is in the file being written

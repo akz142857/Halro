@@ -131,6 +131,9 @@ func (a *Aggregate) QueryFailedRequests(query FailureQuery) (FailurePage, error)
 			if err != nil {
 				return err
 			}
+			if pastStart(summary.CompletedAt, query.Start) {
+				return errStopWalk
+			}
 			if summaryMatches(summary, query) {
 				attempts, err := a.history.requestAttempts(tx, summary.RequestID)
 				if err != nil {

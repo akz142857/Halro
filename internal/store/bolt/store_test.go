@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
-	"github.com/akz142857/Halro/internal/ledger"
 	bbolt "go.etcd.io/bbolt"
 )
 
@@ -803,29 +802,6 @@ func createV1Metadata(t *testing.T, path string) {
 	}
 	if err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestUsageCheckpointPersistenceAndMonotonicity(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	first := ledger.Watermark{Generation: 1, Offset: 100, Sequence: 2}
-	if err := store.PutUsageCheckpoint(first, []byte(`{"version":1}`), nil, nil, domain.RollupVersion, nil); err != nil {
-		t.Fatal(err)
-	}
-	got, payload, err := store.UsageCheckpoint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != first || string(payload) != `{"version":1}` {
-		t.Fatalf("watermark=%#v payload=%s", got, payload)
-	}
-	older := ledger.Watermark{Generation: 1, Offset: 50, Sequence: 1}
-	if err := store.PutUsageCheckpoint(older, []byte(`{"version":1}`), nil, nil, domain.RollupVersion, nil); err == nil {
-		t.Fatal("expected a backwards checkpoint to be rejected")
 	}
 }
 

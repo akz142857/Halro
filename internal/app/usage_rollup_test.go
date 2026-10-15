@@ -135,7 +135,7 @@ func TestRejectedUsageCheckpointDoesNotDoubleTheRollup(t *testing.T) {
 		t.Fatal(err)
 	}
 	billOneRequest(t, runtime, "request_1")
-	runtime.saveUsageCheckpoint()
+	syncUsageHistory(t, runtime)
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestRejectedUsageCheckpointDoesNotDoubleTheRollup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reopened.saveUsageCheckpoint()
+	syncUsageHistory(t, reopened)
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -191,9 +191,9 @@ func TestUnreadableRollupForcesAFullRebuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	billOneRequest(t, runtime, "request_1")
-	runtime.saveUsageCheckpoint()
+	syncUsageHistory(t, runtime)
 	billOneRequest(t, runtime, "request_2")
-	runtime.saveUsageCheckpoint()
+	syncUsageHistory(t, runtime)
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestUnreadableRollupForcesAFullRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reopened.saveUsageCheckpoint()
+	syncUsageHistory(t, reopened)
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +275,7 @@ func TestRebuildUsageSummaryReproducesTheIncrementalRollup(t *testing.T) {
 	// pieces rather than in one increment that trivially matches a single pass.
 	for _, id := range []string{"request_1", "request_2"} {
 		billOneRequest(t, runtime, id)
-		runtime.saveUsageCheckpoint()
+		syncUsageHistory(t, runtime)
 	}
 	billOneRequest(t, runtime, "request_3")
 	if err := runtime.Close(); err != nil {
@@ -310,7 +310,7 @@ func TestRebuildUsageSummaryReproducesTheIncrementalRollup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reopened.saveUsageCheckpoint()
+	syncUsageHistory(t, reopened)
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
 	}

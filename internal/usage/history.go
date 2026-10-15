@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
@@ -124,6 +125,38 @@ func (b *historyBatch) records() int {
 type HistoryStore struct {
 	db  *bbolt.DB
 	key []byte
+	// commits and commitNanos time the batch transactions, fsync included,
+	// so a write that grows with the file shows up as a rising average.
+	commits     atomic.Uint64
+	commitNanos atomic.Int64
+}
+
+// HistoryWriteStats describes what writing the index costs.
+type HistoryWriteStats struct {
+	Commits       uint64
+	CommitSeconds float64
+	// PageWrites and WriteSeconds are bbolt's own counters: pages written to
+	// the file and the time spent writing them, fsync excluded.
+	PageWrites    int64
+	WriteSeconds  float64
+	FreePages     int
+	PendingPages  int
+	FreelistBytes int
+	FileBytes     int64
+}
+
+func (s *HistoryStore) WriteStats() HistoryWriteStats {
+	stats := s.db.Stats()
+	result := HistoryWriteStats{
+		Commits: s.commits.Load(), CommitSeconds: time.Duration(s.commitNanos.Load()).Seconds(),
+		PageWrites: stats.TxStats.GetWrite(), WriteSeconds: stats.TxStats.GetWriteTime().Seconds(),
+		FreePages: stats.FreePageN, PendingPages: stats.PendingPageN, FreelistBytes: stats.FreelistInuse,
+	}
+	_ = s.db.View(func(tx *bbolt.Tx) error {
+		result.FileBytes = tx.Size()
+		return nil
+	})
+	return result
 }
 
 // OpenHistory opens or creates history.db. rebuilt reports that the file it
@@ -277,6 +310,11 @@ func (s *HistoryStore) loadState() (HistoryState, map[string]pendingRequest, map
 // increments, in-flight state, and the state that names the watermark they
 // cover. Either all of it lands or none of it does.
 func (s *HistoryStore) commit(batch *historyBatch) error {
+	started := time.Now()
+	defer func() {
+		s.commits.Add(1)
+		s.commitNanos.Add(int64(time.Since(started)))
+	}()
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		attempts := tx.Bucket(historyAttempts)
 		requestAttempts := tx.Bucket(historyRequestAttempts)

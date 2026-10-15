@@ -107,6 +107,9 @@ func (a *Aggregate) QueryAttempts(query AttemptQuery) (AttemptPage, error) {
 		scanned := 0
 		consider := func(attempt AttemptEvent) error {
 			scanned++
+			if pastStart(attempt.CompletedAt, query.Start) {
+				return errStopWalk
+			}
 			if attemptMatches(attempt, query) {
 				page.Attempts = append(page.Attempts, attempt)
 				if len(page.Attempts) == query.Limit+1 {
@@ -153,6 +156,16 @@ func (a *Aggregate) QueryAttempts(query AttemptQuery) (AttemptPage, error) {
 		return AttemptPage{}, err
 	}
 	return page, nil
+}
+
+// startSlack is how far before a query's start a backward walk keeps reading.
+// Rows are walked in ledger order, which follows completion time closely but
+// not exactly — two requests finishing together can be appended in either
+// order — so the walk stops only once it is well past the start.
+const startSlack = time.Hour
+
+func pastStart(completed, start time.Time) bool {
+	return !start.IsZero() && completed.Before(start.Add(-startSlack))
 }
 
 func attemptMatches(attempt AttemptEvent, query AttemptQuery) bool {

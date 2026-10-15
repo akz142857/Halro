@@ -58,6 +58,13 @@ type memoryBaselineLevel struct {
 	// HistoryMaxLagSeconds is how far the usage history index trailed the
 	// Ledger head at worst during the window, in seconds of Ledger writes.
 	HistoryMaxLagSeconds float64 `json:"history_max_lag_seconds"`
+	// What writing the history index cost during the window: batch
+	// transactions, their mean duration with fsync, and pages per batch.
+	HistoryCommits        uint64  `json:"history_commits"`
+	HistoryCommitMeanMs   float64 `json:"history_commit_mean_ms"`
+	HistoryPagesPerCommit float64 `json:"history_pages_per_commit"`
+	HistoryFreePages      int     `json:"history_free_pages"`
+	HistoryFileBytes      int64   `json:"history_file_bytes"`
 }
 
 type memoryBaselineResult struct {
@@ -159,6 +166,7 @@ func TestMemoryBaseline(t *testing.T) {
 
 		for _, concurrency := range []int{1, 16, 64} {
 			syncsBefore := r.ledger.Stats().Syncs
+			writesBefore := r.usage.History().WriteStats()
 			headBefore, _, _ := r.ledger.ChainHead()
 			stopSampling := make(chan struct{})
 			sampled := make(chan uint64)
@@ -197,6 +205,13 @@ func TestMemoryBaseline(t *testing.T) {
 			if rate := float64(headAfter.Sequence-headBefore.Sequence) / window.Seconds(); rate > 0 {
 				level.HistoryMaxLagSeconds = float64(maxLagRecords) / rate
 			}
+			writesAfter := r.usage.History().WriteStats()
+			if commits := writesAfter.Commits - writesBefore.Commits; commits > 0 {
+				level.HistoryCommits = commits
+				level.HistoryCommitMeanMs = (writesAfter.CommitSeconds - writesBefore.CommitSeconds) * 1000 / float64(commits)
+				level.HistoryPagesPerCommit = float64(writesAfter.PageWrites-writesBefore.PageWrites) / float64(commits)
+			}
+			level.HistoryFreePages, level.HistoryFileBytes = writesAfter.FreePages, writesAfter.FileBytes
 			result.Levels = append(result.Levels, level)
 		}
 
@@ -207,10 +222,11 @@ func TestMemoryBaseline(t *testing.T) {
 		if _, err := fmt.Fprintf(results, "%s\n", line); err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("history=%d heap=%.1fMiB open=%.2fs fill=%.0f/s c1=%.0f/s c16=%.0f/s c64=%.0f/s p99(c64)=%.1fms lag(c64)=%.2fs",
+		t.Logf("history=%d heap=%.1fMiB open=%.2fs fill=%.0f/s c1=%.0f/s c16=%.0f/s c64=%.0f/s p99(c64)=%.1fms lag(c64)=%.2fs commit(c1)=%.1fms pages(c1)=%.0f free=%d file=%dMiB",
 			result.History, float64(result.HeapAllocBytes)/(1<<20), result.OpenSeconds, result.FillPerSecond,
 			result.Levels[0].Throughput, result.Levels[1].Throughput, result.Levels[2].Throughput, result.Levels[2].P99Ms,
-			result.Levels[2].HistoryMaxLagSeconds)
+			result.Levels[2].HistoryMaxLagSeconds, result.Levels[0].HistoryCommitMeanMs, result.Levels[0].HistoryPagesPerCommit,
+			result.Levels[0].HistoryFreePages, result.Levels[0].HistoryFileBytes>>20)
 	}
 }
 

@@ -25,13 +25,13 @@ func dumpUsage(t *testing.T, runtime *Runtime) usageDump {
 		t.Fatal(err)
 	}
 	dump := usageDump{Totals: runtime.usage.Totals()}
-	if err := runtime.usageHistory.AttemptsAfter(0, func(attempt usage.AttemptEvent) error {
+	if err := runtime.usage.History().AttemptsAfter(0, func(attempt usage.AttemptEvent) error {
 		dump.Attempts = append(dump.Attempts, attempt)
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.usageHistory.RequestsAfter(0, func(summary usage.RequestSummary) error {
+	if err := runtime.usage.History().RequestsAfter(0, func(summary usage.RequestSummary) error {
 		dump.Requests = append(dump.Requests, summary)
 		return nil
 	}); err != nil {
@@ -63,4 +63,13 @@ func ledgerKeyForTest(t *testing.T, cfg config.Config) []byte {
 		t.Fatal(err)
 	}
 	return ledgerKey
+}
+
+// syncUsageHistory brings the index level with the Ledger and writes it, which
+// is what a usage checkpoint tick used to guarantee.
+func syncUsageHistory(t *testing.T, runtime *Runtime) {
+	t.Helper()
+	if err := runtime.usageCollector.CatchUp(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 }

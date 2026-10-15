@@ -122,10 +122,10 @@ func TestSecretCanaryNeverReachesTelemetryPersistenceOrAdminSurfaces(t *testing.
 		t.Fatal(err)
 	}
 	exposed.Write(snapshotJSON)
-	if _, err := runtime.usageExporter.Export(runtime.usageHistory); err != nil {
+	if _, err := runtime.usageExporter.Export(runtime.usage.History()); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.usageExporter.Verify(runtime.usageHistory); err != nil {
+	if err := runtime.usageExporter.Verify(runtime.usage.History()); err != nil {
 		t.Fatal(err)
 	}
 

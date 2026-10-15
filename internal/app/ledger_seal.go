@@ -124,7 +124,7 @@ func (r *Runtime) ledgerArchivedThrough() (uint64, bool) {
 		}
 		return 0, false
 	}
-	state, err := r.usageHistory.State()
+	state, err := r.usage.History().State()
 	if err != nil {
 		// An index with nothing written yet holds no position and says
 		// nothing. Anything else is the index failing, which silently stops

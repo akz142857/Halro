@@ -301,7 +301,7 @@ groups:
           summary: A Halro Run reached its budget and requests are being refused
           runbook_url: /docs/observability/operations-runbook.md#halrorunbudgetrefusingtraffic
       # Spend that stops being reported is not spend that stopped. The counter
-      # is restored from the usage checkpoint and rebuilt from the Ledger, so
+      # is restored from the usage history index and rebuilt from the Ledger, so
       # its absence means the metrics path or the accounting aggregate is
       # broken — and every cost signal above is silent while it is.
       - alert: HalroProviderSpendUnreported
