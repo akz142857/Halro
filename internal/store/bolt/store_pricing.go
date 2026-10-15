@@ -1041,6 +1041,17 @@ func quarantineIncoherentPricingHighWatersTx(tx *bbolt.Tx) error {
 	return nil
 }
 
+// RecoverDeploymentPricePins resolves the pins a crash left prepared and checks
+// the committed pins whose attempts are still in flight. It runs before
+// RecoverPendingLeases, so every lease a prepared pin could belong to and that
+// has not settled is still in the state.
+//
+// The state holds the leases of attempts in flight and of attempts settled
+// because their pin failed to commit (ledger.OutcomePinCommitFailed), which
+// are exactly the leases a prepared pin can have. A prepared pin with none was
+// never followed by a lease and is deleted. A committed pin with none belongs
+// to a settled attempt; it was checked against its lease when it was
+// committed, and the backup check replays the Ledger to check it again.
 func (s *Store) RecoverDeploymentPricePins(ctx context.Context, state *ledger.State) error {
 	if state == nil {
 		return errors.New("ledger state is required for price pin recovery")
@@ -1070,9 +1081,8 @@ func (s *Store) RecoverDeploymentPricePins(ctx context.Context, state *ledger.St
 			if !exists {
 				if intent.State == domain.PricePinPrepared {
 					deletes = append(deletes, bytes.Clone(key))
-					return nil
 				}
-				return fmt.Errorf("committed price pin %q has no Ledger lease", intent.AttemptID)
+				return nil
 			}
 			if lease.Event.PriceSnapshot == nil {
 				return fmt.Errorf("price pin %q Ledger lease has no snapshot", intent.AttemptID)

@@ -422,8 +422,12 @@ func validateRestoreStage(
 	}
 	defer stagedHistory.Close()
 	stagedLedgerState := ledger.NewState()
+	priceReferences := metadata.BeginPriceReferenceCheck()
 	watermark, replayErr := ledgerLog.Replay(ledger.Watermark{}, func(record ledger.Record) error {
 		if err := stagedLedgerState.Apply(record); err != nil {
+			return err
+		}
+		if err := priceReferences.Observe(record); err != nil {
 			return err
 		}
 		if err := aggregate.Apply(record); err != nil {
@@ -448,7 +452,7 @@ func validateRestoreStage(
 			chainOffset != manifest.LedgerChainHeadOffset || chainHash != manifest.LedgerChainHeadHash)) {
 		return errors.New("staged Ledger chain head does not match backup manifest")
 	}
-	if err := metadata.ValidateDeploymentPriceReferences(stagedLedgerState); err != nil {
+	if err := priceReferences.Finish(); err != nil {
 		return fmt.Errorf("verify staged pricing references: %w", err)
 	}
 	if manifest.FormatVersion >= 3 {
@@ -637,8 +641,12 @@ func createBackupSnapshotWithLedger(
 	}
 	defer scratchHistory.Close()
 	ledgerState := ledger.NewState()
+	priceReferences := metadata.BeginPriceReferenceCheck()
 	replayedWatermark, replayErr := snapshotLog.Replay(ledger.Watermark{}, func(record ledger.Record) error {
 		if err := ledgerState.Apply(record); err != nil {
+			return err
+		}
+		if err := priceReferences.Observe(record); err != nil {
 			return err
 		}
 		if err := ledgerAggregate.Apply(record); err != nil {
@@ -653,7 +661,7 @@ func createBackupSnapshotWithLedger(
 	if replayedWatermark != ledgerWatermark {
 		return backup.Manifest{}, errors.New("ledger snapshot watermark changed during replay")
 	}
-	if err := metadata.ValidateDeploymentPriceReferences(ledgerState); err != nil {
+	if err := priceReferences.Finish(); err != nil {
 		return backup.Manifest{}, fmt.Errorf("validate pricing references before backup: %w", err)
 	}
 	usageManifestVersion := 0

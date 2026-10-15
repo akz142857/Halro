@@ -229,7 +229,7 @@ func (r *Runtime) adminGovernanceSummary(writer http.ResponseWriter, request *ht
 	accounting, err := r.state.GovernanceSnapshot(ctx, ledger.GovernanceSnapshotOptions{
 		ProjectID: projectID, DefinitionID: definitionID, DefinitionVersion: version,
 		CohortStart: query.Get("cohort_start"), CohortEnd: query.Get("cohort_end"),
-		MaxWorkUnits: 100_000, IncludeAttempts: true,
+		MaxWorkUnits: 100_000, IncludeCosts: true,
 	})
 	if errors.Is(err, ledger.ErrGovernanceCohortLimit) {
 		adminBadRequest(writer, "cohort exceeds 100000 eligible Work Units; use governance export")
@@ -240,28 +240,12 @@ func (r *Runtime) adminGovernanceSummary(writer http.ResponseWriter, request *ht
 		return
 	}
 	costs, estimates, unknown := map[string]int64{}, map[string]int64{}, map[string]int64{}
-	for _, attempt := range accounting.SettledAttempts {
-		wu := attempt.Settlement.WorkUnitID
-		if attempt.CostKnown {
-			costs[wu], err = checkedSummaryAdd(costs[wu], attempt.CostMicrosUSD)
-			if err != nil {
-				writeSummaryOverflow(writer)
-				return
-			}
-			if attempt.Settlement.CostEstimated {
-				estimates[wu], err = checkedSummaryAdd(estimates[wu], attempt.CostMicrosUSD)
-				if err != nil {
-					writeSummaryOverflow(writer)
-					return
-				}
-			}
-		} else {
-			unknown[wu], err = checkedSummaryAdd(unknown[wu], 1)
-			if err != nil {
-				writeSummaryOverflow(writer)
-				return
-			}
+	for wu, cost := range accounting.Costs {
+		if cost.Overflowed {
+			writeSummaryOverflow(writer)
+			return
 		}
+		costs[wu], estimates[wu], unknown[wu] = cost.KnownMicrosUSD, cost.EstimatedMicrosUSD, cost.UnknownAttempts
 	}
 	result := governanceSummary{Basis: "work_unit_cohort", CohortStart: query.Get("cohort_start"), CohortEnd: query.Get("cohort_end"), DefinitionID: definitionID, DefinitionVersion: version,
 		GeneratedAt: time.Now().UTC(), AccountingWatermark: accounting.Watermark,

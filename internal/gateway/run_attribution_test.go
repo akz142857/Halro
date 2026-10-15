@@ -103,8 +103,8 @@ func TestUntaggedLegacyInferenceDoesNotEnterRunGovernancePath(t *testing.T) {
 	if len(f.accounting.WorkUnits(f.project.ID)) != 0 || len(f.accounting.Runs(f.project.ID, "")) != 0 {
 		t.Fatal("untagged inference created Run Governance lifecycle state")
 	}
-	settled := f.state.SettledAttempts()
-	if len(settled) != 1 || settled[0].Settlement.WorkUnitID != "" || settled[0].Settlement.RunID != "" {
+	settled := settlementsInLog(t, f.log)
+	if len(settled) != 1 || settled[0].WorkUnitID != "" || settled[0].RunID != "" {
 		t.Fatalf("legacy settlement gained attribution: %#v", settled)
 	}
 }

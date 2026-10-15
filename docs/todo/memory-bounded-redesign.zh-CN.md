@@ -310,7 +310,7 @@ HA 代码在 `ha` 分支（`098a3214`）。本方案落地后，HA 基于新的 
 
 | 保留 | 上限由什么决定 |
 | --- | --- |
-| `reservations` 和对应的 `leaseRecords`（结算时一并删除） | 在途尝试数 |
+| `reservations` 和对应的 `leaseRecords`（结算时一并删除） | 在途尝试数。例外：因价格 pin 提交失败而结算（`pin_commit_failed`）的尝试保留租约，因为它的 pin 还是 prepared，启动时要靠这条租约把它提交；否则 pin 被删掉，它锁定的价格就能被取消。只有元数据写失败时才会出现，数量很少 |
 | `requestRuns`、`activeByWorkUnit`、`pendingByWorkUnit` | 在途请求数 |
 | `balances` ★ | 项目数 × 天数。每条约 150 字节，100 个项目一年约 5 MB。§5 原计划把已关闭期间移入索引；这里先全部留在内存，P4 再按需要移 |
 | `workUnits`、`runs`、`runsByWorkUnit`、`governanceIdempotency` ★ | 治理操作数，与请求数无关。§7 原计划在 P2 移入索引；这里留到 P3，与 Governance 历史一起处理。P2 只修掉 `EventRunCreated` 扫全部 Run 的问题，改用 `runsByWorkUnit` 计数 |

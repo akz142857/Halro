@@ -38,6 +38,23 @@ func newTestManager(t testing.TB) (*Manager, *ledger.State, func()) {
 	return manager, state, func() { _ = log.Close() }
 }
 
+// settlementInLog reads an attempt's settlement back from the Ledger: the
+// state keeps no settled attempts.
+func settlementInLog(t testing.TB, log *ledger.Log, attemptID string) (ledger.Event, bool) {
+	t.Helper()
+	var found ledger.Event
+	ok := false
+	if _, err := log.Replay(ledger.Watermark{}, func(record ledger.Record) error {
+		if record.Event.Kind == ledger.EventAttemptSettled && record.Event.AttemptID == attemptID {
+			found, ok = record.Event, true
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return found, ok
+}
+
 func testPriceSnapshot(t testing.TB, mode domain.BillingMode) *domain.PriceSnapshot {
 	t.Helper()
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
@@ -187,7 +204,7 @@ func TestRecoverStartedLeaseUsesFrozenPriceAndPreparedBounds(t *testing.T) {
 func TestRecoverPendingLeasePreservesFrozenProviderAttribution(t *testing.T) {
 	for _, started := range []bool{false, true} {
 		t.Run(map[bool]string{false: "not_started", true: "started"}[started], func(t *testing.T) {
-			manager, state, closeLog := newTestManager(t)
+			manager, _, closeLog := newTestManager(t)
 			defer closeLog()
 			request, err := manager.BeginRequest(context.Background(), "project_recovery_attribution", "request_recovery_attribution")
 			if err != nil {
@@ -214,11 +231,10 @@ func TestRecoverPendingLeasePreservesFrozenProviderAttribution(t *testing.T) {
 			if err := manager.RecoverPendingLeases(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			settled, ok := state.SettledAttempt(attempt.AttemptID)
+			got, ok := settlementInLog(t, manager.log, attempt.AttemptID)
 			if !ok {
 				t.Fatal("recovery did not produce a settlement")
 			}
-			got := settled.Settlement
 			if got.RouteID != attempt.RouteID || got.DeploymentID != attempt.DeploymentID ||
 				got.ProviderID != attempt.ProviderID || got.OfferingID != attempt.OfferingID ||
 				got.ProfileID != attempt.ProfileID || got.AccountRegionID != attempt.AccountRegionID ||
