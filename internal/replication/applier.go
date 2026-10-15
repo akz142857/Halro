@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/akz142857/Halro/internal/ledger"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
@@ -28,7 +27,6 @@ type ReplicaApplier struct {
 	receiver   *ReplicaReceiver
 	journal    *OrderingJournal
 	projection ReplicaProjection
-	applyBatch DurationHistogram
 }
 
 func NewReplicaApplier(receiver *ReplicaReceiver, journal *OrderingJournal, projection ReplicaProjection) (*ReplicaApplier, error) {
@@ -41,16 +39,10 @@ func NewReplicaApplier(receiver *ReplicaReceiver, journal *OrderingJournal, proj
 // ApplyConfirmed batches the complete newly-confirmed prefix. It never reads
 // durable_index as an apply limit: frames may be safely on disk and still be
 // ineligible because no caller was allowed to observe them as committed.
-func (a *ReplicaApplier) ApplyConfirmed(ctx context.Context) (result uint64, err error) {
+func (a *ReplicaApplier) ApplyConfirmed(ctx context.Context) (uint64, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	_, confirmed, applied := a.receiver.Progress()
-	reason := "apply_invariant_failed"
-	defer func() {
-		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			a.receiver.recordApplyBlocked(reason, confirmed)
-		}
-	}()
 	projectionState := a.receiver.ProjectionProgress()
 	if confirmed == applied {
 		return applied, nil
@@ -58,14 +50,12 @@ func (a *ReplicaApplier) ApplyConfirmed(ctx context.Context) (result uint64, err
 	if confirmed < applied {
 		return applied, errors.New("replica confirmed index regressed behind applied index")
 	}
-	applyStarted := time.Now()
 	var ledgerCursor, metadataCursor StoreCursor
 	var firstSchema, lastSchema uint32
 	for index := applied + 1; index <= confirmed; index++ {
 		if err := ctx.Err(); err != nil {
 			return applied, err
 		}
-		reason = "ordering_read_failed"
 		record, err := a.journal.Record(index)
 		if err != nil {
 			return applied, err
@@ -86,7 +76,6 @@ func (a *ReplicaApplier) ApplyConfirmed(ctx context.Context) (result uint64, err
 			// The sink publishes an authenticated object before acknowledging its
 			// final chunk. Metadata that names it is ordered after this record.
 		case KindSchemaBoundary:
-			reason = "schema_boundary_failed"
 			boundary, err := DecodeSchemaBoundaryMetadata(record.Metadata)
 			if err != nil {
 				return applied, err
@@ -98,14 +87,12 @@ func (a *ReplicaApplier) ApplyConfirmed(ctx context.Context) (result uint64, err
 			}
 			lastSchema = boundary.To
 		default:
-			reason = "ordering_kind_invalid"
 			return applied, fmt.Errorf("replica apply found unknown ordering kind %d", record.Kind)
 		}
 	}
 	// Metadata and Ledger are the two stores with derived in-memory/on-disk
 	// projections. Audit and Governance frames are already usable in place.
 	if metadataCursor.Generation != 0 {
-		reason = "projection_failed"
 		if err := a.projection.ApplyMetadataThrough(ctx, metadataCursor.Generation, metadataCursor.Sequence); err != nil {
 			return applied, fmt.Errorf("apply confirmed metadata prefix: %w", err)
 		}
@@ -113,13 +100,11 @@ func (a *ReplicaApplier) ApplyConfirmed(ctx context.Context) (result uint64, err
 		projectionState.MetadataSequence = metadataCursor.Sequence
 	}
 	if ledgerCursor.Generation != 0 {
-		reason = "projection_failed"
 		if err := a.projection.ApplyLedgerThrough(ctx, ledgerCursor.Generation, ledgerCursor.Sequence); err != nil {
 			return applied, fmt.Errorf("apply confirmed Ledger prefix: %w", err)
 		}
 	}
 	if firstSchema != 0 {
-		reason = "schema_boundary_failed"
 		validator, ok := a.projection.(schemaBoundaryProjection)
 		if !ok {
 			return applied, errors.New("replica projection cannot validate a schema boundary")
@@ -129,18 +114,10 @@ func (a *ReplicaApplier) ApplyConfirmed(ctx context.Context) (result uint64, err
 		}
 	}
 	projectionState.Index = confirmed
-	reason = "apply_state_advance_failed"
 	if err := a.receiver.AdvanceAppliedWithProjection(confirmed, projectionState); err != nil {
 		return applied, err
 	}
-	a.applyBatch.observe(time.Since(applyStarted))
 	return confirmed, nil
-}
-
-func (a *ReplicaApplier) ApplyBatchTelemetry() DurationHistogram {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.applyBatch
 }
 
 type NativeProjection struct {

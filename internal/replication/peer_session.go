@@ -75,8 +75,6 @@ type PeerSession struct {
 	data           bool
 	readWait       time.Duration
 	writeWait      time.Duration
-	heartbeatEvery time.Duration
-	heartbeats     bool
 	queue          chan outboundRecord
 	maxQueued      int64
 	queued         atomic.Int64
@@ -169,9 +167,7 @@ func newPeerSession(connection *tls.Conn, local, peer Hello, options PeerSession
 	return &PeerSession{
 		conn: connection, local: local, peer: peer, incoming: incoming, outgoing: outgoing, data: data,
 		readWait: options.ReadTimeout, writeWait: options.WriteTimeout,
-		heartbeatEvery: max(time.Nanosecond, options.ReadTimeout/3),
-		heartbeats:     local.Protocol.Maximum >= HeartbeatProtocolVersion && peer.Protocol.Maximum >= HeartbeatProtocolVersion,
-		queue:          make(chan outboundRecord, options.QueueCapacity), maxQueued: options.MaxQueuedBytes,
+		queue: make(chan outboundRecord, options.QueueCapacity), maxQueued: options.MaxQueuedBytes,
 		maxReadBytes: options.MaxReadBytesPerSecond, maxReadRecords: options.MaxReadRecordsPerSecond,
 		closedSignal: make(chan struct{}),
 	}, nil
@@ -210,13 +206,6 @@ func (s *PeerSession) enqueue(encoded []byte, wait bool) error {
 	}
 	if len(encoded) == 0 {
 		return errors.New("replication peer session record is empty")
-	}
-	if len(encoded) >= streamPrefixBytes {
-		var magic [8]byte
-		copy(magic[:], encoded[4:streamPrefixBytes])
-		if magic == heartbeatMagic {
-			return errors.New("replication heartbeat is owned by the session writer")
-		}
 	}
 	// Validate type, direction and bound before retaining a copy in the queue.
 	if err := WriteStreamRecord(discardWriter{}, s.outgoing, encoded); err != nil {
@@ -345,15 +334,6 @@ func (s *PeerSession) readLoop(ctx context.Context, handler PeerRecordHandler) e
 		if windowBytes > s.maxReadBytes || windowRecords > s.maxReadRecords {
 			return errors.New("replication peer session read rate limit exceeded")
 		}
-		if record.Kind == StreamRecordHeartbeat {
-			if !s.heartbeats {
-				return errors.New("replication heartbeat was not negotiated")
-			}
-			if err := validateHeartbeat(record.Encoded); err != nil {
-				return err
-			}
-			continue
-		}
 		if err := handler(ctx, s.peer, record); err != nil {
 			return err
 		}
@@ -361,50 +341,40 @@ func (s *PeerSession) readLoop(ctx context.Context, handler PeerRecordHandler) e
 }
 
 func (s *PeerSession) writeLoop(ctx context.Context) error {
-	var heartbeat <-chan time.Time
-	lastWrite := time.Now()
-	if s.heartbeats {
-		ticker := time.NewTicker(s.heartbeatEvery)
-		defer ticker.Stop()
-		heartbeat = ticker.C
-	}
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case record := <-s.queue:
 			size := int64(len(record.encoded))
-			err := s.writeRecord(record.encoded)
+			if s.writeWait > 0 {
+				if err := s.conn.SetWriteDeadline(time.Now().Add(s.writeWait)); err != nil {
+					s.queued.Add(-size)
+					if record.done != nil {
+						record.done <- err
+					}
+					return err
+				}
+			}
+			if err := WriteStreamRecord(s.conn, s.outgoing, record.encoded); err != nil {
+				s.queued.Add(-size)
+				if record.done != nil {
+					record.done <- err
+				}
+				return err
+			}
 			s.queued.Add(-size)
+			if err := s.conn.SetWriteDeadline(time.Time{}); err != nil {
+				if record.done != nil {
+					record.done <- err
+				}
+				return err
+			}
 			if record.done != nil {
-				record.done <- err
+				record.done <- nil
 			}
-			if err != nil {
-				return err
-			}
-			lastWrite = time.Now()
-		case <-heartbeat:
-			if time.Since(lastWrite) < s.heartbeatEvery {
-				continue
-			}
-			if err := s.writeRecord(encodeHeartbeat()); err != nil {
-				return err
-			}
-			lastWrite = time.Now()
 		}
 	}
-}
-
-func (s *PeerSession) writeRecord(encoded []byte) error {
-	if s.writeWait > 0 {
-		if err := s.conn.SetWriteDeadline(time.Now().Add(s.writeWait)); err != nil {
-			return err
-		}
-	}
-	if err := WriteStreamRecord(s.conn, s.outgoing, encoded); err != nil {
-		return err
-	}
-	return s.conn.SetWriteDeadline(time.Time{})
 }
 
 func (s *PeerSession) Close() error {

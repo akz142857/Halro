@@ -364,31 +364,20 @@ func validateSeedManifest(cfg config.Config, staging string, manifest SeedManife
 }
 
 func seedReplicaState(cfg config.Config, staging string, manifest SeedManifest, key []byte) (replication.MemberState, error) {
-	state, err := expectedSeedReplicaState(cfg, manifest)
-	if err != nil {
-		return replication.MemberState{}, err
-	}
-	journalPath := filepath.Join(staging, replication.ClusterDirectoryName, "ordering.journal")
-	journal, err := replication.OpenExistingOrderingJournal(journalPath, key, manifest.ClusterID, manifest.Incarnation, manifest.Index, state.OrderingHeadMAC)
-	if err != nil {
-		return replication.MemberState{}, fmt.Errorf("authenticate seeded ordering journal: %w", err)
-	}
-	if err := journal.Close(); err != nil {
-		return replication.MemberState{}, err
-	}
-	if err := replication.WriteState(filepath.Join(staging, replication.ClusterDirectoryName, "state.json"), state, key); err != nil {
-		return replication.MemberState{}, fmt.Errorf("stage seeded Replica state: %w", err)
-	}
-	return state, nil
-}
-
-func expectedSeedReplicaState(cfg config.Config, manifest SeedManifest) (replication.MemberState, error) {
 	headBytes, err := hex.DecodeString(strings.TrimPrefix(manifest.OrderingHeadMAC, "sha256:"))
 	if err != nil || len(headBytes) != sha256.Size || !strings.HasPrefix(manifest.OrderingHeadMAC, "sha256:") {
 		return replication.MemberState{}, errors.New("seed manifest ordering head is invalid")
 	}
 	var head [sha256.Size]byte
 	copy(head[:], headBytes)
+	journalPath := filepath.Join(staging, replication.ClusterDirectoryName, "ordering.journal")
+	journal, err := replication.OpenExistingOrderingJournal(journalPath, key, manifest.ClusterID, manifest.Incarnation, manifest.Index, head)
+	if err != nil {
+		return replication.MemberState{}, fmt.Errorf("authenticate seeded ordering journal: %w", err)
+	}
+	if err := journal.Close(); err != nil {
+		return replication.MemberState{}, err
+	}
 	peers := make([]replication.StatePeer, 0, len(cfg.Replication.Peers))
 	for _, peer := range cfg.Replication.Peers {
 		peers = append(peers, replication.StatePeer{Name: peer.Name, Address: peer.Address, SPKISHA256: peer.SPKISHA256})
@@ -399,8 +388,8 @@ func expectedSeedReplicaState(cfg config.Config, manifest SeedManifest) (replica
 		DurableIndex: manifest.Index, ConfirmedIndex: manifest.Index, AppliedIndex: manifest.Index,
 		OrderingHeadMAC: head, Projection: manifest.Projection, Peers: peers,
 	}
-	if err := state.Validate(); err != nil {
-		return replication.MemberState{}, fmt.Errorf("seeded Replica state is invalid: %w", err)
+	if err := replication.WriteState(filepath.Join(staging, replication.ClusterDirectoryName, "state.json"), state, key); err != nil {
+		return replication.MemberState{}, fmt.Errorf("stage seeded Replica state: %w", err)
 	}
 	return state, nil
 }

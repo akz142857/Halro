@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 )
 
 var ErrMemberRequiresFullReseed = errors.New("member requires full reseed")
@@ -65,13 +64,6 @@ type ReplicaReceiver struct {
 	sink           DurableFrameSink
 	persistState   ReplicaStateWriter
 	poisoned       error
-	sinkPersist    DurationHistogram
-	stageStartedAt time.Time
-	stageNext      uint64
-	stageDropped   uint64
-	stageEvents    []ReplicaStageTransition
-	receiveStage   string
-	applyStage     string
 }
 
 func NewReplicaReceiver(clusterID, incarnation, nodeID, primaryNodeID string, term, promisedTerm, confirmedIndex, appliedIndex uint64, journal *OrderingJournal, sink DurableFrameSink, receiverOptions ...ReplicaReceiverOptions) (*ReplicaReceiver, error) {
@@ -112,7 +104,6 @@ func NewReplicaReceiver(clusterID, incarnation, nodeID, primaryNodeID string, te
 		clusterID: clusterID, incarnation: incarnation, nodeID: nodeID, primaryNodeID: primaryNodeID,
 		term: term, promisedTerm: promisedTerm, durableIndex: durableIndex, confirmedIndex: confirmedIndex, appliedIndex: appliedIndex,
 		projection: options.Projection, anchorSeen: durableTerm == term, storeCursors: cursors, journal: journal, sink: sink, persistState: options.PersistState,
-		stageStartedAt: time.Now().UTC(), receiveStage: "ready", applyStage: "ready",
 	}, nil
 }
 
@@ -153,7 +144,6 @@ func (r *ReplicaReceiver) Promise(term uint64, persist func() error) error {
 	}
 	if err := persist(); err != nil {
 		r.poisoned = err
-		r.setStage("receive", "blocked", "promise_persist_failed", r.durableIndex)
 		return fmt.Errorf("persist Replica promised term: %w", err)
 	}
 	r.promisedTerm = term
@@ -178,7 +168,6 @@ func (r *ReplicaReceiver) AdoptTerm(term uint64, primaryNodeID string, persist f
 	}
 	if err := persist(); err != nil {
 		r.poisoned = err
-		r.setStage("receive", "blocked", "term_adoption_persist_failed", r.durableIndex)
 		return fmt.Errorf("persist Replica active term: %w", err)
 	}
 	r.term = term
@@ -225,7 +214,6 @@ func (r *ReplicaReceiver) Receive(encoded []byte) (Acknowledgement, error) {
 		if frame.Index > r.confirmedIndex {
 			if err := r.persistProgress(r.durableIndex, frame.Index, r.appliedIndex, r.projection); err != nil {
 				r.poisoned = err
-				r.setStage("receive", "blocked", "confirmation_persist_failed", frame.Index)
 				return Acknowledgement{}, fmt.Errorf("persist replica confirmation watermark: %w", err)
 			}
 			r.confirmedIndex = frame.Index
@@ -266,13 +254,9 @@ func (r *ReplicaReceiver) Receive(encoded []byte) (Acknowledgement, error) {
 			return Acknowledgement{}, errors.New("ledger roll does not match the Replica ledger cursor")
 		}
 	}
-	persistStarted := time.Now()
-	persistErr := r.sink.Persist(frame)
-	r.sinkPersist.observe(time.Since(persistStarted))
-	if persistErr != nil {
-		r.poisoned = persistErr
-		r.setStage("receive", "blocked", "sink_persist_failed", frame.Index)
-		return Acknowledgement{}, fmt.Errorf("persist replicated frame: %w", persistErr)
+	if err := r.sink.Persist(frame); err != nil {
+		r.poisoned = err
+		return Acknowledgement{}, fmt.Errorf("persist replicated frame: %w", err)
 	}
 	record := OrderingRecord{
 		Kind: frame.Kind, Store: frame.Store, Index: frame.Index, Term: frame.Term,
@@ -284,7 +268,6 @@ func (r *ReplicaReceiver) Receive(encoded []byte) (Acknowledgement, error) {
 	persistedRecord, err := r.journal.Append(record)
 	if err != nil {
 		r.poisoned = err
-		r.setStage("receive", "blocked", "ordering_persist_failed", frame.Index)
 		return Acknowledgement{}, fmt.Errorf("persist replicated ordering record: %w", err)
 	}
 	// Primary local durability plus this Replica's sink and ordering fsync is a
@@ -293,7 +276,6 @@ func (r *ReplicaReceiver) Receive(encoded []byte) (Acknowledgement, error) {
 	confirmedIndex := frame.Index
 	if err := r.persistProgress(frame.Index, confirmedIndex, r.appliedIndex, r.projection, persistedRecord.MAC); err != nil {
 		r.poisoned = err
-		r.setStage("receive", "blocked", "durable_state_persist_failed", frame.Index)
 		return Acknowledgement{}, fmt.Errorf("persist replica durable watermark: %w", err)
 	}
 	r.durableIndex = frame.Index
@@ -308,12 +290,6 @@ func (r *ReplicaReceiver) Receive(encoded []byte) (Acknowledgement, error) {
 		r.storeCursors[StoreLedger] = StoreCursor{Generation: roll.Generation + 1, Sequence: roll.LastSequence}
 	}
 	return r.acknowledgement(), nil
-}
-
-func (r *ReplicaReceiver) SinkPersistTelemetry() DurationHistogram {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.sinkPersist
 }
 
 func (r *ReplicaReceiver) AdvanceApplied(index uint64) error {
@@ -344,13 +320,10 @@ func (r *ReplicaReceiver) AdvanceAppliedWithProjection(index uint64, projection 
 	}
 	if err := r.persistProgress(r.durableIndex, r.confirmedIndex, index, projection); err != nil {
 		r.poisoned = err
-		r.setStage("apply", "blocked", "apply_state_persist_failed", index)
-		r.setStage("receive", "blocked", "apply_state_persist_failed", index)
 		return fmt.Errorf("persist replica applied watermark: %w", err)
 	}
 	r.appliedIndex = index
 	r.projection = projection
-	r.setStage("apply", "ready", "apply_recovered", index)
 	return nil
 }
 
@@ -375,7 +348,6 @@ func (r *ReplicaReceiver) Confirm(notice CommitNotice) error {
 	if notice.ConfirmedIndex > r.confirmedIndex {
 		if err := r.persistProgress(r.durableIndex, notice.ConfirmedIndex, r.appliedIndex, r.projection); err != nil {
 			r.poisoned = err
-			r.setStage("receive", "blocked", "confirmation_persist_failed", notice.ConfirmedIndex)
 			return fmt.Errorf("persist replica confirmation watermark: %w", err)
 		}
 		r.confirmedIndex = notice.ConfirmedIndex
