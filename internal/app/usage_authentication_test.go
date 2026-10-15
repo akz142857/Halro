@@ -180,7 +180,7 @@ func TestOfflineUsageRebuildsSealedCompressedHistory(t *testing.T) {
 	if _, err := RotateMasterKey(context.Background(), cfg, newKeyFile); err != nil {
 		t.Fatal(err)
 	}
-	before := allRollupRows(t, cfg.MetadataPath())
+	before := allRollupRows(t, cfg)
 	report, err := RebuildUsageSummary(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -190,7 +190,7 @@ func TestOfflineUsageRebuildsSealedCompressedHistory(t *testing.T) {
 	if report.Watermark != lastEvent {
 		t.Fatalf("report=%+v", report)
 	}
-	if after := allRollupRows(t, cfg.MetadataPath()); len(before) == 0 || !reflect.DeepEqual(before, after) {
+	if after := allRollupRows(t, cfg); len(before) == 0 || !reflect.DeepEqual(before, after) {
 		t.Fatal("authenticated rebuild changed the totals")
 	}
 	if _, err := CompactUsage(context.Background(), cfg); err != nil {

@@ -45,7 +45,13 @@ func TestMigration36BackfillsInferenceOnlyAndCreatesRunGovernanceBuckets(t *test
 		if err := tx.Bucket(bucketMeta).Put(keyUsageCheckpoint, []byte("legacy-checkpoint")); err != nil {
 			return err
 		}
-		if err := tx.Bucket(bucketUsageCheckpointSegments).Put([]byte{0, 0, 0, 0, 0, 0, 0, 1}, []byte("legacy-segment")); err != nil {
+		// A schema-35 file still had the segment bucket; this build no longer
+		// creates it, so the fixture puts it back.
+		segments, err := tx.CreateBucketIfNotExists(bucketUsageCheckpointSegments)
+		if err != nil {
+			return err
+		}
+		if err := segments.Put([]byte{0, 0, 0, 0, 0, 0, 0, 1}, []byte("legacy-segment")); err != nil {
 			return err
 		}
 		if err := tx.Bucket(bucketMigrationHistory).Delete(versionKey(36)); err != nil {
