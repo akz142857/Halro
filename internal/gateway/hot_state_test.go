@@ -22,7 +22,7 @@ func TestHotStateLimitRefusesARequestWith503(t *testing.T) {
 	if _, err := f.service.Chat(context.Background(), f.plaintext, request); err != nil {
 		t.Fatal(err)
 	}
-	limited, err := budget.NewWithOptions(f.log, f.state, mustResolver(t, "UTC"), budget.Options{MaxHotStateBytes: f.state.HotStateBytes()})
+	limited, err := budget.NewWithOptions(f.log, f.state, mustResolver(t, "UTC"), budget.Options{MaxHotStateBytes: f.state.HotStateBytes(0)})
 	if err != nil {
 		t.Fatal(err)
 	}

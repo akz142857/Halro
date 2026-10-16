@@ -167,6 +167,7 @@ type Manager struct {
 
 	hotStateLimit      int64
 	hotStateRejections [hotStateEntries]atomic.Uint64
+	openRequests       openRequests
 }
 
 type RecoveryStats struct {
@@ -889,7 +890,7 @@ func (m *Manager) BeginRequestAttributed(
 			return Request{}, ErrRunNotActive
 		}
 	}
-	if err := m.admitGrowth(hotStateRequest); err != nil {
+	if err := m.admitRequest(request.RequestID); err != nil {
 		return Request{}, err
 	}
 	event := ledger.Event{
@@ -901,6 +902,7 @@ func (m *Manager) BeginRequestAttributed(
 	}
 	period.Stamp(&event)
 	if err := m.appendApply(ctx, event); err != nil {
+		m.openRequests.release(request.RequestID)
 		return Request{}, err
 	}
 	return request, nil
@@ -1312,6 +1314,9 @@ func (m *Manager) FinalizeRequest(ctx context.Context, attempt Attempt, outcome 
 }
 
 func (m *Manager) Finalize(ctx context.Context, request Request, outcome string) error {
+	// Released whether or not the event is written: a Ledger that cannot take
+	// it is unavailable, and refuses new work on that ground already.
+	defer m.openRequests.release(request.RequestID)
 	eventID, err := id.New("evt")
 	if err != nil {
 		return err

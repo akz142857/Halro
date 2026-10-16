@@ -3,6 +3,9 @@ package budget
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,7 +45,7 @@ func TestHotStateLimitRefusesNewWorkAndLetsAdmittedWorkFinish(t *testing.T) {
 		return attempt
 	}
 	first := reserve()
-	manager.hotStateLimit = state.HotStateBytes()
+	manager.hotStateLimit = state.HotStateBytes(0)
 
 	if _, err := manager.BeginRequestDetailed(ctx, "prj_1", "key_1", "req_2", "model"); !errors.Is(err, ErrHotStateFull) {
 		t.Fatalf("new request err=%v", err)
@@ -72,5 +75,63 @@ func TestHotStateLimitRefusesNewWorkAndLetsAdmittedWorkFinish(t *testing.T) {
 	}
 	if _, err := manager.BeginRequestDetailed(ctx, "prj_1", "key_1", "req_3", "model"); err != nil {
 		t.Fatalf("a request after the state shrank: %v", err)
+	}
+}
+
+// A burst admitted together is counted as it is admitted, before any of it
+// reserves: the estimate never passes the limit, however many arrive at once.
+func TestHotStateLimitCountsABurstBeforeItReserves(t *testing.T) {
+	manager, state, closeLog := newTestManager(t)
+	defer closeLog()
+	ctx := context.Background()
+	// The day's balance row is made by the first request; one past the
+	// check adds that row, a single entry per project and day.
+	first, err := manager.BeginRequestDetailed(ctx, "prj_1", "key_1", "req_first", "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Finalize(ctx, first, "success"); err != nil {
+		t.Fatal(err)
+	}
+	manager.hotStateLimit = state.HotStateBytes(10)
+	const burst = 64
+	var group sync.WaitGroup
+	var admitted, refused atomic.Int64
+	requests := make(chan Request, burst)
+	start := make(chan struct{})
+	for index := range burst {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			request, err := manager.BeginRequestDetailed(ctx, "prj_1", "key_1", fmt.Sprintf("req_burst_%d", index), "model")
+			switch {
+			case err == nil:
+				admitted.Add(1)
+				requests <- request
+			case errors.Is(err, ErrHotStateFull):
+				refused.Add(1)
+			default:
+				t.Errorf("request %d: %v", index, err)
+			}
+		}()
+	}
+	close(start)
+	group.Wait()
+	close(requests)
+	stats := manager.HotStateStats()
+	if admitted.Load() == 0 || admitted.Load() > 10 || stats.Bytes > stats.Limit || refused.Load() != burst-admitted.Load() {
+		t.Fatalf("admitted=%d refused=%d stats=%#v", admitted.Load(), refused.Load(), stats)
+	}
+	for request := range requests {
+		if err := manager.Finalize(ctx, request, "success"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if open := manager.openRequests.count(); open != 0 {
+		t.Fatalf("%d requests still open after finalizing", open)
+	}
+	if _, err := manager.BeginRequestDetailed(ctx, "prj_1", "key_1", "req_after", "model"); err != nil {
+		t.Fatalf("a request after the burst finished: %v", err)
 	}
 }
