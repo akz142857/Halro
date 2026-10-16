@@ -95,15 +95,18 @@ type archiveIndexes struct {
 	idemByUnit    map[string][]string
 	openByProject map[string]map[string]struct{}
 	liveRuns      map[string]map[string]struct{}
-	// expiries holds closed Work Units waiting on a Run to expire.
+	// expiries holds closed Work Units waiting on a Run to expire, each at
+	// most once: waiting names those on it. Every record attributed to such a
+	// Work Unit looks at it again, and would otherwise add an entry each time.
 	expiries expiryHeap
+	waiting  map[string]struct{}
 }
 
 func newArchiveIndexes() archiveIndexes {
 	return archiveIndexes{
 		queue: map[string]ArchivedWorkUnit{}, queuedRuns: map[string]string{}, queuedIdem: map[string]string{},
 		idemByUnit: map[string][]string{}, openByProject: map[string]map[string]struct{}{},
-		liveRuns: map[string]map[string]struct{}{},
+		liveRuns: map[string]map[string]struct{}{}, waiting: map[string]struct{}{},
 	}
 }
 
@@ -155,7 +158,7 @@ func (s *State) rebuildArchiveIndexes() {
 		if workUnit.Status == domain.WorkUnitOpen {
 			addMember(s.indexes.openByProject, workUnit.ProjectID, workUnit.ID)
 		} else {
-			heap.Push(&s.indexes.expiries, expiry{workUnitID: workUnit.ID})
+			s.awaitExpiry(workUnit.ID, time.Time{})
 		}
 	}
 	for _, run := range s.runs {
@@ -193,8 +196,20 @@ func (s *State) archiveFinished(workUnitID string, now time.Time, sequence uint6
 	}
 	for len(s.indexes.expiries) > 0 && !now.Before(s.indexes.expiries[0].at) {
 		item := heap.Pop(&s.indexes.expiries).(expiry)
+		delete(s.indexes.waiting, item.workUnitID)
 		s.tryArchive(item.workUnitID, now, sequence)
 	}
+}
+
+// awaitExpiry puts a closed Work Unit on the expiry heap unless it is already
+// there. An entry earlier than the Work Unit's latest expiry is harmless: when
+// it is popped, tryArchive looks again and puts it back for the later one.
+func (s *State) awaitExpiry(workUnitID string, at time.Time) {
+	if _, ok := s.indexes.waiting[workUnitID]; ok {
+		return
+	}
+	s.indexes.waiting[workUnitID] = struct{}{}
+	heap.Push(&s.indexes.expiries, expiry{at: at, workUnitID: workUnitID})
 }
 
 func (s *State) tryArchive(workUnitID string, now time.Time, sequence uint64) {
@@ -213,7 +228,7 @@ func (s *State) tryArchive(workUnitID string, now time.Time, sequence uint64) {
 		}
 	}
 	if !latest.IsZero() {
-		heap.Push(&s.indexes.expiries, expiry{at: latest, workUnitID: workUnitID})
+		s.awaitExpiry(workUnitID, latest)
 		return
 	}
 	item := ArchivedWorkUnit{WorkUnit: workUnit, Cost: s.workUnitCosts[workUnitID], Sequence: sequence}

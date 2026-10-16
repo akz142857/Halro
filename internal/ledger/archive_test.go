@@ -267,6 +267,34 @@ func TestAnExpiringRunKeepsAClosedWorkUnitUntilItExpires(t *testing.T) {
 	}
 }
 
+// Requests on a closed Work Unit's live Run each look at the Work Unit again,
+// and it stays on the expiry heap once however many there are.
+func TestAClosedWorkUnitWaitsOnTheExpiryHeapOnce(t *testing.T) {
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	state := NewState()
+	state.SetArchive(newMemoryArchive())
+	events := governedTask(1, now, false)
+	open := append(append([]Event{}, events[:6]...), events[7])
+	next := applyEvents(t, state, open, 1)
+	for index := 0; index < 100; index++ {
+		at := now.Add(time.Duration(index) * time.Second)
+		accepted := governanceEvent(fmt.Sprintf("evt_more_accepted_%d", index), EventRequestAccepted, at)
+		accepted.RequestID, accepted.WorkUnitID, accepted.RunID = fmt.Sprintf("req_more_%d", index), "wku_1", "run_1"
+		finalized := governanceEvent(fmt.Sprintf("evt_more_finalized_%d", index), EventRequestFinalized, at)
+		finalized.RequestID, finalized.WorkUnitID, finalized.RunID = accepted.RequestID, "wku_1", "run_1"
+		next = applyEvents(t, state, []Event{accepted, finalized}, next)
+	}
+	if len(state.indexes.expiries) != 1 || len(state.indexes.waiting) != 1 {
+		t.Fatalf("expiry heap=%d waiting=%d, want 1", len(state.indexes.expiries), len(state.indexes.waiting))
+	}
+	expired := governanceEvent("evt_after", EventRequestFinalized, now.Add(time.Hour))
+	expired.RequestID = "req_other"
+	applyEvents(t, state, []Event{expired}, next)
+	if _, held := state.workUnits["wku_1"]; held || len(state.indexes.expiries) != 0 || len(state.indexes.waiting) != 0 {
+		t.Fatalf("held=%t heap=%d waiting=%d", held, len(state.indexes.expiries), len(state.indexes.waiting))
+	}
+}
+
 // Archiving depends only on the records, so a state restored from a snapshot
 // taken anywhere and replayed on archives the same Work Units at the same
 // records, and ends in the same state, as replaying everything.
