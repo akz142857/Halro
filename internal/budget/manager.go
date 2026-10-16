@@ -273,23 +273,24 @@ func (m *Manager) CreateWorkUnitWithDefinitions(ctx context.Context, projectID, 
 	}
 	unlock := m.governanceLock(projectID)
 	defer unlock()
-	if previous, ok := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash); ok {
+	previous, replayed, err := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash)
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	if replayed {
 		if previous.RequestFingerprint != intent.RequestFingerprint {
 			return domain.WorkUnit{}, false, ErrIdempotencyConflict
 		}
-		workUnit, found := m.state.WorkUnit(previous.WorkUnitID)
+		workUnit, found, err := m.state.WorkUnit(previous.WorkUnitID)
+		if err != nil {
+			return domain.WorkUnit{}, false, err
+		}
 		if !found {
 			return domain.WorkUnit{}, false, errors.New("idempotent work unit is absent from accounting state")
 		}
 		return workUnit, true, nil
 	}
-	open := int64(0)
-	for _, workUnit := range m.state.WorkUnits(projectID) {
-		if workUnit.Status == domain.WorkUnitOpen {
-			open++
-		}
-	}
-	if open >= maxOpen {
+	if int64(m.state.OpenWorkUnitCount(projectID)) >= maxOpen {
 		return domain.WorkUnit{}, false, ErrResourceLimit
 	}
 	workUnitID, err := id.New("wku")
@@ -315,7 +316,10 @@ func (m *Manager) CreateWorkUnitWithDefinitions(ctx context.Context, projectID, 
 	if err := m.appendApply(ctx, event); err != nil {
 		return domain.WorkUnit{}, false, err
 	}
-	workUnit, ok := m.state.WorkUnit(workUnitID)
+	workUnit, ok, err := m.state.WorkUnit(workUnitID)
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
 	if !ok {
 		return domain.WorkUnit{}, false, errors.New("created work unit is absent from accounting state")
 	}
@@ -331,17 +335,27 @@ func (m *Manager) CloseWorkUnit(ctx context.Context, projectID, keyID, workUnitI
 	}
 	unlock := m.governanceLock(projectID)
 	defer unlock()
-	if previous, ok := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash); ok {
+	previous, replayed, err := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash)
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	if replayed {
 		if previous.RequestFingerprint != intent.RequestFingerprint {
 			return domain.WorkUnit{}, false, ErrIdempotencyConflict
 		}
-		workUnit, found := m.state.WorkUnit(previous.WorkUnitID)
+		workUnit, found, err := m.state.WorkUnit(previous.WorkUnitID)
+		if err != nil {
+			return domain.WorkUnit{}, false, err
+		}
 		if !found {
 			return domain.WorkUnit{}, false, errors.New("idempotent work unit is absent from accounting state")
 		}
 		return workUnit, true, nil
 	}
-	workUnit, ok := m.state.WorkUnit(workUnitID)
+	workUnit, ok, err := m.state.WorkUnit(workUnitID)
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
 	if !ok || workUnit.ProjectID != projectID {
 		return domain.WorkUnit{}, false, ErrWorkUnitNotFound
 	}
@@ -366,8 +380,8 @@ func (m *Manager) CloseWorkUnit(ctx context.Context, projectID, keyID, workUnitI
 	if err := m.appendApply(ctx, event); err != nil {
 		return domain.WorkUnit{}, false, err
 	}
-	closed, _ := m.state.WorkUnit(workUnitID)
-	return closed, false, nil
+	closed, _, err := m.state.WorkUnit(workUnitID)
+	return closed, false, err
 }
 
 func (m *Manager) CreateRun(
@@ -388,29 +402,39 @@ func (m *Manager) CreateRun(
 	}
 	unlock := m.governanceLock(projectID)
 	defer unlock()
-	if previous, ok := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash); ok {
+	previous, replayed, err := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	if replayed {
 		if previous.RequestFingerprint != intent.RequestFingerprint {
 			return domain.Run{}, false, ErrIdempotencyConflict
 		}
-		run, found := m.state.Run(previous.RunID)
+		run, found, err := m.state.Run(previous.RunID)
+		if err != nil {
+			return domain.Run{}, false, err
+		}
 		if !found {
 			return domain.Run{}, false, errors.New("idempotent run is absent from accounting state")
 		}
-		run, _ = m.Run(projectID, run.ID)
-		return run, true, nil
+		run, _, err = m.Run(projectID, run.ID)
+		return run, true, err
 	}
-	workUnit, ok := m.state.WorkUnit(workUnitID)
+	workUnit, ok, err := m.state.WorkUnit(workUnitID)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
 	if !ok || workUnit.ProjectID != projectID || workUnit.Status != domain.WorkUnitOpen {
 		return domain.Run{}, false, ErrWorkUnitClosed
 	}
 	now := m.localNow()
 	active := int64(0)
-	for _, run := range m.state.Runs(projectID, "") {
-		if run.Status == domain.RunActive && now.Before(run.ExpiresAt) {
+	for _, run := range m.state.LiveRuns(projectID) {
+		if now.Before(run.ExpiresAt) {
 			active++
 		}
 	}
-	if active >= maxActive || len(m.state.Runs(projectID, workUnitID)) >= domain.MaxRunsPerWorkUnit {
+	if active >= maxActive || m.state.WorkUnitRunCount(workUnitID) >= domain.MaxRunsPerWorkUnit {
 		return domain.Run{}, false, ErrResourceLimit
 	}
 	runID, err := id.New("run")
@@ -435,12 +459,15 @@ func (m *Manager) CreateRun(
 	if err := m.appendApply(ctx, event); err != nil {
 		return domain.Run{}, false, err
 	}
-	run, ok := m.state.Run(runID)
+	run, ok, err := m.state.Run(runID)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
 	if !ok {
 		return domain.Run{}, false, errors.New("created run is absent from accounting state")
 	}
-	run, _ = m.Run(projectID, run.ID)
-	return run, false, nil
+	run, _, err = m.Run(projectID, run.ID)
+	return run, false, err
 }
 
 func (m *Manager) CloseRun(ctx context.Context, projectID, keyID, workUnitID, runID, reason string, intent GovernanceIntent) (domain.Run, bool, error) {
@@ -452,24 +479,37 @@ func (m *Manager) CloseRun(ctx context.Context, projectID, keyID, workUnitID, ru
 	}
 	unlock := m.governanceLock(projectID)
 	defer unlock()
-	if previous, ok := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash); ok {
+	previous, replayed, err := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	if replayed {
 		if previous.RequestFingerprint != intent.RequestFingerprint {
 			return domain.Run{}, false, ErrIdempotencyConflict
 		}
-		run, found := m.state.Run(previous.RunID)
+		run, found, err := m.state.Run(previous.RunID)
+		if err != nil {
+			return domain.Run{}, false, err
+		}
 		if !found {
 			return domain.Run{}, false, errors.New("idempotent run is absent from accounting state")
 		}
-		run, _ = m.Run(projectID, run.ID)
-		return run, true, nil
+		run, _, err = m.Run(projectID, run.ID)
+		return run, true, err
 	}
-	run, ok := m.state.Run(runID)
+	run, ok, err := m.state.Run(runID)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
 	if !ok || run.ProjectID != projectID || run.WorkUnitID != workUnitID {
 		return domain.Run{}, false, ErrRunNotFound
 	}
-	if run.Status == domain.RunClosed {
-		run, _ = m.Run(projectID, run.ID)
-		return run, true, nil
+	// An archived Run is finished: closed, or expired with its Work Unit
+	// closed and nothing in flight. Nothing can be appended for it any more,
+	// so a close is answered with the Run as it was archived.
+	if run.Status == domain.RunClosed || !m.state.HoldsRun(runID) {
+		run, _, err = m.Run(projectID, run.ID)
+		return run, true, err
 	}
 	// Establish the close/admission order before appending. An admission that
 	// already won is allowed to make its reservation durable; once closing is
@@ -495,37 +535,41 @@ func (m *Manager) CloseRun(ctx context.Context, projectID, keyID, workUnitID, ru
 	if err := m.appendApply(ctx, event); err != nil {
 		return domain.Run{}, false, err
 	}
-	closed, _ := m.Run(projectID, runID)
-	return closed, false, nil
+	closed, _, err := m.Run(projectID, runID)
+	return closed, false, err
 }
 
-func (m *Manager) WorkUnit(projectID, workUnitID string) (domain.WorkUnit, bool) {
-	workUnit, ok := m.state.WorkUnit(workUnitID)
-	return workUnit, ok && (projectID == "" || workUnit.ProjectID == projectID)
+func (m *Manager) WorkUnit(projectID, workUnitID string) (domain.WorkUnit, bool, error) {
+	workUnit, ok, err := m.state.WorkUnit(workUnitID)
+	return workUnit, ok && (projectID == "" || workUnit.ProjectID == projectID), err
 }
 
-func (m *Manager) WorkUnits(projectID string) []domain.WorkUnit {
-	return m.state.WorkUnits(projectID)
-}
-
-func (m *Manager) Run(projectID, runID string) (domain.Run, bool) {
-	run, ok := m.state.Run(runID)
-	if !ok || (projectID != "" && run.ProjectID != projectID) {
-		return domain.Run{}, false
+func (m *Manager) Run(projectID, runID string) (domain.Run, bool, error) {
+	run, ok, err := m.state.Run(runID)
+	if err != nil || !ok || (projectID != "" && run.ProjectID != projectID) {
+		return domain.Run{}, false, err
 	}
+	return m.WithBudgetState(run), true, nil
+}
+
+// WithBudgetState adds the in-memory admissions not yet durable to a Run's
+// budget figures. A Run that has left the state has none.
+func (m *Manager) WithBudgetState(run domain.Run) domain.Run {
 	admission, unlock := m.lockProject(run.ProjectID)
 	defer unlock()
-	run, ok = m.state.Run(runID)
-	if !ok {
-		return domain.Run{}, false
+	if held, ok, err := m.state.Run(run.ID); err == nil && ok {
+		run = held
 	}
-	return domain.WithRunBudgetState(run, admission.runPending[runID]), true
+	return domain.WithRunBudgetState(run, admission.runPending[run.ID])
 }
 
 func (m *Manager) ActiveRun(projectID, runID string) (domain.Run, error) {
 	unlock := m.governanceLock(projectID)
 	defer unlock()
-	run, ok := m.state.Run(runID)
+	run, ok, err := m.state.Run(runID)
+	if err != nil {
+		return domain.Run{}, err
+	}
 	if !ok || run.ProjectID != projectID {
 		return domain.Run{}, ErrRunNotFound
 	}
@@ -533,16 +577,6 @@ func (m *Manager) ActiveRun(projectID, runID string) (domain.Run, error) {
 		return domain.Run{}, ErrRunNotActive
 	}
 	return run, nil
-}
-
-func (m *Manager) Runs(projectID, workUnitID string) []domain.Run {
-	items := m.state.Runs(projectID, workUnitID)
-	for index := range items {
-		admission, unlock := m.lockProject(items[index].ProjectID)
-		items[index] = domain.WithRunBudgetState(items[index], admission.runPending[items[index].ID])
-		unlock()
-	}
-	return items
 }
 
 // lockProject serializes one project's admission decisions — reading its balance
@@ -685,7 +719,10 @@ func (m *Manager) admitForRun(key ledger.BalanceKey, dailyBudgetMicrosUSD, reser
 		return ErrExceeded
 	}
 	if runID != "" {
-		run, ok := m.state.Run(runID)
+		run, ok, err := m.state.Run(runID)
+		if err != nil {
+			return err
+		}
 		if !ok || run.ProjectID != key.ProjectID || run.WorkUnitID != workUnitID {
 			return ErrRunNotFound
 		}
@@ -826,7 +863,10 @@ func (m *Manager) BeginRequestAttributed(
 		}
 		unlockLifecycle = m.governanceReadLock(projectID)
 		defer unlockLifecycle()
-		run, ok := m.state.Run(runID)
+		run, ok, err := m.state.Run(runID)
+		if err != nil {
+			return Request{}, err
+		}
 		if !ok || run.ProjectID != projectID || run.WorkUnitID != workUnitID {
 			return Request{}, ErrRunNotFound
 		}

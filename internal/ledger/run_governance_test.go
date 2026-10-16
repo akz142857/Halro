@@ -59,14 +59,14 @@ func TestRunAttributionLifecycleReplaysAndSettlesOnce(t *testing.T) {
 	settled.CommittedMicrosUSD = MicrosUSD(75)
 	apply(settled)
 
-	run, ok := state.Run("run_1")
+	run, ok, _ := state.Run("run_1")
 	if !ok || run.ReservedMicrosUSD != 0 || run.CommittedMicrosUSD != 75 || run.UnknownAttempts != 0 {
 		t.Fatalf("run balance after settlement = %#v, found=%t", run, ok)
 	}
 	if err := state.Apply(Record{Generation: 1, Sequence: sequence + 1, Offset: 999, Epoch: frameVersionRunAttribution, Event: settled}); err != nil {
 		t.Fatalf("same durable event must replay idempotently: %v", err)
 	}
-	run, _ = state.Run("run_1")
+	run, _, _ = state.Run("run_1")
 	if run.CommittedMicrosUSD != 75 {
 		t.Fatalf("duplicate settlement committed %d, want 75", run.CommittedMicrosUSD)
 	}

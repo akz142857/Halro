@@ -293,7 +293,10 @@ func (m *Manager) Report(ctx context.Context, input ReportInput) (domain.Outcome
 		}
 		return outcome, true, nil
 	}
-	workUnit, ok := m.accounting.WorkUnit(input.WorkUnitID)
+	workUnit, ok, err := m.accounting.WorkUnit(input.WorkUnitID)
+	if err != nil {
+		return domain.Outcome{}, false, ErrUnavailable
+	}
 	if !ok || workUnit.ProjectID != input.ProjectID {
 		return domain.Outcome{}, false, ErrNotFound
 	}
@@ -375,22 +378,19 @@ func (m *Manager) Report(ctx context.Context, input ReportInput) (domain.Outcome
 	return outcome, false, nil
 }
 
+// workUnitInflight reports a request or attempt attributed to the Work Unit
+// still in flight; one that cannot be read is reported in flight, which only
+// marks its Outcomes provisional.
 func (m *Manager) workUnitInflight(workUnitID string) bool {
-	workUnit, ok := m.accounting.WorkUnit(workUnitID)
-	if !ok {
-		return true
-	}
-	snapshot, err := m.accounting.GovernanceSnapshot(context.Background(), ledger.GovernanceSnapshotOptions{
-		ProjectID: workUnit.ProjectID, WorkUnitID: workUnitID,
-	})
-	return err != nil || snapshot.InflightWorkUnit[workUnitID]
+	view, ok, err := m.accounting.WorkUnitView(workUnitID)
+	return err != nil || !ok || view.Inflight
 }
 
 func (m *Manager) Outcomes(projectID, workUnitID, definitionID string) []domain.Outcome {
 	items := m.state.Outcomes(projectID, workUnitID, definitionID)
 	for index := range items {
-		wu, ok := m.accounting.WorkUnit(items[index].WorkUnitID)
-		items[index].Provisional = !ok || wu.Status == domain.WorkUnitOpen || m.workUnitInflight(wu.ID)
+		wu, ok, err := m.accounting.WorkUnit(items[index].WorkUnitID)
+		items[index].Provisional = err != nil || !ok || wu.Status == domain.WorkUnitOpen || m.workUnitInflight(wu.ID)
 	}
 	return slices.Clone(items)
 }

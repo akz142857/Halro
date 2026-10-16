@@ -551,6 +551,10 @@ type State struct {
 	workUnitCosts         map[string]WorkUnitCost
 	governanceIdempotency map[string]GovernanceIdempotency
 	watermark             Watermark
+	// archive, when set, receives finished Work Units (archive.go); indexes
+	// are derived and never snapshotted.
+	archive Archive
+	indexes archiveIndexes
 }
 
 type requestAttribution struct {
@@ -581,6 +585,7 @@ func NewState() *State {
 		pendingByWorkUnit:     make(map[string]map[string]struct{}),
 		workUnitCosts:         make(map[string]WorkUnitCost),
 		governanceIdempotency: make(map[string]GovernanceIdempotency),
+		indexes:               newArchiveIndexes(),
 	}
 }
 
@@ -857,11 +862,14 @@ func (s *State) Apply(record Record) error {
 
 	s.balances[key] = balance
 	if event.Kind >= EventWorkUnitCreated {
-		s.governanceIdempotency[governanceIdempotencyMapKey(event.ProjectID, event.Operation, event.IdempotencyKeyHash)] = GovernanceIdempotency{
+		idempotencyKey := governanceIdempotencyMapKey(event.ProjectID, event.Operation, event.IdempotencyKeyHash)
+		s.governanceIdempotency[idempotencyKey] = GovernanceIdempotency{
 			ProjectID: event.ProjectID, Operation: event.Operation, KeyHash: event.IdempotencyKeyHash,
 			RequestFingerprint: event.RequestFingerprint, WorkUnitID: event.WorkUnitID, RunID: event.RunID,
 		}
+		s.noteGovernanceEvent(event, idempotencyKey)
 	}
+	s.archiveFinished(event.WorkUnitID, event.OccurredAt, record.Sequence)
 	s.rememberDigest(event.EventID, digest)
 	s.watermark = Watermark{
 		Generation: record.Generation,
@@ -910,22 +918,14 @@ type GovernanceSnapshot struct {
 }
 
 func (s *State) GovernanceSnapshot(ctx context.Context, options GovernanceSnapshotOptions) (GovernanceSnapshot, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	result := GovernanceSnapshot{InflightWorkUnit: make(map[string]bool), Costs: make(map[string]WorkUnitCost), Watermark: s.watermark}
-	selected := make(map[string]struct{})
-	for _, workUnit := range s.workUnits {
+	result := GovernanceSnapshot{InflightWorkUnit: make(map[string]bool), Costs: make(map[string]WorkUnitCost), Watermark: s.Watermark()}
+	add := func(view WorkUnitView) (bool, error) {
 		if err := ctx.Err(); err != nil {
-			return GovernanceSnapshot{}, err
+			return false, err
 		}
-		if options.ProjectID != "" && workUnit.ProjectID != options.ProjectID {
-			continue
-		}
+		workUnit := view.WorkUnit
 		if options.WorkUnitID != "" && workUnit.ID != options.WorkUnitID {
-			continue
-		}
-		if options.CohortStart != "" && (workUnit.PeriodID < options.CohortStart || workUnit.PeriodID > options.CohortEnd) {
-			continue
+			return true, nil
 		}
 		if options.DefinitionID != "" {
 			eligible := false
@@ -936,88 +936,46 @@ func (s *State) GovernanceSnapshot(ctx context.Context, options GovernanceSnapsh
 				}
 			}
 			if !eligible {
-				continue
+				return true, nil
 			}
 		}
 		if options.MaxWorkUnits > 0 && len(result.WorkUnits) >= options.MaxWorkUnits {
-			return GovernanceSnapshot{}, ErrGovernanceCohortLimit
+			return false, ErrGovernanceCohortLimit
 		}
-		workUnit.OutcomeDefinitions = slices.Clone(workUnit.OutcomeDefinitions)
 		result.WorkUnits = append(result.WorkUnits, workUnit)
-		selected[workUnit.ID] = struct{}{}
+		if options.IncludeRuns {
+			result.Runs = append(result.Runs, view.Runs...)
+		}
+		if view.Inflight {
+			result.InflightWorkUnit[workUnit.ID] = true
+		}
+		if options.IncludeCosts && view.Cost != (WorkUnitCost{}) {
+			result.Costs[workUnit.ID] = view.Cost
+		}
+		return true, nil
 	}
-	for workUnitID := range selected {
-		if err := ctx.Err(); err != nil {
+	query := ArchiveQuery{ProjectID: options.ProjectID, CohortStart: options.CohortStart, CohortEnd: options.CohortEnd}
+	if options.WorkUnitID != "" {
+		view, found, err := s.workUnitView(options.WorkUnitID)
+		if err != nil {
 			return GovernanceSnapshot{}, err
 		}
-		if options.IncludeRuns {
-			for _, runID := range s.runsByWorkUnit[workUnitID] {
-				result.Runs = append(result.Runs, s.runs[runID])
+		matches := found && (query.ProjectID == "" || view.WorkUnit.ProjectID == query.ProjectID) &&
+			(query.CohortStart == "" || view.WorkUnit.PeriodID >= query.CohortStart && view.WorkUnit.PeriodID <= query.CohortEnd)
+		if matches {
+			if _, err := add(view); err != nil {
+				return GovernanceSnapshot{}, err
 			}
 		}
-		if len(s.activeByWorkUnit[workUnitID]) > 0 || len(s.pendingByWorkUnit[workUnitID]) > 0 {
-			result.InflightWorkUnit[workUnitID] = true
-		}
-		if options.IncludeCosts {
-			if cost, ok := s.workUnitCosts[workUnitID]; ok {
-				result.Costs[workUnitID] = cost
-			}
-		}
+	} else if err := s.VisitWorkUnits(query, add); err != nil {
+		return GovernanceSnapshot{}, err
 	}
-	sort.Slice(result.WorkUnits, func(i, j int) bool { return result.WorkUnits[i].ID < result.WorkUnits[j].ID })
 	sort.Slice(result.Runs, func(i, j int) bool { return result.Runs[i].ID < result.Runs[j].ID })
 	return result, nil
 }
 
-func (s *State) WorkUnit(id string) (domain.WorkUnit, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	value, ok := s.workUnits[id]
-	return value, ok
-}
-
-func (s *State) WorkUnits(projectID string) []domain.WorkUnit {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	items := make([]domain.WorkUnit, 0)
-	for _, item := range s.workUnits {
-		if projectID == "" || item.ProjectID == projectID {
-			items = append(items, item)
-		}
-	}
-	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
-	return items
-}
-
-func (s *State) Run(id string) (domain.Run, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	value, ok := s.runs[id]
-	return value, ok
-}
-
-func (s *State) Runs(projectID, workUnitID string) []domain.Run {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	items := make([]domain.Run, 0)
-	for _, item := range s.runs {
-		if (projectID == "" || item.ProjectID == projectID) && (workUnitID == "" || item.WorkUnitID == workUnitID) {
-			items = append(items, item)
-		}
-	}
-	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
-	return items
-}
-
 func governanceIdempotencyMapKey(projectID, operation, keyHash string) string {
 	return projectID + "\x00" + operation + "\x00" + keyHash
-}
-
-func (s *State) GovernanceIdempotency(projectID, operation, keyHash string) (GovernanceIdempotency, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	value, ok := s.governanceIdempotency[governanceIdempotencyMapKey(projectID, operation, keyHash)]
-	return value, ok
 }
 
 func (e Event) KnownCommittedMicrosUSD() (int64, bool) {

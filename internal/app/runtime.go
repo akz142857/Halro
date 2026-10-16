@@ -363,7 +363,20 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		secretVault.Close()
 		return fail(err)
 	}
-	openedState, err := openLedgerState(ledgerLog, cfg.LedgerStatePath(), ledgerStateKey, logger)
+	archiveStore, err := openArchive(cfg, ledgerKey, logger)
+	if err != nil {
+		ledgerLog.Close()
+		metadata.Close()
+		secretVault.Close()
+		return fail(err)
+	}
+	closeArchive := true
+	defer func() {
+		if closeArchive {
+			archiveStore.Close()
+		}
+	}()
+	openedState, err := openLedgerState(ledgerLog, cfg.LedgerStatePath(), ledgerStateKey, archiveStore, logger)
 	if err != nil {
 		ledgerLog.Close()
 		metadata.Close()
@@ -756,7 +769,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		store:               metadata,
 		ledger:              ledgerLog,
 		state:               ledgerState,
-		accountingState:     accountingStateRuntime{fromSnapshot: openedState.fromSnapshot, snapshots: ledgerStateSnapshots{key: ledgerStateKey}},
+		accountingState:     accountingStateRuntime{fromSnapshot: openedState.fromSnapshot, snapshots: ledgerStateSnapshots{key: ledgerStateKey}, archive: archiveStore},
 		status:              accountingStatus,
 		governance:          governanceRuntime{log: governanceLog, manager: governanceManager},
 		vault:               secretVault,
@@ -945,6 +958,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	runtime.usageSettings.Store(&usageSettings)
 	cleanupAdminSessions = false
 	closeUsageHistory = false
+	closeArchive = false
 	backgroundContext, backgroundCancel := context.WithCancel(context.Background())
 	runtime.backgroundCtx = backgroundContext
 	runtime.backgroundCancel = backgroundCancel
@@ -1520,6 +1534,7 @@ func (r *Runtime) Close() error {
 			captureErr,
 			historyErr,
 			r.usage.History().Close(),
+			r.accountingState.archive.Close(),
 			func() error {
 				r.providers.Close()
 				return nil

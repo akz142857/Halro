@@ -361,7 +361,11 @@ func (r *Runtime) getRun(writer http.ResponseWriter, request *http.Request) {
 		writeGovernanceError(writer, http.StatusNotFound, "run_not_found", "run was not found")
 		return
 	}
-	run, found := r.accounting.Run(principal.Project.ID, runID)
+	run, found, err := r.accounting.Run(principal.Project.ID, runID)
+	if err != nil {
+		writeGovernanceError(writer, http.StatusServiceUnavailable, "run_governance_unavailable", "run governance is unavailable")
+		return
+	}
 	if !found {
 		writeGovernanceError(writer, http.StatusNotFound, "run_not_found", "run was not found")
 		return
@@ -392,7 +396,11 @@ func (r *Runtime) closeRun(writer http.ResponseWriter, request *http.Request) {
 		writeGovernanceError(writer, http.StatusBadRequest, "invalid_close_reason", "close reason must contain 1 to 64 characters")
 		return
 	}
-	run, found := r.accounting.Run(principal.Project.ID, runID)
+	run, found, err := r.accounting.Run(principal.Project.ID, runID)
+	if err != nil {
+		writeGovernanceError(writer, http.StatusServiceUnavailable, "run_governance_unavailable", "run governance is unavailable")
+		return
+	}
 	if !found {
 		writeGovernanceError(writer, http.StatusNotFound, "run_not_found", "run was not found")
 		return

@@ -32,7 +32,7 @@ func TestInferenceRunHeaderAttributesEveryAccountingEvent(t *testing.T) {
 	if _, err := f.service.Chat(ctx, f.plaintext, chatRequest()); err != nil {
 		t.Fatal(err)
 	}
-	got, ok := f.accounting.Run(f.project.ID, run.ID)
+	got, ok, _ := f.accounting.Run(f.project.ID, run.ID)
 	if !ok || got.ReservedMicrosUSD != 0 || got.CommittedMicrosUSD != 20 {
 		t.Fatalf("attributed Run=%#v found=%t", got, ok)
 	}
@@ -83,7 +83,7 @@ func TestInferenceRunBudgetRejectsBeforeProviderIO(t *testing.T) {
 	if got := f.service.RejectionMetrics().RunBudget; got != 1 {
 		t.Fatalf("Run budget rejections=%d", got)
 	}
-	got, _ := f.accounting.Run(f.project.ID, run.ID)
+	got, _, _ := f.accounting.Run(f.project.ID, run.ID)
 	if got.CommittedMicrosUSD != 0 || got.ReservedMicrosUSD != 0 || got.BudgetState != domain.RunBudgetAvailable {
 		t.Fatalf("rejected request changed Run=%#v", got)
 	}
@@ -100,7 +100,7 @@ func TestUntaggedLegacyInferenceDoesNotEnterRunGovernancePath(t *testing.T) {
 	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.accounting.WorkUnits(f.project.ID)) != 0 || len(f.accounting.Runs(f.project.ID, "")) != 0 {
+	if f.state.OpenWorkUnitCount(f.project.ID) != 0 || len(f.state.LiveRuns(f.project.ID)) != 0 {
 		t.Fatal("untagged inference created Run Governance lifecycle state")
 	}
 	settled := settlementsInLog(t, f.log)

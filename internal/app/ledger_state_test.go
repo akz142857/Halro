@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/archive"
 	"github.com/akz142857/Halro/internal/budget"
 	"github.com/akz142857/Halro/internal/ledger"
 )
@@ -28,6 +29,9 @@ type accountingFixture struct {
 	billed  int
 	// cost is what each billed attempt commits.
 	cost int64
+	// archive is where the state's finished Work Units go; every snapshot
+	// records its position in it.
+	archive *archive.Store
 }
 
 func newAccountingFixture(t *testing.T) *accountingFixture {
@@ -36,12 +40,19 @@ func newAccountingFixture(t *testing.T) *accountingFixture {
 	if err := os.MkdirAll(filepath.Dir(f.path), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	store, _, err := archive.Open(filepath.Join(filepath.Dir(f.path), "archive.db"), bytes.Repeat([]byte{0x32}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	f.archive = store
 	f.open(ledger.NewState())
 	return f
 }
 
 func (f *accountingFixture) open(state *ledger.State) {
 	f.t.Helper()
+	state.SetArchive(f.archive)
 	log, err := ledger.OpenWithOptions(f.path, nil, ledger.Options{MaxBatch: 1, ChainKey: ledgerStateTestKey})
 	if err != nil {
 		f.t.Fatal(err)
@@ -98,7 +109,7 @@ func (f *accountingFixture) reopen(snapshotPath string) openedLedgerState {
 		f.t.Fatal(err)
 	}
 	f.log = log
-	opened, err := openLedgerState(log, snapshotPath, ledgerStateTestKey, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	opened, err := openLedgerState(log, snapshotPath, ledgerStateTestKey, f.archive, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -241,12 +252,43 @@ func TestLedgerStateSnapshotFromAForkIsSetAside(t *testing.T) {
 	if at != forked {
 		t.Fatalf("the fork does not line up with this Ledger: fork %#v, ours %#v", forked, at)
 	}
+	// This Ledger's own archive covers the fork's snapshot position, so the
+	// only thing left to refuse it is the chain.
+	ours.snapshot(filepath.Join(t.TempDir(), "ours.snap"))
+	if through, err := ours.archive.ArchivedThrough(); err != nil || through < forked.Sequence {
+		t.Fatalf("archive through=%d err=%v, fork at %d", through, err, forked.Sequence)
+	}
 	opened := ours.reopen(snapshotPath)
 	defer ours.log.Close()
 	if opened.fromSnapshot {
 		t.Fatal("a snapshot from a fork of the Ledger was used")
 	}
 	if !bytes.Equal(encodedLedgerState(t, opened.state), ours.replayed()) {
+		t.Fatal("the rebuilt state differs from a full replay")
+	}
+}
+
+// A snapshot past the archive's recorded position is set aside: the Work
+// Units it no longer holds may be in no archive at all, as they are when the
+// archive was emptied or lost.
+func TestLedgerStateSnapshotPastTheArchiveIsSetAside(t *testing.T) {
+	f := newAccountingFixture(t)
+	snapshotPath := filepath.Join(filepath.Dir(f.path), "state.snap")
+	f.bill(3)
+	f.snapshot(snapshotPath)
+	f.archive.Close()
+	emptied, reset, err := archive.Open(filepath.Join(filepath.Dir(f.path), "archive.db"), bytes.Repeat([]byte{0x33}, 32))
+	if err != nil || !reset {
+		t.Fatalf("reset=%t err=%v", reset, err)
+	}
+	t.Cleanup(func() { emptied.Close() })
+	f.archive = emptied
+	opened := f.reopen(snapshotPath)
+	defer f.log.Close()
+	if opened.fromSnapshot {
+		t.Fatal("a snapshot the archive does not cover was used")
+	}
+	if !bytes.Equal(encodedLedgerState(t, opened.state), f.replayed()) {
 		t.Fatal("the rebuilt state differs from a full replay")
 	}
 }

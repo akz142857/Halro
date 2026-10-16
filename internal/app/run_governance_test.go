@@ -365,7 +365,7 @@ func TestRunGovernanceHTTPRejectsBodyBeforeMutation(t *testing.T) {
 			}
 		})
 	}
-	if got := len(runtime.accounting.WorkUnits(bootstrap.ProjectID)); got != 0 {
+	if got := runtime.state.OpenWorkUnitCount(bootstrap.ProjectID); got != 0 {
 		t.Fatalf("invalid requests created %d Work Units", got)
 	}
 }
@@ -557,4 +557,91 @@ func TestAdminCannotDisableRunGovernanceWhileARunIsActive(t *testing.T) {
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "run_governance_active_runs") || !strings.Contains(response.Body.String(), `"active_runs":1`) {
 		t.Fatalf("disable with active Run status=%d body=%s", response.Code, response.Body.String())
 	}
+}
+
+// A finished Work Unit leaves the accounting state for the archive, and every
+// read and every idempotent retry answers the same afterwards — before the
+// archive is written, after it, and across a restart that resumes from the
+// snapshot.
+func TestFinishedWorkUnitsAreArchivedAndStayReadable(t *testing.T) {
+	runtime, bootstrap, reopen := openBootstrappedRuntime(t)
+	enableRunGovernanceForTest(t, runtime, bootstrap.ProjectID, bootstrap.KeyID)
+	post := func(runtime *Runtime, path, idempotencyKey, body string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		runtime.gatewayRouter().ServeHTTP(response, governanceRequest(http.MethodPost, path, bootstrap.GatewayKey, idempotencyKey, body))
+		return response
+	}
+	created := post(runtime, "/halro/v1/work-units", "archive-wu", `{}`)
+	var workUnit domain.WorkUnit
+	if err := json.Unmarshal(created.Body.Bytes(), &workUnit); err != nil || created.Code != http.StatusCreated {
+		t.Fatalf("create Work Unit status=%d body=%s err=%v", created.Code, created.Body.String(), err)
+	}
+	createdRun := post(runtime, "/halro/v1/runs", "archive-run", `{"work_unit_id":"`+workUnit.ID+`","budget_micros_usd":2000,"ttl_seconds":3600}`)
+	var run domain.Run
+	if err := json.Unmarshal(createdRun.Body.Bytes(), &run); err != nil || createdRun.Code != http.StatusCreated {
+		t.Fatalf("create Run status=%d body=%s err=%v", createdRun.Code, createdRun.Body.String(), err)
+	}
+	if response := post(runtime, "/halro/v1/runs/"+run.ID+"/close", "archive-run-close", `{}`); response.Code != http.StatusCreated {
+		t.Fatalf("close Run status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := post(runtime, "/halro/v1/work-units/"+workUnit.ID+"/close", "archive-wu-close", `{}`); response.Code != http.StatusCreated {
+		t.Fatalf("close Work Unit status=%d body=%s", response.Code, response.Body.String())
+	}
+	if runtime.state.HoldsRun(run.ID) || runtime.state.ArchiveQueueLen() != 1 {
+		t.Fatalf("the finished Work Unit is still held: run held=%t queue=%d", runtime.state.HoldsRun(run.ID), runtime.state.ArchiveQueueLen())
+	}
+
+	cookie, _ := loginAdminForTest(t, runtime)
+	check := func(runtime *Runtime, where string) {
+		t.Helper()
+		admin := func(path string) *httptest.ResponseRecorder {
+			request := adminRequest(t, http.MethodGet, path, nil)
+			request.AddCookie(cookie)
+			response := httptest.NewRecorder()
+			runtime.adminRouter().ServeHTTP(response, request)
+			return response
+		}
+		for name, path := range map[string]string{
+			"work unit list":   "/admin/api/v1/run-governance/work-units?project_id=" + bootstrap.ProjectID + "&status=closed",
+			"work unit detail": "/admin/api/v1/run-governance/work-units/" + workUnit.ID,
+			"run list":         "/admin/api/v1/run-governance/runs?project_id=" + bootstrap.ProjectID,
+			"run list by unit": "/admin/api/v1/run-governance/runs?work_unit_id=" + workUnit.ID,
+			"run detail":       "/admin/api/v1/run-governance/runs/" + run.ID,
+		} {
+			if response := admin(path); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), run.ID) && !strings.Contains(response.Body.String(), workUnit.ID) {
+				t.Fatalf("%s: %s status=%d body=%s", where, name, response.Code, response.Body.String())
+			}
+		}
+		replayed := post(runtime, "/halro/v1/work-units/"+workUnit.ID+"/close", "archive-wu-close", `{}`)
+		if replayed.Code != http.StatusOK || !strings.Contains(replayed.Body.String(), `"status":"closed"`) {
+			t.Fatalf("%s: close replay status=%d body=%s", where, replayed.Code, replayed.Body.String())
+		}
+		replayedCreate := post(runtime, "/halro/v1/work-units", "archive-wu", `{}`)
+		if replayedCreate.Code != http.StatusOK || !strings.Contains(replayedCreate.Body.String(), workUnit.ID) {
+			t.Fatalf("%s: create replay status=%d body=%s", where, replayedCreate.Code, replayedCreate.Body.String())
+		}
+		lateRun := post(runtime, "/halro/v1/runs", "archive-late-run", `{"work_unit_id":"`+workUnit.ID+`","budget_micros_usd":2000,"ttl_seconds":3600}`)
+		if lateRun.Code < 400 {
+			t.Fatalf("%s: a Run was created on an archived Work Unit: status=%d body=%s", where, lateRun.Code, lateRun.Body.String())
+		}
+	}
+	check(runtime, "queued")
+	runtime.writeLedgerStateSnapshot()
+	if runtime.state.ArchiveQueueLen() != 0 {
+		t.Fatalf("queue=%d after the snapshot", runtime.state.ArchiveQueueLen())
+	}
+	check(runtime, "archived")
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := reopen()
+	defer restarted.Close()
+	if !restarted.accountingState.fromSnapshot {
+		t.Fatal("the restart did not resume from the snapshot")
+	}
+	if restarted.state.HoldsRun(run.ID) {
+		t.Fatal("the restart brought the archived Run back into the state")
+	}
+	check(restarted, "restarted")
 }

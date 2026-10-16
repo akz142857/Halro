@@ -143,7 +143,7 @@ func (r *Runtime) updateAdminProject(writer http.ResponseWriter, request *http.R
 	replacement.DeletedAt = current.DeletedAt
 	if current.RunGovernance.Enabled && !replacement.RunGovernance.Enabled {
 		activeRuns := 0
-		for _, run := range r.accounting.Runs(current.ID, "") {
+		for _, run := range r.state.LiveRuns(current.ID) {
 			if domain.EffectiveRunStatus(run, r.clockNow()) == domain.RunActive {
 				activeRuns++
 			}
