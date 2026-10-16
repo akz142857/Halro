@@ -645,3 +645,79 @@ func TestFinishedWorkUnitsAreArchivedAndStayReadable(t *testing.T) {
 	}
 	check(restarted, "restarted")
 }
+
+// Outcomes are written to the archive as they are reported, and after a
+// restart — with their Work Unit archived too — they are replayed
+// idempotently, counted in summaries, listed, and revised as before.
+func TestOutcomesSurviveARestartFromTheArchive(t *testing.T) {
+	runtime, bootstrap, reopen := openBootstrappedRuntime(t)
+	enableRunGovernanceForTest(t, runtime, bootstrap.ProjectID, bootstrap.KeyID)
+	project, err := runtime.store.GetProject(context.Background(), bootstrap.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	definition := domain.OutcomeDefinition{ID: "odef_acceptance", ProjectID: bootstrap.ProjectID, Name: "accepted", Version: 1,
+		DataType: domain.OutcomeCategorical, AllowedValues: []string{"accepted", "rejected"}, SuccessValues: []string{"accepted"}, Enabled: true, CreatedAt: now, CreatedBy: "admin"}
+	if definition, err = runtime.store.PutOutcomeDefinition(context.Background(), definition, project.Revision, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	post := func(runtime *Runtime, path, idempotencyKey, body string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		runtime.gatewayRouter().ServeHTTP(response, governanceRequest(http.MethodPost, path, bootstrap.GatewayKey, idempotencyKey, body))
+		return response
+	}
+	created := post(runtime, "/halro/v1/work-units", "restart-wu", `{"outcome_definition_ids":["`+definition.ID+`"]}`)
+	var workUnit domain.WorkUnit
+	if err := json.Unmarshal(created.Body.Bytes(), &workUnit); err != nil || created.Code != http.StatusCreated {
+		t.Fatalf("create Work Unit status=%d body=%s err=%v", created.Code, created.Body.String(), err)
+	}
+	body := `{"definition_id":"` + definition.ID + `","value":"accepted","observed_at":"` + now.Format(time.RFC3339Nano) + `"}`
+	reported := post(runtime, "/halro/v1/work-units/"+workUnit.ID+"/outcomes", "restart-outcome", body)
+	var outcome domain.Outcome
+	if err := json.Unmarshal(reported.Body.Bytes(), &outcome); err != nil || reported.Code != http.StatusCreated {
+		t.Fatalf("report status=%d body=%s err=%v", reported.Code, reported.Body.String(), err)
+	}
+	if runtime.governance.manager.State().QueueLen() != 0 {
+		t.Fatal("the reported Outcome was not written to the archive")
+	}
+	if closed := post(runtime, "/halro/v1/work-units/"+workUnit.ID+"/close", "restart-close", `{}`); closed.Code != http.StatusCreated {
+		t.Fatalf("close status=%d body=%s", closed.Code, closed.Body.String())
+	}
+	cookie, _ := loginAdminForTest(t, runtime)
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := reopen()
+	defer restarted.Close()
+	if !restarted.accountingState.fromSnapshot || restarted.state.OpenWorkUnitCount(bootstrap.ProjectID) != 0 {
+		t.Fatalf("from snapshot=%t open=%d", restarted.accountingState.fromSnapshot, restarted.state.OpenWorkUnitCount(bootstrap.ProjectID))
+	}
+	replayed := post(restarted, "/halro/v1/work-units/"+workUnit.ID+"/outcomes", "restart-outcome", body)
+	var again domain.Outcome
+	if err := json.Unmarshal(replayed.Body.Bytes(), &again); err != nil || replayed.Code != http.StatusOK || again.ID != outcome.ID || again.Provisional {
+		t.Fatalf("replay status=%d body=%s err=%v", replayed.Code, replayed.Body.String(), err)
+	}
+	admin := func(path string) *httptest.ResponseRecorder {
+		request := adminRequest(t, http.MethodGet, path, nil)
+		request.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		restarted.adminRouter().ServeHTTP(response, request)
+		return response
+	}
+	summary := admin("/admin/api/v1/governance/summary?project_id=" + bootstrap.ProjectID + "&definition_id=" + definition.ID + "&definition_version=1&cohort_start=" + workUnit.PeriodID + "&cohort_end=" + workUnit.PeriodID)
+	if summary.Code != http.StatusOK || !strings.Contains(summary.Body.String(), `"eligible_units":1`) || !strings.Contains(summary.Body.String(), `"successful_units":1`) {
+		t.Fatalf("summary status=%d body=%s", summary.Code, summary.Body.String())
+	}
+	listed := admin("/admin/api/v1/governance/outcomes?work_unit_id=" + workUnit.ID)
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), outcome.ID) || !strings.Contains(listed.Body.String(), `"provisional":false`) {
+		t.Fatalf("outcome list status=%d body=%s", listed.Code, listed.Body.String())
+	}
+	revisedBody := `{"definition_id":"` + definition.ID + `","value":"rejected","observed_at":"` + now.Format(time.RFC3339Nano) + `","supersedes_outcome_id":"` + outcome.ID + `"}`
+	revised := post(restarted, "/halro/v1/work-units/"+workUnit.ID+"/outcomes", "restart-revision", revisedBody)
+	var second domain.Outcome
+	if err := json.Unmarshal(revised.Body.Bytes(), &second); err != nil || revised.Code != http.StatusCreated || second.Revision != 2 {
+		t.Fatalf("revision status=%d body=%s err=%v", revised.Code, revised.Body.String(), err)
+	}
+}

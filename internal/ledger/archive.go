@@ -305,7 +305,9 @@ func (s *State) FlushArchive(log ChainHeadReader) error {
 	return nil
 }
 
-var errArchiveUnavailable = errors.New("archived work units are unavailable")
+// ErrArchiveUnavailable is a read of archived state that failed. It is never
+// taken for "absent".
+var ErrArchiveUnavailable = errors.New("archived state is unavailable")
 
 // lookupArchived finds a Work Unit that has left the state. The caller holds
 // no lock: the Archive is read outside it.
@@ -322,7 +324,7 @@ func (s *State) lookupArchived(id string) (ArchivedWorkUnit, bool, error) {
 	}
 	item, found, err := archive.ArchivedWorkUnit(id)
 	if err != nil {
-		return ArchivedWorkUnit{}, false, errors.Join(errArchiveUnavailable, err)
+		return ArchivedWorkUnit{}, false, errors.Join(ErrArchiveUnavailable, err)
 	}
 	return item, found, nil
 }
@@ -361,7 +363,7 @@ func (s *State) Run(id string) (domain.Run, bool, error) {
 	}
 	run, found, err := archive.ArchivedRun(id)
 	if err != nil {
-		return domain.Run{}, false, errors.Join(errArchiveUnavailable, err)
+		return domain.Run{}, false, errors.Join(ErrArchiveUnavailable, err)
 	}
 	return run, found, nil
 }
@@ -389,7 +391,7 @@ func (s *State) GovernanceIdempotency(projectID, operation, keyHash string) (Gov
 	}
 	record, found, err := archive.ArchivedIdempotency(projectID, operation, keyHash)
 	if err != nil {
-		return GovernanceIdempotency{}, false, errors.Join(errArchiveUnavailable, err)
+		return GovernanceIdempotency{}, false, errors.Join(ErrArchiveUnavailable, err)
 	}
 	return record, found, nil
 }
@@ -477,7 +479,7 @@ func (s *State) VisitWorkUnits(query ArchiveQuery, visit func(WorkUnitView) (boo
 			})
 		}
 	}
-	return mergeVisit(held, func(view WorkUnitView) string { return view.WorkUnit.ID }, archived, visit)
+	return MergeVisit(held, func(view WorkUnitView) string { return view.WorkUnit.ID }, archived, visit)
 }
 
 // VisitRuns visits a project's Runs (every project's when projectID is
@@ -506,15 +508,16 @@ func (s *State) VisitRuns(projectID, after string, visit func(domain.Run) (bool,
 			return archive.VisitArchivedRuns(projectID, after, emit)
 		}
 	}
-	return mergeVisit(held, func(run domain.Run) string { return run.ID }, archived, visit)
+	return MergeVisit(held, func(run domain.Run) string { return run.ID }, archived, visit)
 }
 
-// mergeVisit visits held items (sorted by id) and archived ones (visited by
+// MergeVisit visits held items (sorted by id) and archived ones (visited by
 // archived in id order) as one ordered sequence, each id once. The held items
-// were copied under the state lock before the Archive is read, so an item
+// are copied under the owner's lock before the archive is read, so an item
 // archived in between is in the copy, and one in both is visited from the
-// copy. A nil archived visits the held items alone.
-func mergeVisit[T any](held []T, id func(T) string, archived func(func(T) (bool, error)) error, visit func(T) (bool, error)) error {
+// copy. A nil archived visits the held items alone. An error from the archive
+// is wrapped as ErrArchiveUnavailable; one from visit is returned as it is.
+func MergeVisit[T any](held []T, id func(T) string, archived func(func(T) (bool, error)) error, visit func(T) (bool, error)) error {
 	seen := make(map[string]struct{}, len(held))
 	for _, item := range held {
 		seen[id(item)] = struct{}{}
@@ -550,7 +553,7 @@ func mergeVisit[T any](held []T, id func(T) string, archived func(func(T) (bool,
 			return true, nil
 		})
 		if err != nil {
-			return errors.Join(errArchiveUnavailable, err)
+			return errors.Join(ErrArchiveUnavailable, err)
 		}
 		if stopped {
 			return visitErr

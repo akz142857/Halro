@@ -7,7 +7,6 @@ import (
 	"math"
 	"net/http"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -147,27 +146,37 @@ func (r *Runtime) listAdminOutcomes(writer http.ResponseWriter, request *http.Re
 	}
 	query := request.URL.Query()
 	projectID, workUnitID, definitionID := strings.TrimSpace(query.Get("project_id")), strings.TrimSpace(query.Get("work_unit_id")), strings.TrimSpace(query.Get("definition_id"))
-	outcomeSnapshot, err := r.governance.manager.ReadOutcomeSnapshot(request.Context(), projectID, workUnitID, definitionID)
+	limit, cursor, ok := governanceAdminPageRequest(writer, request)
+	if !ok {
+		return
+	}
+	items := make([]domain.Outcome, 0, limit+1)
+	err := r.governance.manager.VisitOutcomes(governance.OutcomeQuery{ProjectID: projectID, WorkUnitID: workUnitID, DefinitionID: definitionID, After: cursor},
+		func(outcome domain.Outcome) (bool, error) {
+			items = append(items, outcome)
+			return len(items) <= limit, request.Context().Err()
+		})
 	if err != nil {
 		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "outcome governance is unavailable", "code": "governance_unavailable"})
 		return
 	}
-	accounting, err := r.state.GovernanceSnapshot(request.Context(), ledger.GovernanceSnapshotOptions{ProjectID: projectID, WorkUnitID: workUnitID})
-	if err != nil {
-		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "accounting governance view is unavailable", "code": "run_governance_unavailable"})
-		return
-	}
-	workUnits := make(map[string]domain.WorkUnit, len(accounting.WorkUnits))
-	for _, item := range accounting.WorkUnits {
-		workUnits[item.ID] = item
-	}
-	items := outcomeSnapshot.Outcomes
+	// Provisional is read per Work Unit on the page, not for the project.
+	provisional := map[string]bool{}
 	for index := range items {
-		workUnit, ok := workUnits[items[index].WorkUnitID]
-		items[index].Provisional = !ok || workUnit.Status == domain.WorkUnitOpen || accounting.InflightWorkUnit[workUnit.ID]
+		id := items[index].WorkUnitID
+		value, known := provisional[id]
+		if !known {
+			view, found, err := r.state.WorkUnitView(id)
+			if err != nil {
+				writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "accounting governance view is unavailable", "code": "run_governance_unavailable"})
+				return
+			}
+			value = !found || view.WorkUnit.Status == domain.WorkUnitOpen || view.Inflight
+			provisional[id] = value
+		}
+		items[index].Provisional = value
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
-	writeGovernanceAdminPage(writer, request, items, func(item domain.Outcome) string { return item.ID })
+	writeGovernanceAdminVisitedPage(writer, items, limit, func(item domain.Outcome) string { return item.ID })
 }
 
 type governanceSummary struct {

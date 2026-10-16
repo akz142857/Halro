@@ -40,7 +40,8 @@ var (
 	bucketRuns          = []byte("runs")
 	bucketRunIndex      = []byte("run_index")
 	bucketIdempotency   = []byte("idempotency")
-	allBuckets          = [][]byte{bucketMeta, bucketWorkUnits, bucketWorkUnitIndex, bucketRuns, bucketRunIndex, bucketIdempotency}
+	allBuckets          = [][]byte{bucketMeta, bucketWorkUnits, bucketWorkUnitIndex, bucketRuns, bucketRunIndex, bucketIdempotency,
+		bucketOutcomes, bucketOutcomeProject, bucketOutcomeWorkUnit, bucketOutcomeHeads, bucketOutcomeIdempotency}
 
 	keyVersion       = []byte("version")
 	keyCheck         = []byte("key_check")

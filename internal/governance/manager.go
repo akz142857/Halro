@@ -55,41 +55,76 @@ type idemRecord struct {
 	OutcomeID   string `json:"outcome_id"`
 }
 
-type Snapshot struct {
-	Version  int              `json:"version"`
-	Sequence uint64           `json:"sequence"`
-	Records  []SnapshotRecord `json:"records"`
-}
-
+// SnapshotRecord is one Outcome with the intent that wrote it, as the
+// archive keeps it.
 type SnapshotRecord struct {
 	Outcome            domain.Outcome `json:"outcome"`
 	IdempotencyKeyHash string         `json:"idempotency_key_hash"`
 	RequestFingerprint string         `json:"request_fingerprint"`
 }
 
-const SnapshotVersion = 1
+// The state keeps no Outcome for good (docs/todo/memory-bounded-redesign.zh-CN.md
+// §13.2). Each one waits in a queue until it is in the archive — written as
+// soon as it is reported, and every outcomeFlushThreshold records during a
+// replay. What the state keeps are two rings: the revision heads and the
+// idempotency records most recently touched, recentOutcomes of each. The
+// queue never holds more than outcomeFlushThreshold, fewer than the rings
+// hold, so a queued Outcome's head and idempotency record are always in them.
+//
+// Apply checks a revision against its head when the ring has it, and takes it
+// on trust when the head has left: the Manager checked it against the full
+// head (ring, then archive) before appending, and the journal is chained under
+// a MAC. Which heads the ring has depends only on the journal, so a replay
+// checks exactly what the live instance checked.
+const (
+	recentOutcomes        = 4096
+	outcomeFlushThreshold = 1024
+)
+
+type headEntry struct {
+	outcomeID string
+	revision  uint64
+	sequence  uint64
+}
+
+type idemEntry struct {
+	record   idemRecord
+	sequence uint64
+}
+
+type keyAt struct {
+	key      string
+	sequence uint64
+}
 
 type State struct {
-	mu           sync.RWMutex
-	outcomes     map[string]domain.Outcome
-	outcomeOrder []string
-	byProject    map[string][]string
-	byWorkUnit   map[string][]string
-	byDefinition map[string][]string
-	heads        map[string]string
-	history      map[string][]string
-	idempotency  map[string]idemRecord
-	intents      map[string]SnapshotRecord
-	sequence     uint64
+	mu       sync.RWMutex
+	sequence uint64
+	// lastHash is the journal hash of the record at sequence, which the
+	// archive records beside its position.
+	lastHash [32]byte
+	// archive, when set, receives every Outcome; through is the position it
+	// already held when this state started replaying.
+	archive         Archive
+	archivedThrough uint64
+	heads           map[string]headEntry
+	headOrder       []keyAt
+	idempotency     map[string]idemEntry
+	idemOrder       []keyAt
+	queue           map[string]SnapshotRecord
 }
 
 func NewState() *State {
-	return &State{
-		outcomes: map[string]domain.Outcome{}, byProject: map[string][]string{},
-		byWorkUnit: map[string][]string{}, byDefinition: map[string][]string{},
-		heads: map[string]string{}, history: map[string][]string{},
-		idempotency: map[string]idemRecord{}, intents: map[string]SnapshotRecord{},
-	}
+	return &State{heads: map[string]headEntry{}, idempotency: map[string]idemEntry{}, queue: map[string]SnapshotRecord{}}
+}
+
+// SetArchive sends Outcomes to archive. Records at or before through are
+// already there and are not queued again. Without an archive the state keeps
+// every Outcome and every head, as it did before Outcomes were archived.
+func (s *State) SetArchive(archive Archive, through uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.archive, s.archivedThrough = archive, through
 }
 
 func headKey(projectID, workUnitID, definitionID string, version uint64) string {
@@ -107,22 +142,26 @@ func (s *State) Apply(record Record) error {
 	if record.Sequence != s.sequence+1 {
 		return errors.New("governance sequence is not contiguous")
 	}
-	if _, exists := s.outcomes[e.OutcomeID]; exists {
+	if _, exists := s.queue[e.OutcomeID]; exists {
 		return errors.New("outcome id already exists")
 	}
 	key := headKey(e.ProjectID, e.WorkUnitID, e.DefinitionID, e.DefinitionVersion)
-	history := s.history[key]
-	if int(e.Revision) != len(history)+1 {
-		return errors.New("outcome revision is not contiguous")
-	}
-	if len(history) == 0 {
+	if head, known := s.heads[key]; known {
+		if e.Revision != head.revision+1 {
+			return errors.New("outcome revision is not contiguous")
+		}
+		if e.SupersedesOutcomeID != head.outcomeID {
+			return ErrRevisionConflict
+		}
+	} else if s.archive == nil || e.Revision == 1 {
+		if e.Revision != 1 {
+			return errors.New("outcome revision is not contiguous")
+		}
 		if e.SupersedesOutcomeID != "" {
 			return ErrRevisionConflict
 		}
-	} else if s.heads[key] != e.SupersedesOutcomeID {
-		return ErrRevisionConflict
 	}
-	if len(history) >= domain.MaxOutcomeRevisions {
+	if e.Revision > domain.MaxOutcomeRevisions {
 		return ErrRevisionLimit
 	}
 	outcome := domain.Outcome{
@@ -132,32 +171,161 @@ func (s *State) Apply(record Record) error {
 		EvidenceRef: e.EvidenceRef, ObservedAt: e.ObservedAt, IngestedAt: e.IngestedAt,
 		SupersedesOutcomeID: e.SupersedesOutcomeID, Revision: e.Revision, GovernanceSequence: record.Sequence,
 	}
-	s.outcomes[outcome.ID] = outcome
-	s.outcomeOrder = append(s.outcomeOrder, outcome.ID)
-	s.byProject[outcome.ProjectID] = append(s.byProject[outcome.ProjectID], outcome.ID)
-	s.byWorkUnit[outcome.WorkUnitID] = append(s.byWorkUnit[outcome.WorkUnitID], outcome.ID)
-	s.byDefinition[outcome.DefinitionID] = append(s.byDefinition[outcome.DefinitionID], outcome.ID)
-	s.history[key] = append(history, outcome.ID)
-	s.heads[key] = outcome.ID
-	s.idempotency[idemKey(e.ProjectID, e.IdempotencyKeyHash)] = idemRecord{Fingerprint: e.RequestFingerprint, OutcomeID: outcome.ID}
-	s.intents[outcome.ID] = SnapshotRecord{Outcome: outcome, IdempotencyKeyHash: e.IdempotencyKeyHash, RequestFingerprint: e.RequestFingerprint}
-	s.sequence = record.Sequence
+	if s.archive == nil || record.Sequence > s.archivedThrough {
+		s.queue[outcome.ID] = SnapshotRecord{Outcome: outcome, IdempotencyKeyHash: e.IdempotencyKeyHash, RequestFingerprint: e.RequestFingerprint}
+	}
+	s.heads[key] = headEntry{outcomeID: outcome.ID, revision: outcome.Revision, sequence: record.Sequence}
+	s.headOrder = append(s.headOrder, keyAt{key: key, sequence: record.Sequence})
+	idempotencyKey := idemKey(e.ProjectID, e.IdempotencyKeyHash)
+	s.idempotency[idempotencyKey] = idemEntry{record: idemRecord{Fingerprint: e.RequestFingerprint, OutcomeID: outcome.ID}, sequence: record.Sequence}
+	s.idemOrder = append(s.idemOrder, keyAt{key: idempotencyKey, sequence: record.Sequence})
+	if s.archive != nil {
+		s.headOrder = forgetOldest(s.heads, s.headOrder, func(entry headEntry) uint64 { return entry.sequence })
+		s.idemOrder = forgetOldest(s.idempotency, s.idemOrder, func(entry idemEntry) uint64 { return entry.sequence })
+	}
+	s.sequence, s.lastHash = record.Sequence, record.Hash
 	return nil
 }
 
-func (s *State) Outcome(id string) (domain.Outcome, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	value, ok := s.outcomes[id]
-	return value, ok
+// forgetOldest drops the least recently touched entries past recentOutcomes.
+// order holds one element per touch; an element whose sequence is no longer
+// its key's latest is stale and skipped. It is compacted when stale elements
+// make up most of it, so it stays proportional to the ring.
+func forgetOldest[T any](entries map[string]T, order []keyAt, sequenceOf func(T) uint64) []keyAt {
+	for len(entries) > recentOutcomes && len(order) > 0 {
+		oldest := order[0]
+		order = order[1:]
+		if entry, ok := entries[oldest.key]; ok && sequenceOf(entry) == oldest.sequence {
+			delete(entries, oldest.key)
+		}
+	}
+	if len(order) > 2*recentOutcomes {
+		live := order[:0:0]
+		for _, item := range order {
+			if entry, ok := entries[item.key]; ok && sequenceOf(entry) == item.sequence {
+				live = append(live, item)
+			}
+		}
+		order = live
+	}
+	return order
 }
 
-func (s *State) Current(projectID, workUnitID, definitionID string, version uint64) (domain.Outcome, bool) {
+// QueueLen is how many Outcomes await the archive.
+func (s *State) QueueLen() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	id := s.heads[headKey(projectID, workUnitID, definitionID, version)]
-	value, ok := s.outcomes[id]
-	return value, ok
+	return len(s.queue)
+}
+
+// FlushOutcomes writes the queue to the archive, with the position and
+// journal hash it covers, and drops what was written.
+func (s *State) FlushOutcomes() error {
+	s.mu.RLock()
+	archive := s.archive
+	items := make([]SnapshotRecord, 0, len(s.queue))
+	for _, item := range s.queue {
+		items = append(items, item)
+	}
+	through, hash := s.sequence, s.lastHash
+	s.mu.RUnlock()
+	if archive == nil {
+		return nil
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Outcome.GovernanceSequence < items[j].Outcome.GovernanceSequence })
+	if err := archive.WriteOutcomes(items, through, hash); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	for _, item := range items {
+		delete(s.queue, item.Outcome.ID)
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *State) Outcome(id string) (domain.Outcome, bool, error) {
+	s.mu.RLock()
+	item, queued := s.queue[id]
+	archive := s.archive
+	s.mu.RUnlock()
+	if queued {
+		return item.Outcome, true, nil
+	}
+	if archive == nil {
+		return domain.Outcome{}, false, nil
+	}
+	outcome, found, err := archive.ArchivedOutcome(id)
+	if err != nil {
+		return domain.Outcome{}, false, errors.Join(ledger.ErrArchiveUnavailable, err)
+	}
+	return outcome, found, nil
+}
+
+func (s *State) Current(projectID, workUnitID, definitionID string, version uint64) (domain.Outcome, bool, error) {
+	s.mu.RLock()
+	head, known := s.heads[headKey(projectID, workUnitID, definitionID, version)]
+	archive := s.archive
+	s.mu.RUnlock()
+	if known {
+		return s.Outcome(head.outcomeID)
+	}
+	if archive == nil {
+		return domain.Outcome{}, false, nil
+	}
+	outcome, found, err := archive.ArchivedHead(projectID, workUnitID, definitionID, version)
+	if err != nil {
+		return domain.Outcome{}, false, errors.Join(ledger.ErrArchiveUnavailable, err)
+	}
+	return outcome, found, nil
+}
+
+func (s *State) Idempotency(projectID, hash string) (idemRecord, bool, error) {
+	s.mu.RLock()
+	entry, known := s.idempotency[idemKey(projectID, hash)]
+	archive := s.archive
+	s.mu.RUnlock()
+	if known {
+		return entry.record, true, nil
+	}
+	if archive == nil {
+		return idemRecord{}, false, nil
+	}
+	fingerprint, outcomeID, found, err := archive.ArchivedOutcomeIdempotency(projectID, hash)
+	if err != nil {
+		return idemRecord{}, false, errors.Join(ledger.ErrArchiveUnavailable, err)
+	}
+	return idemRecord{Fingerprint: fingerprint, OutcomeID: outcomeID}, found, nil
+}
+
+func (s *State) Sequence() uint64 { s.mu.RLock(); defer s.mu.RUnlock(); return s.sequence }
+
+// VisitOutcomes visits matching Outcomes in ID order after query.After,
+// queued and archived alike, until visit returns false or an error.
+func (s *State) VisitOutcomes(query OutcomeQuery, visit func(domain.Outcome) (bool, error)) error {
+	match := func(outcome domain.Outcome) bool {
+		return (query.ProjectID == "" || outcome.ProjectID == query.ProjectID) &&
+			(query.WorkUnitID == "" || outcome.WorkUnitID == query.WorkUnitID) &&
+			(query.DefinitionID == "" || outcome.DefinitionID == query.DefinitionID) &&
+			outcome.ID > query.After
+	}
+	s.mu.RLock()
+	var held []domain.Outcome
+	for _, item := range s.queue {
+		if match(item.Outcome) {
+			held = append(held, item.Outcome)
+		}
+	}
+	archive := s.archive
+	s.mu.RUnlock()
+	sort.Slice(held, func(i, j int) bool { return held[i].ID < held[j].ID })
+	var archived func(func(domain.Outcome) (bool, error)) error
+	if archive != nil {
+		archived = func(emit func(domain.Outcome) (bool, error)) error {
+			return archive.VisitArchivedOutcomes(query, emit)
+		}
+	}
+	return ledger.MergeVisit(held, func(outcome domain.Outcome) string { return outcome.ID }, archived, visit)
 }
 
 func (s *State) Outcomes(projectID, workUnitID, definitionID string) []domain.Outcome {
@@ -165,87 +333,20 @@ func (s *State) Outcomes(projectID, workUnitID, definitionID string) []domain.Ou
 	return items
 }
 
+// OutcomesContext reads every matching Outcome, in journal order. It is for
+// the reads that need them all at once — a Work Unit's own, a summary, an
+// export; a listing pages with VisitOutcomes instead.
 func (s *State) OutcomesContext(ctx context.Context, projectID, workUnitID, definitionID string) ([]domain.Outcome, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	candidates := s.outcomeOrder
-	filters := []struct {
-		value string
-		index map[string][]string
-	}{{projectID, s.byProject}, {workUnitID, s.byWorkUnit}, {definitionID, s.byDefinition}}
-	for _, filter := range filters {
-		if filter.value == "" {
-			continue
-		}
-		indexed, ok := filter.index[filter.value]
-		if !ok {
-			return []domain.Outcome{}, nil
-		}
-		if len(indexed) < len(candidates) {
-			candidates = indexed
-		}
-	}
-	items := make([]domain.Outcome, 0, len(candidates))
-	for _, outcomeID := range candidates {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		item := s.outcomes[outcomeID]
-		if (projectID == "" || item.ProjectID == projectID) && (workUnitID == "" || item.WorkUnitID == workUnitID) && (definitionID == "" || item.DefinitionID == definitionID) {
-			items = append(items, item)
-		}
-	}
-	return items, nil
-}
-
-func (s *State) Idempotency(projectID, hash string) (idemRecord, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	value, ok := s.idempotency[idemKey(projectID, hash)]
-	return value, ok
-}
-
-func (s *State) Sequence() uint64 { s.mu.RLock(); defer s.mu.RUnlock(); return s.sequence }
-
-func (s *State) Snapshot() Snapshot {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	records := make([]SnapshotRecord, 0, len(s.outcomes))
-	for id := range s.outcomes {
-		records = append(records, s.intents[id])
-	}
-	sort.Slice(records, func(i, j int) bool {
-		return records[i].Outcome.GovernanceSequence < records[j].Outcome.GovernanceSequence
+	items := make([]domain.Outcome, 0)
+	err := s.VisitOutcomes(OutcomeQuery{ProjectID: projectID, WorkUnitID: workUnitID, DefinitionID: definitionID}, func(outcome domain.Outcome) (bool, error) {
+		items = append(items, outcome)
+		return true, ctx.Err()
 	})
-	return Snapshot{Version: SnapshotVersion, Sequence: s.sequence, Records: records}
-}
-
-func (s *State) Restore(snapshot Snapshot) error {
-	if snapshot.Version != SnapshotVersion {
-		return errors.New("governance checkpoint version is unsupported")
+	if err != nil {
+		return nil, err
 	}
-	rebuilt := NewState()
-	for _, checkpoint := range snapshot.Records {
-		outcome := checkpoint.Outcome
-		event := Event{EventID: "checkpoint:" + outcome.ID, ProjectID: outcome.ProjectID, WorkUnitID: outcome.WorkUnitID,
-			DefinitionID: outcome.DefinitionID, DefinitionVersion: outcome.DefinitionVersion, OutcomeID: outcome.ID,
-			Value: outcome.Value, ReporterKeyID: outcome.ReporterKeyID, EvidenceSHA256: outcome.EvidenceSHA256,
-			EvidenceRef: outcome.EvidenceRef, ObservedAt: outcome.ObservedAt, IngestedAt: outcome.IngestedAt,
-			SupersedesOutcomeID: outcome.SupersedesOutcomeID, Revision: outcome.Revision,
-			IdempotencyKeyHash: checkpoint.IdempotencyKeyHash, RequestFingerprint: checkpoint.RequestFingerprint}
-		if err := rebuilt.Apply(Record{Sequence: outcome.GovernanceSequence, Event: event}); err != nil {
-			return err
-		}
-	}
-	if rebuilt.sequence != snapshot.Sequence {
-		return errors.New("governance checkpoint sequence does not match outcomes")
-	}
-	s.mu.Lock()
-	s.outcomes, s.outcomeOrder = rebuilt.outcomes, rebuilt.outcomeOrder
-	s.byProject, s.byWorkUnit, s.byDefinition = rebuilt.byProject, rebuilt.byWorkUnit, rebuilt.byDefinition
-	s.heads, s.history, s.idempotency, s.intents, s.sequence = rebuilt.heads, rebuilt.history, rebuilt.idempotency, rebuilt.intents, rebuilt.sequence
-	s.mu.Unlock()
-	return nil
+	sort.Slice(items, func(i, j int) bool { return items[i].GovernanceSequence < items[j].GovernanceSequence })
+	return items, nil
 }
 
 type Manager struct {
@@ -280,12 +381,16 @@ func (m *Manager) Report(ctx context.Context, input ReportInput) (domain.Outcome
 	if m.unavailable != nil || m.log == nil || m.accounting == nil || m.definitions == nil {
 		return domain.Outcome{}, false, ErrUnavailable
 	}
-	if previous, ok := m.state.Idempotency(input.ProjectID, input.Intent.IdempotencyKeyHash); ok {
+	previous, replayed, err := m.state.Idempotency(input.ProjectID, input.Intent.IdempotencyKeyHash)
+	if err != nil {
+		return domain.Outcome{}, false, ErrUnavailable
+	}
+	if replayed {
 		if previous.Fingerprint != input.Intent.RequestFingerprint {
 			return domain.Outcome{}, false, ErrIdempotency
 		}
-		outcome, found := m.state.Outcome(previous.OutcomeID)
-		if !found {
+		outcome, found, err := m.state.Outcome(previous.OutcomeID)
+		if err != nil || !found {
 			return domain.Outcome{}, false, ErrUnavailable
 		}
 		if outcome.ProjectID != input.ProjectID || outcome.WorkUnitID != input.WorkUnitID || outcome.DefinitionID != input.DefinitionID {
@@ -330,7 +435,10 @@ func (m *Manager) Report(ctx context.Context, input ReportInput) (domain.Outcome
 	if workUnit.ClosedAt != nil && now.After(workUnit.ClosedAt.Add(domain.OutcomeWriteWindow)) {
 		return domain.Outcome{}, false, ErrWriteWindow
 	}
-	current, hasCurrent := m.state.Current(input.ProjectID, input.WorkUnitID, reference.ID, reference.Version)
+	current, hasCurrent, err := m.state.Current(input.ProjectID, input.WorkUnitID, reference.ID, reference.Version)
+	if err != nil {
+		return domain.Outcome{}, false, ErrUnavailable
+	}
 	revision := uint64(1)
 	if hasCurrent {
 		if input.SupersedesOutcomeID != current.ID {
@@ -366,6 +474,13 @@ func (m *Manager) Report(ctx context.Context, input ReportInput) (domain.Outcome
 		m.unavailable = errors.Join(ErrUnavailable, err)
 		return domain.Outcome{}, false, m.unavailable
 	}
+	// The Outcome is in the journal; a failed archive write leaves it only in
+	// the state's queue, which the next start rebuilds from the journal, so
+	// the manager stops taking reports rather than let the queue grow.
+	if err := m.state.FlushOutcomes(); err != nil {
+		m.unavailable = errors.Join(ErrUnavailable, err)
+		return domain.Outcome{}, false, m.unavailable
+	}
 	if m.checkpoint != nil {
 		summary, authentication := m.log.AuthenticatedHead()
 		if err := m.checkpoint.PutGovernanceJournalAnchor(summary.Records, summary.Bytes, summary.LastHash, authentication); err != nil {
@@ -373,7 +488,7 @@ func (m *Manager) Report(ctx context.Context, input ReportInput) (domain.Outcome
 			return domain.Outcome{}, false, m.unavailable
 		}
 	}
-	outcome, _ := m.state.Outcome(outcomeID)
+	outcome, _, _ := m.state.Outcome(outcomeID)
 	outcome.Provisional = workUnit.Status == domain.WorkUnitOpen || m.workUnitInflight(workUnit.ID)
 	return outcome, false, nil
 }
@@ -420,4 +535,15 @@ func (m *Manager) ReadOutcomeSnapshot(ctx context.Context, projectID, workUnitID
 		Sequence: summary.Records,
 		Offset:   summary.Bytes,
 	}, nil
+}
+
+// VisitOutcomes pages through Outcomes in ID order; see State.VisitOutcomes.
+func (m *Manager) VisitOutcomes(query OutcomeQuery, visit func(domain.Outcome) (bool, error)) error {
+	m.mu.Lock()
+	unavailable := m.unavailable != nil || m.log == nil
+	m.mu.Unlock()
+	if unavailable {
+		return ErrUnavailable
+	}
+	return m.state.VisitOutcomes(query, visit)
 }

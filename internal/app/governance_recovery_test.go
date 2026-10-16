@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/archive"
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/governance"
@@ -57,6 +58,17 @@ func openGovernanceRecoveryFixture(t *testing.T) (*boltstore.Store, *governance.
 	return store, log, path, key[:]
 }
 
+// governanceTestArchive is an empty archive for a restore to fill.
+func governanceTestArchive(t *testing.T) *archive.Store {
+	t.Helper()
+	store, _, err := archive.Open(filepath.Join(t.TempDir(), "archive.db"), bytes.Repeat([]byte{0x44}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return store
+}
+
 func TestGovernanceAnchorRejectsCompleteSuffixTruncation(t *testing.T) {
 	store, log, path, key := openGovernanceRecoveryFixture(t)
 	defer store.Close()
@@ -82,7 +94,7 @@ func TestGovernanceAnchorRejectsCompleteSuffixTruncation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if _, err := restoreGovernanceState(store, reopened, key); !errors.Is(err, errGovernanceAnchorMismatch) {
+	if _, err := restoreGovernanceState(store, reopened, key, governanceTestArchive(t)); !errors.Is(err, errGovernanceAnchorMismatch) {
 		t.Fatalf("complete suffix truncation error=%v", err)
 	}
 }
@@ -94,7 +106,7 @@ func TestGovernanceNonEmptyJournalRequiresAnchor(t *testing.T) {
 	if _, err := log.Append(context.Background(), governanceRecoveryEvent("out_first", "accepted", "", "one", 1)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := restoreGovernanceState(store, log, key); !errors.Is(err, errGovernanceAnchorMismatch) {
+	if _, err := restoreGovernanceState(store, log, key, governanceTestArchive(t)); !errors.Is(err, errGovernanceAnchorMismatch) {
 		t.Fatalf("non-empty unanchored journal error=%v", err)
 	}
 }
@@ -123,7 +135,7 @@ func TestGovernanceAnchorAllowsRepairAfterUnconfirmedPartialTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	state, err := restoreGovernanceState(store, reopened, key)
+	state, err := restoreGovernanceState(store, reopened, key, governanceTestArchive(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,8 +158,7 @@ func TestGovernanceCheckpointAuthenticationFailureFallsBackToJournal(t *testing.
 	}
 	forgedOutcome := domain.Outcome{ID: "out_forged", ProjectID: "prj_1", WorkUnitID: "wku_unit", DefinitionID: "odef_result", DefinitionVersion: 1,
 		Value: "rejected", ReporterKeyID: "key_1", ObservedAt: event.ObservedAt, IngestedAt: event.IngestedAt, Revision: 1, GovernanceSequence: 1}
-	forged := governance.Snapshot{Version: governance.SnapshotVersion, Sequence: 1, Records: []governance.SnapshotRecord{{Outcome: forgedOutcome,
-		IdempotencyKeyHash: event.IdempotencyKeyHash, RequestFingerprint: event.RequestFingerprint}}}
+	forged := []governance.SnapshotRecord{{Outcome: forgedOutcome, IdempotencyKeyHash: event.IdempotencyKeyHash, RequestFingerprint: event.RequestFingerprint}}
 	payload, err := json.Marshal(forged)
 	if err != nil {
 		t.Fatal(err)
@@ -156,12 +167,12 @@ func TestGovernanceCheckpointAuthenticationFailureFallsBackToJournal(t *testing.
 	if err := store.SaveGovernanceCheckpoint(1, head.Bytes, head.LastHash, sha256.Sum256(payload), badAuthentication, payload); err != nil {
 		t.Fatal(err)
 	}
-	state, err := restoreGovernanceState(store, log, key)
+	state, err := restoreGovernanceState(store, log, key, governanceTestArchive(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	actual, ok := state.Current("prj_1", "wku_unit", "odef_result", 1)
-	if !ok || actual.ID != "out_actual" || actual.Value != "accepted" {
+	actual, ok, err := state.Current("prj_1", "wku_unit", "odef_result", 1)
+	if err != nil || !ok || actual.ID != "out_actual" || actual.Value != "accepted" {
 		t.Fatalf("restored outcome=%#v ok=%v", actual, ok)
 	}
 	if _, err := store.LoadGovernanceCheckpoint(); !errors.Is(err, boltstore.ErrNotFound) {
@@ -183,8 +194,7 @@ func TestGovernanceCheckpointMustMatchItsJournalFrame(t *testing.T) {
 	}
 	forgedOutcome := domain.Outcome{ID: "out_forged", ProjectID: "prj_1", WorkUnitID: "wku_unit", DefinitionID: "odef_result", DefinitionVersion: 1,
 		Value: "rejected", ReporterKeyID: "key_1", ObservedAt: event.ObservedAt, IngestedAt: event.IngestedAt, Revision: 1, GovernanceSequence: 1}
-	forged := governance.Snapshot{Version: governance.SnapshotVersion, Sequence: 1, Records: []governance.SnapshotRecord{{Outcome: forgedOutcome,
-		IdempotencyKeyHash: event.IdempotencyKeyHash, RequestFingerprint: event.RequestFingerprint}}}
+	forged := []governance.SnapshotRecord{{Outcome: forgedOutcome, IdempotencyKeyHash: event.IdempotencyKeyHash, RequestFingerprint: event.RequestFingerprint}}
 	payload, err := json.Marshal(forged)
 	if err != nil {
 		t.Fatal(err)
@@ -195,12 +205,12 @@ func TestGovernanceCheckpointMustMatchItsJournalFrame(t *testing.T) {
 	if err := store.SaveGovernanceCheckpoint(1, head.Bytes, wrongJournalHash, payloadHash, authentication, payload); err != nil {
 		t.Fatal(err)
 	}
-	state, err := restoreGovernanceState(store, log, key)
+	state, err := restoreGovernanceState(store, log, key, governanceTestArchive(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	actual, ok := state.Current("prj_1", "wku_unit", "odef_result", 1)
-	if !ok || actual.ID != "out_actual" || actual.Value != "accepted" {
+	actual, ok, err := state.Current("prj_1", "wku_unit", "odef_result", 1)
+	if err != nil || !ok || actual.ID != "out_actual" || actual.Value != "accepted" {
 		t.Fatalf("restored outcome=%#v ok=%v", actual, ok)
 	}
 	if _, err := store.LoadGovernanceCheckpoint(); !errors.Is(err, boltstore.ErrNotFound) {
@@ -361,4 +371,48 @@ func TestBackupVerifiesGovernanceTerminalAnchorBeforePublication(t *testing.T) {
 			t.Fatalf("backup governance sequence=%d, want 2", manifest.GovernanceSequence)
 		}
 	})
+}
+
+// An archive written from another journal — same position, another record
+// there — is emptied and filled again from this journal, so it serves none of
+// the other journal's Outcomes.
+func TestGovernanceArchiveFromAnotherJournalIsRefilled(t *testing.T) {
+	previous := outcomeFlushThreshold
+	outcomeFlushThreshold = 1
+	defer func() { outcomeFlushThreshold = previous }()
+	shared := governanceTestArchive(t)
+	restoreWith := func(outcomeID, value string) (*governance.State, *governance.Log) {
+		t.Helper()
+		store, log, _, key := openGovernanceRecoveryFixture(t)
+		t.Cleanup(func() { store.Close() })
+		if _, err := log.Append(context.Background(), governanceRecoveryEvent(outcomeID, value, "", outcomeID, 1)); err != nil {
+			t.Fatal(err)
+		}
+		head, authentication := log.AuthenticatedHead()
+		if err := store.PutGovernanceJournalAnchor(head.Records, head.Bytes, head.LastHash, authentication); err != nil {
+			t.Fatal(err)
+		}
+		state, err := restoreGovernanceState(store, log, key, shared)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state, log
+	}
+	_, first := restoreWith("out_other", "rejected")
+	first.Close()
+	if _, found, err := shared.ArchivedOutcome("out_other"); err != nil || !found {
+		t.Fatalf("the first journal's Outcome was not archived: found=%t err=%v", found, err)
+	}
+	state, second := restoreWith("out_actual", "accepted")
+	defer second.Close()
+	if _, found, err := shared.ArchivedOutcome("out_other"); err != nil || found {
+		t.Fatalf("the other journal's Outcome survived: found=%t err=%v", found, err)
+	}
+	current, found, err := state.Current("prj_1", "wku_unit", "odef_result", 1)
+	if err != nil || !found || current.ID != "out_actual" {
+		t.Fatalf("head %#v found=%t err=%v", current, found, err)
+	}
+	if through, hash, err := shared.OutcomesThrough(); err != nil || through != 1 || hash != second.Summary().LastHash {
+		t.Fatalf("archive through=%d err=%v", through, err)
+	}
 }

@@ -95,11 +95,11 @@ func TestManagerSerializesCurrentHeadAndPersistsIdempotency(t *testing.T) {
 		t.Fatalf("idempotent replay = %#v replay=%v err=%v", replayed, replay, err)
 	}
 	restored := NewState()
-	if err := restored.Restore(manager.State().Snapshot()); err != nil {
+	if _, err := log.Replay(restored.Apply); err != nil {
 		t.Fatal(err)
 	}
-	if idem, ok := restored.Idempotency("prj_1", shaLabel("first")); !ok || idem.OutcomeID != first.ID {
-		t.Fatalf("checkpoint lost idempotency: %#v ok=%v", idem, ok)
+	if idem, ok, err := restored.Idempotency("prj_1", shaLabel("first")); err != nil || !ok || idem.OutcomeID != first.ID {
+		t.Fatalf("replay lost idempotency: %#v ok=%v err=%v", idem, ok, err)
 	}
 	var successes, conflicts int
 	var mu sync.Mutex
