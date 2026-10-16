@@ -8,6 +8,13 @@ semantic versioning.
 
 ### Added
 
+- `ledger.max_hot_state_bytes` (default 128 MiB) bounds the accounting state
+  held in memory. Past it, new requests, Work Units and Runs are refused with
+  503 `accounting_capacity_exhausted` and a `Retry-After` while admitted work
+  settles, instead of the process growing until it runs out of memory. The
+  estimate, the limit and refusals are exported as metrics, with
+  `HalroLedgerHotStateHigh` and `HalroLedgerHotStateRejecting` alerts.
+
 - `halro start` can serve Go profiles on a loopback-only, opt-in listener
   (`HALRO_PPROF_LISTEN=127.0.0.1:6060`) so memory growth can be attributed in
   production. It is off unless the variable is set.

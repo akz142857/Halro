@@ -289,6 +289,10 @@ const (
 // authority they are derived from.
 type Ledger struct {
 	Seal LedgerSeal `yaml:"seal"`
+	// MaxHotStateBytes is the accounting state's estimated size beyond which
+	// new requests, Work Units and Runs are refused with a 503 until admitted
+	// work settles. It bounds the memory the state can take, not the history.
+	MaxHotStateBytes int64 `yaml:"max_hot_state_bytes"`
 }
 
 // LedgerSeal controls whether the WAL is allowed to stop being one file.
@@ -319,6 +323,16 @@ const (
 	// ten-second start budget.
 	DefaultLedgerSealMaxActiveBytes = int64(256) << 20
 	MinLedgerSealMaxActiveBytes     = int64(16) << 20
+)
+
+// Hot-state bounds (docs/todo/memory-bounded-redesign.zh-CN.md §14). The
+// floor keeps the limit above the fixed part of the state, about 12 MiB of
+// recent event digests; the ceiling keeps a mistyped value from meaning no
+// limit at all.
+const (
+	DefaultLedgerMaxHotStateBytes = int64(128) << 20
+	MinLedgerMaxHotStateBytes     = int64(16) << 20
+	MaxLedgerMaxHotStateBytes     = int64(4) << 30
 )
 
 type Admin struct {
@@ -922,6 +936,9 @@ func (c *Config) Normalize() error {
 	if c.Ledger.Seal.MaxActiveBytes == 0 {
 		c.Ledger.Seal.MaxActiveBytes = DefaultLedgerSealMaxActiveBytes
 	}
+	if c.Ledger.MaxHotStateBytes == 0 {
+		c.Ledger.MaxHotStateBytes = DefaultLedgerMaxHotStateBytes
+	}
 	if c.Admin.SessionTTL == 0 {
 		c.Admin.SessionTTL = Duration(8 * time.Hour)
 	}
@@ -1280,6 +1297,10 @@ func (c Config) Validate(opts LoadOptions) error {
 	if c.Ledger.Seal.Enabled && c.Ledger.Seal.MaxActiveBytes < MinLedgerSealMaxActiveBytes {
 		problems = append(problems, fmt.Errorf(
 			"ledger.seal.max_active_bytes must be at least %d bytes", MinLedgerSealMaxActiveBytes))
+	}
+	if c.Ledger.MaxHotStateBytes < MinLedgerMaxHotStateBytes || c.Ledger.MaxHotStateBytes > MaxLedgerMaxHotStateBytes {
+		problems = append(problems, fmt.Errorf(
+			"ledger.max_hot_state_bytes must be between %d and %d bytes", MinLedgerMaxHotStateBytes, MaxLedgerMaxHotStateBytes))
 	}
 	if c.Admin.SessionTTL <= 0 || c.Admin.IdleTimeout <= 0 ||
 		c.Admin.IdleTimeout > c.Admin.SessionTTL || c.Admin.LoginRPM < 1 {

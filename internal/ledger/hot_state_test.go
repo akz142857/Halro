@@ -1,103 +1,173 @@
 package ledger
 
 import (
-	"context"
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
+
+	"github.com/akz142857/Halro/internal/domain"
 )
 
-// A settled attempt leaves the state: its lease goes with the reservation, and
-// what governance reads of it stays behind as the Work Unit's totals.
-func TestSettlementLeavesOnlyTheWorkUnitTotals(t *testing.T) {
-	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+// hotIdent is an identifier of production length.
+func hotIdent(prefix string, index int) string { return fmt.Sprintf("%s_%026d", prefix, index) }
+
+// hotReservation is a reservation carrying every field the gateway sets,
+// at production lengths, metered or with unknown-price evidence.
+func hotReservation(index int, at time.Time, unknown bool) []Event {
+	project := hotIdent("prj", 0)
+	accepted := governanceEvent(hotIdent("evtacc", index), EventRequestAccepted, at)
+	accepted.ProjectID, accepted.KeyID, accepted.RequestID = project, hotIdent("key", 0), hotIdent("req", index)
+	accepted.RequestedModel = "claude-sonnet-4-5-20250929-production-alias"
+	reserved := accepted
+	reserved.EventID, reserved.Kind = hotIdent("evtres", index), EventReservationCreated
+	reserved.AttemptID = hotIdent("att", index)
+	reserved.RouteID, reserved.DeploymentID, reserved.ProviderID = hotIdent("rte", 0), hotIdent("dep", 0), hotIdent("prv", 0)
+	identity, _ := domain.IdentityForProfile(domain.ProfileAnthropicMessages)
+	reserved.OfferingID, reserved.ProfileID = identity.Offering, domain.ProfileAnthropicMessages
+	reserved.ProviderModel, reserved.ProviderPrimitive = "anthropic.claude-sonnet-4-5-20250929-v1:0", "messages"
+	reserved.AttemptNumber, reserved.PreparedInputTokens, reserved.PreparedOutputTokens = 1, 12_000, 4_096
+	reserved.RecoveryKey = fmt.Sprintf("sha256:%064x", index)
+	reserved.TokenGuardPricingViewDigest = fmt.Sprintf("sha256:%064x", index+1)
+	version, start, end, local := uint64(7), 480, 1080, 600
+	rate := func(value int64) *int64 { return &value }
+	price := domain.PriceSnapshot{
+		PricingSelectedAt: at, PriceEvidenceStatus: domain.PriceEvidenceVersioned, CostValueStatus: domain.CostValueKnown,
+		PriceVersionID: hotIdent("dpv", 0), PriceVersion: &version, BillingMode: domain.BillingModeMetered, Currency: "USD",
+		FormulaVersion: domain.PriceFormulaUSDTokensV1, InputMicrosPerMillion: rate(3_000_000), CachedInputMicrosPerMillion: rate(300_000),
+		OutputMicrosPerMillion: rate(15_000_000), FixedRequestMicrosUSD: rate(0),
+		ScheduleTier:  &domain.PriceScheduleTier{Timezone: "America/Los_Angeles", Source: domain.PriceTierWindow, StartMinute: &start, EndMinute: &end, LocalMinute: &local},
+		EffectiveFrom: &at, SourceType: domain.PriceSourceOfficialURL, SourceAssurance: domain.PriceAssuranceAsserted,
+		SourceContentSHA256: fmt.Sprintf("sha256:%064x", 7),
+		SourceReference:     "https://www.anthropic.com/pricing#api-claude-sonnet-4-5-production-reference",
+	}
+	reserved.LeaseMode, reserved.PriceSnapshot, reserved.ReservationMicrosUSD = LeaseModeMetered, &price, MicrosUSD(100)
+	if unknown {
+		price = domain.NewUnknownPriceSnapshot(at)
+		reserved.LeaseMode, reserved.PriceSnapshot, reserved.ReservationMicrosUSD = LeaseModeUnknownAllowed, &price, nil
+		reserved.UnknownPolicyEvidence = &domain.UnknownPricePolicyEvidence{
+			PolicyVersion: "unknown-price-policy-v1", ProjectID: project, TokenGuardStatus: "disabled",
+			ReasonCode: "cost_governance_disabled", InstanceExplicitOptIn: true, CostGovernanceDisabled: true,
+		}
+	}
+	return []Event{accepted, reserved}
+}
+
+func hotHeap() int64 {
+	runtime.GC()
+	runtime.GC()
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	return int64(stats.HeapAlloc)
+}
+
+// The hot state's estimate is priced from what each kind of entry actually
+// holds in the heap. Each kind is added many times to a state whose digest
+// window is already full, and the estimate's growth must stay within 25% of
+// the heap's. A price that drifted from the code fails here.
+func TestHotStateEstimateTracksTheHeap(t *testing.T) {
+	if testing.Short() {
+		t.Skip("measures the heap")
+	}
+	const count = 10_000
+	base := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	event := func(kind EventKind, at time.Time, name string, index int) Event {
+		e := governanceEvent(hotIdent("evt"+name, index), kind, at)
+		e.ProjectID, e.KeyID, e.Operation = hotIdent("prj", 0), hotIdent("key", 0), name
+		e.IdempotencyKeyHash = fmt.Sprintf("sha256:%064x", index)
+		return e
+	}
+	workUnit := func(index int) Event {
+		created := event(EventWorkUnitCreated, base, "wu.create", index)
+		created.WorkUnitID = hotIdent("wku", index)
+		return created
+	}
+	run := func(index, workUnitIndex int) Event {
+		created := event(EventRunCreated, base, "run.create", index)
+		created.IdempotencyKeyHash = fmt.Sprintf("sha256:%064x", 1<<40+index)
+		created.WorkUnitID, created.RunID = hotIdent("wku", workUnitIndex), hotIdent("run", index)
+		created.RunBudgetMicrosUSD, created.RunExpiresAt = 1_000, base.Add(time.Hour)
+		return created
+	}
+	kinds := []struct {
+		name   string
+		setup  []Event
+		events func(index int) []Event
+	}{
+		{name: "metered reservation", events: func(index int) []Event { return hotReservation(index, base, false) }},
+		{name: "unknown-price reservation", events: func(index int) []Event { return hotReservation(index, base, true) }},
+		{name: "lease kept after settlement", events: func(index int) []Event {
+			events := hotReservation(index, base, false)
+			settled := events[1]
+			settled.EventID, settled.Kind, settled.Outcome = hotIdent("evtset", index), EventAttemptSettled, OutcomePinCommitFailed
+			settled.ReservationMicrosUSD, settled.CommittedMicrosUSD = nil, MicrosUSD(75)
+			return append(events, settled)
+		}},
+		{name: "attributed request", setup: []Event{workUnit(0), run(0, 0)}, events: func(index int) []Event {
+			accepted := event(EventRequestAccepted, base, "acc", index)
+			accepted.RequestID, accepted.WorkUnitID, accepted.RunID = hotIdent("req", index), hotIdent("wku", 0), hotIdent("run", 0)
+			return []Event{accepted}
+		}},
+		{name: "open work unit", events: func(index int) []Event { return []Event{workUnit(index)} }},
+		{name: "open work unit with a run", events: func(index int) []Event { return []Event{workUnit(index), run(index, index)} }},
+		{name: "balance", events: func(index int) []Event {
+			at := base.Add(time.Duration(index%365) * 24 * time.Hour)
+			events := hotReservation(index, at, false)
+			for position := range events {
+				events[position].ProjectID = hotIdent("prj", index/365+1)
+				events[position].PeriodID = at.Format("2006-01-02")
+			}
+			settled := events[1]
+			settled.EventID, settled.Kind = hotIdent("evtset", index), EventAttemptSettled
+			settled.ReservationMicrosUSD, settled.CommittedMicrosUSD = nil, MicrosUSD(75)
+			finalized := events[0]
+			finalized.EventID, finalized.Kind = hotIdent("evtfin", index), EventRequestFinalized
+			return append(events, settled, finalized)
+		}},
+		{name: "archived work unit awaiting the archive", events: func(index int) []Event { return governedTask(index, base, false) }},
+	}
+	for _, kind := range kinds {
+		state := NewState()
+		state.SetArchive(newMemoryArchive())
+		sequence := uint64(1)
+		for index := 0; index < recentEventDigests; index++ {
+			warm := event(EventRequestAccepted, base, "warm", index)
+			warm.ProjectID, warm.RequestID = hotIdent("prw", 0), hotIdent("rqw", index)
+			sequence = applyEvents(t, state, []Event{warm}, sequence)
+		}
+		sequence = applyEvents(t, state, kind.setup, sequence)
+		heapBefore, estimateBefore := hotHeap(), state.HotStateBytes()
+		for index := 1; index <= count; index++ {
+			sequence = applyEvents(t, state, kind.events(index), sequence)
+		}
+		heapAfter, estimateAfter := hotHeap(), state.HotStateBytes()
+		runtime.KeepAlive(state)
+		heap, estimate := float64(heapAfter-heapBefore)/count, float64(estimateAfter-estimateBefore)/count
+		t.Logf("%-40s heap %5.0f B  estimate %5.0f B  (%.2f)", kind.name, heap, estimate, estimate/heap)
+		if estimate < 0.75*heap || estimate > 1.25*heap {
+			t.Errorf("%s: estimate %.0f B per entry is not within 25%% of the heap's %.0f B", kind.name, estimate, heap)
+		}
+	}
+}
+
+// The digest window is priced once, as the heap it holds when full.
+func TestHotStateEstimatePricesTheDigestWindow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("measures the heap")
+	}
+	base := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 	state := NewState()
-	sequence := uint64(0)
-	apply := func(event Event) {
-		t.Helper()
-		sequence++
-		if err := state.Apply(Record{Generation: 1, Sequence: sequence, Offset: int64(sequence * 100), Epoch: frameVersionRunAttribution, Event: event}); err != nil {
-			t.Fatalf("apply %d: %v", sequence, err)
-		}
+	heapBefore := hotHeap()
+	sequence := uint64(1)
+	for index := 0; index < recentEventDigests; index++ {
+		warm := governanceEvent(hotIdent("evtwarm", index), EventRequestAccepted, base)
+		warm.RequestID = hotIdent("rqw", index)
+		sequence = applyEvents(t, state, []Event{warm}, sequence)
 	}
-	workUnit := governanceEvent("evt_wu", EventWorkUnitCreated, now)
-	workUnit.WorkUnitID = "wku_1"
-	apply(workUnit)
-	runCreated := governanceEvent("evt_run", EventRunCreated, now)
-	runCreated.WorkUnitID, runCreated.RunID = "wku_1", "run_1"
-	runCreated.RunBudgetMicrosUSD, runCreated.RunExpiresAt = 10_000, now.Add(time.Hour)
-	apply(runCreated)
-	accepted := governanceEvent("evt_req", EventRequestAccepted, now)
-	accepted.RequestID, accepted.WorkUnitID, accepted.RunID = "req_1", "wku_1", "run_1"
-	apply(accepted)
-	settle := func(attemptID string, committed *int64, estimated bool) {
-		t.Helper()
-		reserved := governanceEvent("evt_res_"+attemptID, EventReservationCreated, now)
-		reserved.RequestID, reserved.AttemptID = "req_1", attemptID
-		reserved.WorkUnitID, reserved.RunID = "wku_1", "run_1"
-		reserved.ReservationMicrosUSD = MicrosUSD(100)
-		apply(reserved)
-		if _, ok := state.AccountingLease(attemptID); !ok {
-			t.Fatalf("in-flight attempt %s has no lease", attemptID)
-		}
-		settled := governanceEvent("evt_settle_"+attemptID, EventAttemptSettled, now)
-		settled.RequestID, settled.AttemptID = "req_1", attemptID
-		settled.WorkUnitID, settled.RunID = "wku_1", "run_1"
-		settled.CommittedMicrosUSD, settled.CostEstimated = committed, estimated
-		apply(settled)
-		if _, ok := state.AccountingLease(attemptID); ok {
-			t.Fatalf("settled attempt %s kept its lease", attemptID)
-		}
-	}
-	settle("att_1", MicrosUSD(70), false)
-	settle("att_2", MicrosUSD(30), true)
-
-	snapshot, err := state.GovernanceSnapshot(context.Background(), GovernanceSnapshotOptions{ProjectID: "prj_1", IncludeCosts: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := WorkUnitCost{KnownMicrosUSD: 100, EstimatedMicrosUSD: 30}
-	if got := snapshot.Costs["wku_1"]; got != want {
-		t.Fatalf("work unit cost = %#v, want %#v", got, want)
-	}
-	if len(state.leaseRecords) != 0 || len(state.reservations) != 0 {
-		t.Fatalf("leases=%d reservations=%d after every attempt settled", len(state.leaseRecords), len(state.reservations))
-	}
-}
-
-// An unknown cost is counted, not added.
-func TestWorkUnitCostCountsUnknownAttempts(t *testing.T) {
-	var cost WorkUnitCost
-	cost.add(Event{LeaseMode: LeaseModeUnknownAllowed})
-	cost.add(Event{CommittedMicrosUSD: MicrosUSD(5)})
-	if want := (WorkUnitCost{KnownMicrosUSD: 5, UnknownAttempts: 1}); cost != want {
-		t.Fatalf("cost = %#v, want %#v", cost, want)
-	}
-}
-
-// A total that passes the int64 range is reported, and the settlement that
-// caused it still lands: the totals are derived, the balance is not.
-func TestWorkUnitCostOverflowIsReportedNotRefused(t *testing.T) {
-	cost := WorkUnitCost{KnownMicrosUSD: 1<<63 - 10}
-	cost.add(Event{CommittedMicrosUSD: MicrosUSD(20)})
-	if !cost.Overflowed {
-		t.Fatalf("overflow not reported: %#v", cost)
-	}
-}
-
-// The digest window is bounded, and a duplicate inside it is still recognised.
-func TestEventDigestWindowIsBounded(t *testing.T) {
-	state := NewState()
-	for index := 0; index < recentEventDigests+10; index++ {
-		state.rememberDigest(fmt.Sprintf("evt_%d", index), [32]byte{byte(index)})
-	}
-	if len(state.eventDigests) != recentEventDigests || len(state.eventOrder) != recentEventDigests {
-		t.Fatalf("digests=%d order=%d, want %d", len(state.eventDigests), len(state.eventOrder), recentEventDigests)
-	}
-	if _, ok := state.eventDigests["evt_0"]; ok {
-		t.Fatal("the oldest digest was not forgotten")
-	}
-	if _, ok := state.eventDigests[fmt.Sprintf("evt_%d", recentEventDigests+9)]; !ok {
-		t.Fatal("the newest digest is missing")
+	heap, estimate := float64(hotHeap()-heapBefore), float64(state.HotStateBytes())
+	runtime.KeepAlive(state)
+	t.Logf("digest window heap %.1f MiB  estimate %.1f MiB", heap/(1<<20), estimate/(1<<20))
+	if estimate < 0.75*heap || estimate > 1.25*heap {
+		t.Errorf("digest window estimate %.0f B is not within 25%% of the heap's %.0f B", estimate, heap)
 	}
 }

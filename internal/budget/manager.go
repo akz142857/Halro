@@ -164,6 +164,9 @@ type Manager struct {
 	lockAcquisitions atomic.Uint64
 	lockWaitNanos    atomic.Int64
 	lockHeldNanos    atomic.Int64
+
+	hotStateLimit      int64
+	hotStateRejections [hotStateEntries]atomic.Uint64
 }
 
 type RecoveryStats struct {
@@ -198,6 +201,10 @@ type Options struct {
 	// bucket, and an assertion written against a fixed date silently starts failing the
 	// next day.
 	Now func() time.Time
+	// MaxHotStateBytes is the accounting state's size beyond which new
+	// requests, Work Units and Runs are refused with ErrHotStateFull. Zero
+	// sets no limit.
+	MaxHotStateBytes int64
 }
 
 func New(log *ledger.Log, state *ledger.State, periods *PeriodResolver) (*Manager, error) {
@@ -221,6 +228,8 @@ func NewWithOptions(
 		state:   state,
 		periods: periods,
 		now:     options.Now,
+
+		hotStateLimit: options.MaxHotStateBytes,
 	}
 	manager.applyCond = sync.NewCond(&manager.applyMu)
 	return manager, nil
@@ -289,6 +298,9 @@ func (m *Manager) CreateWorkUnitWithDefinitions(ctx context.Context, projectID, 
 			return domain.WorkUnit{}, false, errors.New("idempotent work unit is absent from accounting state")
 		}
 		return workUnit, true, nil
+	}
+	if err := m.admitGrowth(hotStateWorkUnit); err != nil {
+		return domain.WorkUnit{}, false, err
 	}
 	if int64(m.state.OpenWorkUnitCount(projectID)) >= maxOpen {
 		return domain.WorkUnit{}, false, ErrResourceLimit
@@ -419,6 +431,9 @@ func (m *Manager) CreateRun(
 		}
 		run, _, err = m.Run(projectID, run.ID)
 		return run, true, err
+	}
+	if err := m.admitGrowth(hotStateRun); err != nil {
+		return domain.Run{}, false, err
 	}
 	workUnit, ok, err := m.state.WorkUnit(workUnitID)
 	if err != nil {
@@ -873,6 +888,9 @@ func (m *Manager) BeginRequestAttributed(
 		if run.Status != domain.RunActive || !now.Before(run.ExpiresAt) {
 			return Request{}, ErrRunNotActive
 		}
+	}
+	if err := m.admitGrowth(hotStateRequest); err != nil {
+		return Request{}, err
 	}
 	event := ledger.Event{
 		EventID: eventID, Kind: ledger.EventRequestAccepted,

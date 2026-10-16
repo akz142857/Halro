@@ -778,3 +778,22 @@ func TestTheErrorFileCannotShareThePlainLogsPath(t *testing.T) {
 		t.Fatalf("the defaults were refused: %v", err)
 	}
 }
+
+// An absent hot-state limit takes the §14 default, and one outside its bounds
+// is refused rather than read as no limit.
+func TestLedgerHotStateLimitIsDefaultedAndBounded(t *testing.T) {
+	var absent Config
+	if err := absent.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if absent.Ledger.MaxHotStateBytes != DefaultLedgerMaxHotStateBytes {
+		t.Fatalf("absent limit resolved to %d", absent.Ledger.MaxHotStateBytes)
+	}
+	for _, value := range []int64{-1, MinLedgerMaxHotStateBytes - 1, MaxLedgerMaxHotStateBytes + 1} {
+		candidate := Default()
+		candidate.Ledger.MaxHotStateBytes = value
+		if err := candidate.Validate(LoadOptions{}); err == nil || !strings.Contains(err.Error(), "max_hot_state_bytes") {
+			t.Fatalf("limit %d err=%v", value, err)
+		}
+	}
+}

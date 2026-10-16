@@ -634,6 +634,17 @@ Three things follow from a sealed data directory, and all three are enforced:
 - **A roll is interruptible.** The rename is the commit point, and an open that
   finds a half-finished roll decides from the files which side it is on.
 
+`ledger.max_hot_state_bytes` (default 128 MiB) bounds the accounting state held
+in memory: requests in flight, open Work Units and live Runs, balances. The size
+is estimated from the state's entries — `halro_ledger_hot_state_estimated_bytes`
+— and once it passes the limit, new requests, Work Units and Runs are refused
+with 503 `accounting_capacity_exhausted` and a `Retry-After`, while work already
+admitted still settles. Ordinary traffic sits far below it; at the default it
+takes about 40,000 requests in flight at once. Many projects running Run
+Governance near their per-project caps are the case that can reach it, and
+raising the limit costs memory one for one. `HalroLedgerHotStateHigh` warns at
+80 percent and `HalroLedgerHotStateRejecting` fires on the first refusal.
+
 #### Deferred responses: answers held for later collection
 
 A Project may allow callers to submit `POST /v1/responses` with

@@ -721,3 +721,14 @@ func TestOutcomesSurviveARestartFromTheArchive(t *testing.T) {
 		t.Fatalf("revision status=%d body=%s err=%v", revised.Code, revised.Body.String(), err)
 	}
 }
+
+// A Work Unit or Run refused because the accounting state is at its limit is
+// a 503 with the gateway's retry hint, not the 429 of a per-project limit.
+func TestGovernanceHotStateRefusalIs503WithRetryAfter(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeGovernanceOperationError(recorder, budget.ErrHotStateFull, "work_unit")
+	if recorder.Code != http.StatusServiceUnavailable || recorder.Header().Get("Retry-After") != "5" ||
+		!strings.Contains(recorder.Body.String(), "accounting_capacity_exhausted") {
+		t.Fatalf("status=%d retry=%q body=%s", recorder.Code, recorder.Header().Get("Retry-After"), recorder.Body.String())
+	}
+}

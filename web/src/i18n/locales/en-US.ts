@@ -398,6 +398,7 @@ export const enUS = {
       provider_timeout: "The upstream provider timed out. Retry later, or give this alias a fallback target.",
       provider_authentication_error: "The upstream provider refused the credential. Check that the connection behind this deployment still holds a valid one.",
       accounting_unavailable: "Accounting is unavailable, so the gateway refused the request fail-closed without calling upstream.",
+      accounting_capacity_exhausted: "The accounting state held in memory reached ledger.max_hot_state_bytes, so the gateway refused new work until admitted requests settle. Retry shortly, or raise the limit.",
       streaming_unsupported: "The gateway cannot carry a streamed response right now. This is an internal failure, not a deployment capability: use a standard response and check the server log.",
     },
     billedProject: "Billed project",

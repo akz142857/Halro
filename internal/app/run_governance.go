@@ -446,6 +446,9 @@ func writeGovernanceOperationError(writer http.ResponseWriter, err error, resour
 		writeGovernanceError(writer, http.StatusNotFound, "work_unit_not_found", "work unit was not found")
 	case errors.Is(err, budget.ErrRunNotFound):
 		writeGovernanceError(writer, http.StatusNotFound, "run_not_found", "run was not found")
+	case errors.Is(err, budget.ErrHotStateFull):
+		writer.Header().Set("Retry-After", strconv.FormatInt(int64(gatewaycore.AccountingCapacityRetryAfter/time.Second), 10))
+		writeGovernanceError(writer, http.StatusServiceUnavailable, "accounting_capacity_exhausted", "accounting state is at its memory limit; retry later")
 	default:
 		writeGovernanceError(writer, http.StatusServiceUnavailable, "run_governance_unavailable", resource+" state is unavailable")
 	}

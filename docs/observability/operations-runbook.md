@@ -73,6 +73,18 @@ a public Prometheus UI or unrestricted API. Useful checks include:
 - Immediate: compare request rate, WAL sync latency, batch size and project-lock wait.
 - Escalate: shed traffic or increase approved capacity before the queue fills and accounting becomes unavailable.
 
+### HalroLedgerHotStateHigh
+
+- Trigger: the accounting state held in memory stays above 80 percent of `ledger.max_hot_state_bytes` for ten minutes.
+- Immediate: see what holds it — requests in flight (`halro_active_requests`, `halro_accounting_pending_leases`), open Work Units and live Runs per project (Admin console, Run Governance), and whether snapshots are being written, since they drain the archive queue (`halro_ledger_state_snapshot_failures_total`). Normal traffic sits far below the limit; growth usually means requests that never finish or Run Governance near its per-project caps on many projects.
+- Escalate: raise `ledger.max_hot_state_bytes` within the memory the host has, or reduce in-flight work, before new requests start being refused.
+
+### HalroLedgerHotStateRejecting
+
+- Trigger: new requests, Work Units or Runs were refused with 503 `accounting_capacity_exhausted` in the last ten minutes.
+- Immediate: callers are being turned away; requests already admitted still settle and finish. Check the same sources as HalroLedgerHotStateHigh and whether the estimate is falling as admitted work settles.
+- Escalate: raise `ledger.max_hot_state_bytes` and restart if the host has the memory, otherwise shed traffic at the edge until the state drains.
+
 ### HalroAlertDeliveryFailing
 
 - Trigger: application alert delivery fails or drops for ten minutes.

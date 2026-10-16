@@ -385,6 +385,12 @@ tests:
         values: '100x20'
       - series: 'halro_alert_delivery_total{environment="test",region="local",cluster="standalone",status="failed"}'
         values: '0+1x20'
+      - series: 'halro_ledger_hot_state_estimated_bytes{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '120000000x20'
+      - series: 'halro_ledger_hot_state_limit_bytes{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '134217728x20'
+      - series: 'halro_ledger_hot_state_rejections_total{environment="test",region="local",cluster="standalone",instance="one",operation="request"}'
+        values: '0+1x20'
     alert_rule_test:
       - eval_time: 11m
         alertname: HalroUsageAnalyticsLagging
@@ -396,6 +402,16 @@ tests:
         exp_alerts:
           - exp_labels: {alertname: HalroLedgerQueueHigh, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: halro, severity: warning}
             exp_annotations: {summary: Halro Ledger queue exceeds 75 percent, runbook_url: /docs/observability/operations-runbook.md#halroledgerqueuehigh}
+      - eval_time: 11m
+        alertname: HalroLedgerHotStateHigh
+        exp_alerts:
+          - exp_labels: {alertname: HalroLedgerHotStateHigh, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: Halro accounting state exceeds 80 percent of its memory limit, runbook_url: /docs/observability/operations-runbook.md#halroledgerhotstatehigh}
+      - eval_time: 5m
+        alertname: HalroLedgerHotStateRejecting
+        exp_alerts:
+          - exp_labels: {alertname: HalroLedgerHotStateRejecting, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: Halro is refusing new work because the accounting state is at its memory limit, runbook_url: /docs/observability/operations-runbook.md#halroledgerhotstaterejecting}
       - eval_time: 16m
         alertname: HalroAlertDeliveryFailing
         exp_alerts:
