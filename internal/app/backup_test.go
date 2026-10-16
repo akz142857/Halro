@@ -765,11 +765,11 @@ func TestBackupRestoreRebuildsRunGovernanceConfigurationAndLedgerState(t *testin
 	if err != nil || !domain.HasGatewayScope(key.Scopes, domain.GatewayScopeRunAttach) {
 		t.Fatalf("restored Gateway Key scopes=%v err=%v", key.Scopes, err)
 	}
-	restoredWorkUnit, ok := restored.accounting.WorkUnit(bootstrap.ProjectID, workUnit.ID)
+	restoredWorkUnit, ok, _ := restored.accounting.WorkUnit(bootstrap.ProjectID, workUnit.ID)
 	if !ok || restoredWorkUnit.ID != workUnit.ID {
 		t.Fatalf("restored Work Unit=%#v ok=%v", restoredWorkUnit, ok)
 	}
-	restoredRun, ok := restored.accounting.Run(bootstrap.ProjectID, run.ID)
+	restoredRun, ok, _ := restored.accounting.Run(bootstrap.ProjectID, run.ID)
 	if !ok || restoredRun.WorkUnitID != workUnit.ID || restoredRun.BudgetMicrosUSD != 4321 {
 		t.Fatalf("restored Run=%#v ok=%v", restoredRun, ok)
 	}

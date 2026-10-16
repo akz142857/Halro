@@ -381,3 +381,94 @@ HA 代码在 `ha` 分支（`098a3214`）。本方案落地后，HA 基于新的 
 6. 新增生产代码行数（预计 2500–3500 行，上限 1 万行）。
 
 任何一项不达标，停下来记录原因并裁定。
+
+## 13. P3 实施细则（其余消费者）
+
+2026-10-16 起草。P2 合入 `main`（#421，`b54a821b`）之后，§7 列给 P3 的是四项：Ledger 里的治理字段、Governance State、部署价格时间线、WAL segment 目录。下面先按代码和实测给每一项定性，再只做真正随流量增长的部分。
+
+### 13.1 现状（代码核对与实测）
+
+用一次性进程内测量（GC 后 `HeapAlloc` 差值，各 2 万个实体，ID 用 `id.New` 生成的真实长度）：
+
+| 消费者 | 由什么驱动增长 | 实测或估算 | 结论 |
+| --- | --- | --- | --- |
+| Ledger `workUnits`、`runs`、`runsByWorkUnit`、`workUnitCosts`、`governanceIdempotency` | 调用方通过 Run Governance API 创建的 WorkUnit 和 Run（`internal/app/run_governance.go`），关闭后永不删除 | 一个关闭的 WorkUnit 带一个关闭的 Run（含四条幂等记录）约 **2.2 KB**；普通请求在摘要窗口填满后不再增长 | **要做** |
+| Governance State（`internal/governance/manager.go` 的 `outcomes` 及五个索引 map、`idempotency`、`intents`） | 调用方报告的 Outcome，永不删除；启动时从 bbolt 里的整份检查点恢复再回放 journal | 每个 Outcome 约 **1.5 KB** | **要做** |
+| 部署价格时间线（`store/bolt/store_pricing.go` 的 `auditedDeploymentTimeline`） | 只有管理员创建价格版本（唯一写入点是 `admin_prices.go`），按部署缓存 | 每个版本几百字节；100 个部署各 100 个版本约 5 MB，与请求数无关 | 不做 |
+| WAL segment 目录（`segments.json`） | 每封存一次 256 MiB 加一条，每条约 400 字节 | 100 万请求约 3.2 GB WAL、13 条；每秒 1 请求跑一年约 400 条、约 160 KB | 不做 |
+
+规模感：如果调用方每 10 个请求开一个 WorkUnit、报一个 Outcome，100 万请求就是 10 万个，约 370 MB，远超 §6 的 32 MiB 增量预算；如果生产上不用 Run Governance，这两项都是零。
+
+另外两处与大小无关、但随历史变慢的代码：`budget.Manager` 创建 WorkUnit 时遍历项目的**全部** WorkUnit 数未关闭的（`manager.go:287`），创建 Run 时遍历项目的全部 Run 数活跃的（`manager.go:408`），每次都复制整份列表。
+
+### 13.2 热状态的边界（2026-10-16 用户确认后细化）
+
+沿用 D2：内存里不放按天数划定的窗口，只放有上限的东西。
+
+**Ledger 一侧。** WorkUnit 在两个条件同时满足时离开热状态（"归档"）：
+
+1. 它已关闭；它的每个 Run 已关闭，或已过 `ExpiresAt`（以正在应用的事件的 `OccurredAt` 为时钟，回放时结果相同）；
+2. 没有在途请求或未结算尝试归属于它（`activeByWorkUnit`、`pendingByWorkUnit` 为空）。
+
+只看"已关闭"不够：关闭时可能还有尝试在途，结算会在关闭之后继续记到 Run 和 `workUnitCosts` 上；关闭的 WorkUnit 下的 Run 也可能还活着、还在接请求（WorkUnit 关闭不会关闭 Run）。归档时它和它的全部 Run、成本合计、指向它们的治理幂等记录一起移出。
+
+热状态因此只有：未关闭的 WorkUnit（每项目 ≤ 1000）及其 Run（每个 ≤ 32）；已关闭、但还有活着的 Run（每项目活跃 Run ≤ 1000）或在途请求的 WorkUnit；以及**归档队列**——已归档、还没写进 `archive.db` 的条目。
+
+**归档队列与持久化顺序。** 快照写入流程改为：在状态锁内同时复制热状态和队列；把队列里的条目写入 `archive.db`（一个事务，同时写"归档水位"=快照位置）；成功后才写快照文件，然后从队列删掉已写入的条目。崩溃发生在任一步之间，都从上一份快照恢复并重放后缀，归档会在同样的位置再次发生，再次写入（写入是幂等的覆盖）。队列超过 4096 条时提前触发一次快照写入，所以队列有上限。全量重建时每应用一段就写一次队列。
+
+**查找顺序**：热状态 → 归档队列 → `archive.db`。由于条目先进队列、写入 `archive.db` 之后才离开队列，查找不会落空，不需要"追赶中"的 503。
+
+**启动时的一致性**：`archive.db` 记录归档水位。快照位置超过归档水位（例如 `archive.db` 因格式版本或密钥变化被清空），说明快照声称已归档的条目在 `archive.db` 里不存在，就丢弃快照，从第一帧重建（重建会重新产生全部归档）。
+
+**Governance 一侧。** Outcome 一写入就进归档队列（与 Ledger 相同的持久化顺序，挂在 Governance 检查点上）。热状态只保留**最近 4096 个**修订头和最近 4096 条幂等记录（按 journal 序号的固定容量环）。`Apply` 检查修订连续性时，头在环里就核对；不在环里就接受——这条事件在写入前已由 Manager 对照完整的头（环 → 队列 → `archive.db`）校验过，journal 有链式 MAC。环的内容只取决于 journal 前缀，所以从检查点回放和从头重建结果相同。
+
+### 13.3 读取与校验
+
+- **`Apply` 的唯一性检查**：`WorkUnitCreated`、`RunCreated` 只对热状态和队列检查 ID 是否已存在；已写入 `archive.db` 的不查。ID 由服务端随机生成，WAL 有链式 MAC，重复只能来自篡改。API 路径上创建前照旧生成新 ID，不受影响。
+- **幂等重放**：Manager 查幂等记录按热状态 → 队列 → `archive.db` 的顺序。
+- **项目内计数**：每项目维护未关闭 WorkUnit 集合和未关闭 Run 集合（都在热状态里，有上限），替代 §13.1 的两处全量遍历。
+- **管理端列表**（`run-governance/work-units`、`runs`、`governance/outcomes`）：按 ID 游标分页，合并热状态、队列和 `archive.db` 的结果，顺序与现在一致（按 ID）。
+- **治理汇总与导出**：汇总仍有 100,000 个 WorkUnit 的上限；导出现在一次读入全部 WorkUnit、Run 和 Outcome，P3 保持这个语义（读的来源变成热状态 + `archive.db`），**导出时的瞬时内存仍与历史成正比**，改成流式导出放到 P4。
+
+### 13.4 归档文件 `archive.db`
+
+实现时没有放进 `history.db`，而是单独一个文件 `data/history/archive.db`（`internal/archive`）。原因：`history.db` 是 Usage 的派生数据，运行中会被 `Reset` 清空重建（`runtime.go` 的 `openUsageHistory`、`usage.go`）；而写进归档的条目已经从内存里删掉，归档被单独清空就等于丢数据。归档只和依赖它的快照一起失效，见下面的水位与链绑定。行级 MAC 的密钥从 Ledger 密钥派生（`vault.DeriveArchiveHMACKey`）。
+
+| bucket | 键 | 值 |
+| --- | --- | --- |
+| `work_units` | WorkUnit ID | WorkUnit、成本合计、Run ID 列表；行级 MAC |
+| `work_unit_index` | 项目 + ID | 空 |
+| `runs` | Run ID | 归档时的 Run；行级 MAC |
+| `run_index` | 项目 + Run ID | 空 |
+| `idempotency` | 项目 + 操作 + 键哈希 | `GovernanceIdempotency`；行级 MAC |
+| `outcomes` | Outcome ID | Outcome 与写入它的幂等键、指纹；行级 MAC |
+| `outcome_project_index`、`outcome_work_unit_index` | 项目或 WorkUnit + ID | 空 |
+| `outcome_heads` | 项目 + WorkUnit + 定义 + 版本 | 当前头的 Outcome ID 与修订号；行级 MAC，读取时与 Outcome 行核对 |
+| `outcome_idempotency` | 项目 + 键哈希 | 指纹与 Outcome ID；行级 MAC |
+| `meta` | `ledger_through`、`ledger_chain`、`governance_through`、`governance_hash` | 两条日志各自已归档到的位置，以及该位置对应的链头哈希或 journal 记录哈希 |
+
+索引条目没有 MAC，读取时与它指向的带 MAC 的行核对（与 #408 相同），不一致就报错，不跳过。WorkUnit 行只记 Run ID，读取时再取 Run 行并核对归属；写入的页面填充到 90%（bbolt 默认 50%，归档几乎只追加）。
+
+### 13.5 快照、检查点与绑定
+
+- **Ledger 快照**（P2）格式不变，内容只剩 §13.2 的热部分。启动时要求归档的 `ledger_through` 不小于快照位置，并且归档记录的链头与快照的链头一样，在同一次回放里对照 Ledger 核对（下一帧的前一哈希，或 WAL 头部的哈希）；任一不符就走全量重建。全量重建前先清空归档里的 WorkUnit 部分，重建过程中每满 4096 条写一次。这样另一份数据目录副本留下的归档不会被拿来用（与 #421 的快照链绑定同一个问题）。
+- **Governance 检查点**：代码核对发现，生产代码从未写入过它（`SaveGovernanceCheckpoint` 只在测试里调用，自 #272 引入起如此），每次启动都从头回放整个 journal。它的内容是整份状态，与有界的设计矛盾，所以读取路径删除；残留的旧检查点直接丢弃，不解析。
+- **Governance 归档**：每次启动仍从头回放 journal，归档位置之前的记录只更新环、不再写入；回放到归档记录的位置时核对 journal 记录哈希，不符就清空归档的 Outcome 部分再回放一次。运行时每次报告在 journal 追加后立即写入归档；写入失败则 Governance 进入不可用，下次启动从 journal 补回。
+- **升级后首次启动**：没有 `archive.db`，归档位置为 0，Ledger 快照被拒，两份状态都从日志重建，归档边重建边写，不在内存里累积。之后每次启动从快照恢复。
+
+### 13.6 本阶段不做
+
+- 部署价格时间线、WAL segment 目录（§13.1，不随请求增长）。
+- 已关闭期间的 `balances`（P4）。
+- `halro history verify` / `rebuild`（P4）。
+
+### 13.7 退出时测量
+
+1. 进程内：分别创建并关闭 1 万、10 万个 WorkUnit（各带 1 个 Run、1 个 Outcome），GC 后 heap 增量不超过 32 MiB；
+2. P0 探针在同一 Linux 容器里复测普通请求的吞吐、p99、fsync，对照 §6，确认不退化；
+3. 治理 API 的创建/关闭/报告延迟照实记录（会多一次 `history.db` 读）；
+4. 新增生产代码行数（预计 2000–3000 行；P1 新增 2324、删除 2356 行，P2 新增 1052、删除 137 行，三阶段新增合计仍在 1 万行以内）。
+
+任何一项不达标，停下来记录原因并裁定。
+
+**结果**（[P3 结果](../verification/memory-bounded-baseline.zh-CN.md) §7）：治理实体 1 万 → 10 万 heap 15.1 → 15.2 MiB；普通请求除并发 64 吞吐为基线的 93.8%（差 1.2 个百分点，记录与裁定见结果页 §7.2）外均达标；`archive.db` 每个 WorkUnit 约 5.3 KB。

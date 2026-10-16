@@ -41,7 +41,7 @@ func TestRunGovernanceLifecycleAttributesSettlement(t *testing.T) {
 	if err := manager.Settle(ctx, attempt, Settlement{CommittedMicrosUSD: 30, ProviderInputTokens: 10, ProviderOutputTokens: 10, Outcome: "success"}); err != nil {
 		t.Fatal(err)
 	}
-	got, ok := manager.Run("prj_1", run.ID)
+	got, ok, _ := manager.Run("prj_1", run.ID)
 	if !ok || got.ReservedMicrosUSD != 0 || got.CommittedMicrosUSD != 30 {
 		t.Fatalf("run after settlement = %#v, found=%t", got, ok)
 	}
@@ -92,7 +92,7 @@ func TestRunGovernanceDualAdmissionNeverExceedsRunBudget(t *testing.T) {
 	close(start)
 	group.Wait()
 
-	got, ok := manager.Run("prj_dual", run.ID)
+	got, ok, _ := manager.Run("prj_dual", run.ID)
 	if !ok || got.ReservedMicrosUSD != capMicros || got.BudgetState != domain.RunBudgetDepleted || got.RemainingMicrosUSD != 0 {
 		t.Fatalf("run=%#v found=%t", got, ok)
 	}
@@ -123,7 +123,7 @@ func TestRunGovernanceProjectBudgetKeepsPriorityAndZeroStillEnforcesRun(t *testi
 	if _, err := manager.ReserveAttemptDetailed(ctx, request, 0, 6, AttemptMetadata{}); !errors.Is(err, ErrRunExceeded) {
 		t.Fatalf("zero project cap error=%v, want run cap", err)
 	}
-	got, _ := manager.Run("prj_priority", run.ID)
+	got, _, _ := manager.Run("prj_priority", run.ID)
 	if got.ReservedMicrosUSD != 0 || got.RemainingMicrosUSD != 5 {
 		t.Fatalf("rejected admissions changed run=%#v", got)
 	}
@@ -185,7 +185,7 @@ func TestRunGovernanceExpiryAndCloseOrderReservation(t *testing.T) {
 	if err := manager.admitForRun(key, 0, 100, true, workUnit.ID, run.ID, manager.now()); err != nil {
 		t.Fatal(err)
 	}
-	if pending, _ := manager.Run("prj_order", run.ID); pending.BudgetState != domain.RunBudgetFullyReserved || pending.RemainingMicrosUSD != 0 {
+	if pending, _, _ := manager.Run("prj_order", run.ID); pending.BudgetState != domain.RunBudgetFullyReserved || pending.RemainingMicrosUSD != 0 {
 		t.Fatalf("pending projection=%#v", pending)
 	}
 	closed := make(chan error, 1)
@@ -290,7 +290,7 @@ func TestRunGovernanceRecoveryKeepsStartedAttemptChargedToRun(t *testing.T) {
 	if err := manager.RecoverPendingLeases(ctx); err != nil {
 		t.Fatal(err)
 	}
-	got, _ := manager.Run("prj_recovery", run.ID)
+	got, _, _ := manager.Run("prj_recovery", run.ID)
 	if got.ReservedMicrosUSD != 0 || got.CommittedMicrosUSD != 30 || got.BudgetState != domain.RunBudgetDepleted {
 		t.Fatalf("recovered Run=%#v", got)
 	}

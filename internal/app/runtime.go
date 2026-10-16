@@ -363,7 +363,20 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		secretVault.Close()
 		return fail(err)
 	}
-	openedState, err := openLedgerState(ledgerLog, cfg.LedgerStatePath(), ledgerStateKey, logger)
+	archiveStore, err := openArchive(cfg, ledgerKey, logger)
+	if err != nil {
+		ledgerLog.Close()
+		metadata.Close()
+		secretVault.Close()
+		return fail(err)
+	}
+	closeArchive := true
+	defer func() {
+		if closeArchive {
+			archiveStore.Close()
+		}
+	}()
+	openedState, err := openLedgerState(ledgerLog, cfg.LedgerStatePath(), ledgerStateKey, archiveStore, logger)
 	if err != nil {
 		ledgerLog.Close()
 		metadata.Close()
@@ -388,7 +401,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		governanceManager = governance.NewUnavailable(governanceOpenErr)
 		governanceLog = nil
 	} else {
-		governanceState, governanceOpenErr = restoreGovernanceState(metadata, governanceLog, governanceKey)
+		governanceState, governanceOpenErr = restoreGovernanceState(metadata, governanceLog, governanceKey, archiveStore)
 		replayErr := governanceOpenErr
 		if replayErr != nil {
 			logger.Error("Governance Journal replay failed; ordinary inference remains available", "error", replayErr)
@@ -756,7 +769,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		store:               metadata,
 		ledger:              ledgerLog,
 		state:               ledgerState,
-		accountingState:     accountingStateRuntime{fromSnapshot: openedState.fromSnapshot, snapshots: ledgerStateSnapshots{key: ledgerStateKey}},
+		accountingState:     accountingStateRuntime{fromSnapshot: openedState.fromSnapshot, snapshots: ledgerStateSnapshots{key: ledgerStateKey}, archive: archiveStore},
 		status:              accountingStatus,
 		governance:          governanceRuntime{log: governanceLog, manager: governanceManager},
 		vault:               secretVault,
@@ -945,6 +958,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	runtime.usageSettings.Store(&usageSettings)
 	cleanupAdminSessions = false
 	closeUsageHistory = false
+	closeArchive = false
 	backgroundContext, backgroundCancel := context.WithCancel(context.Background())
 	runtime.backgroundCtx = backgroundContext
 	runtime.backgroundCancel = backgroundCancel
@@ -1021,11 +1035,15 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 }
 
 var (
-	errGovernanceAnchorMismatch     = errors.New("governance journal does not match its authenticated terminal anchor")
-	errGovernanceCheckpointMismatch = errors.New("governance checkpoint does not match its journal frame")
+	errGovernanceAnchorMismatch  = errors.New("governance journal does not match its authenticated terminal anchor")
+	errGovernanceArchiveMismatch = errors.New("archive does not match its governance journal record")
 )
 
-func restoreGovernanceState(metadata *boltstore.Store, governanceLog *governance.Log, governanceKey []byte) (*governance.State, error) {
+// outcomeFlushThreshold is how many Outcomes a replay queues before writing
+// them to the archive; tests lower it.
+var outcomeFlushThreshold = 1024
+
+func restoreGovernanceState(metadata *boltstore.Store, governanceLog *governance.Log, governanceKey []byte, archive governance.Archive) (*governance.State, error) {
 	journalSummary := governanceLog.Summary()
 	anchor, anchorErr := metadata.GovernanceJournalAnchor()
 	hasAnchor := anchorErr == nil
@@ -1042,28 +1060,40 @@ func restoreGovernanceState(metadata *boltstore.Store, governanceLog *governance
 		}
 	}
 
-	checkpoint, checkpointErr := metadata.LoadGovernanceCheckpoint()
-	checkpointSequence := uint64(0)
-	state := governance.NewState()
-	if checkpointErr == nil {
-		var snapshot governance.Snapshot
-		valid := checkpoint.Version == governance.SnapshotVersion && checkpoint.Sequence <= journalSummary.Records && checkpoint.Offset <= journalSummary.Bytes &&
-			governance.VerifyCheckpointAuth(governanceKey, checkpoint.Sequence, checkpoint.Offset, checkpoint.JournalHash,
-				checkpoint.PayloadSHA256, checkpoint.Authentication) &&
-			json.Unmarshal(checkpoint.Payload, &snapshot) == nil && snapshot.Sequence == checkpoint.Sequence && state.Restore(snapshot) == nil
-		if valid {
-			checkpointSequence = checkpoint.Sequence
-		} else {
-			_ = metadata.ResetGovernanceCheckpoint()
-			state = governance.NewState()
-		}
-	} else if !errors.Is(checkpointErr, boltstore.ErrNotFound) {
+	// Nothing writes a Governance checkpoint any more: the state it held is
+	// now in the archive. One left by an earlier build is discarded unread.
+	if _, err := metadata.LoadGovernanceCheckpoint(); err == nil || !errors.Is(err, boltstore.ErrNotFound) {
 		_ = metadata.ResetGovernanceCheckpoint()
 	}
 
-	replay := func(target *governance.State, skip uint64) error {
+	// The archive already holds the Outcomes up to the position it records,
+	// and says which journal record that was. A position past the journal, or
+	// a record there with another hash, means the archive came from another
+	// journal: it is emptied and filled again from this one.
+	//
+	// Without an archive — the backup's check of the journal — the state
+	// keeps every Outcome, for as long as the check runs.
+	var through uint64
+	var throughHash [32]byte
+	if archive != nil {
+		var err error
+		through, throughHash, err = archive.OutcomesThrough()
+		if err != nil {
+			return nil, fmt.Errorf("read the archive position: %w", err)
+		}
+		if through > journalSummary.Records {
+			if err := archive.ResetOutcomes(); err != nil {
+				return nil, err
+			}
+			through = 0
+		}
+	}
+	replay := func(through uint64) (*governance.State, error) {
+		state := governance.NewState()
+		if archive != nil {
+			state.SetArchive(archive, through)
+		}
 		anchorMatched := !hasAnchor
-		checkpointMatched := skip == 0
 		_, err := governanceLog.Replay(func(record governance.Record) error {
 			if hasAnchor && record.Sequence == anchor.Sequence {
 				if record.Offset != anchor.Offset || record.Hash != anchor.Hash {
@@ -1071,35 +1101,33 @@ func restoreGovernanceState(metadata *boltstore.Store, governanceLog *governance
 				}
 				anchorMatched = true
 			}
-			if skip > 0 && record.Sequence == skip {
-				if record.Offset != checkpoint.Offset || record.Hash != checkpoint.JournalHash {
-					return errGovernanceCheckpointMismatch
-				}
-				checkpointMatched = true
+			if through > 0 && record.Sequence == through && record.Hash != throughHash {
+				return errGovernanceArchiveMismatch
 			}
-			if record.Sequence <= skip {
-				return nil
+			if err := state.Apply(record); err != nil {
+				return err
 			}
-			return target.Apply(record)
+			if archive != nil && state.QueueLen() >= outcomeFlushThreshold {
+				return state.FlushOutcomes()
+			}
+			return nil
 		})
 		if err != nil {
-			return err
-		}
-		if !anchorMatched {
-			return errGovernanceAnchorMismatch
-		}
-		if !checkpointMatched {
-			return errGovernanceCheckpointMismatch
-		}
-		return nil
-	}
-	if err := replay(state, checkpointSequence); errors.Is(err, errGovernanceCheckpointMismatch) {
-		_ = metadata.ResetGovernanceCheckpoint()
-		state = governance.NewState()
-		if err := replay(state, 0); err != nil {
 			return nil, err
 		}
-	} else if err != nil {
+		if !anchorMatched {
+			return nil, errGovernanceAnchorMismatch
+		}
+		return state, state.FlushOutcomes()
+	}
+	state, err := replay(through)
+	if archive != nil && errors.Is(err, errGovernanceArchiveMismatch) {
+		if err := archive.ResetOutcomes(); err != nil {
+			return nil, err
+		}
+		state, err = replay(0)
+	}
+	if err != nil {
 		return nil, err
 	}
 
@@ -1520,6 +1548,7 @@ func (r *Runtime) Close() error {
 			captureErr,
 			historyErr,
 			r.usage.History().Close(),
+			r.accountingState.archive.Close(),
 			func() error {
 				r.providers.Close()
 				return nil

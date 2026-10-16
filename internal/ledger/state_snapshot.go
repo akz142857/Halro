@@ -113,25 +113,40 @@ func (s *State) MarshalSnapshot() ([]byte, Watermark, error) {
 // copy. The state only ever holds frames already committed, so a head read
 // after it is at or past it and commits to every one of them.
 func (s *State) marshalSnapshot(log ChainHeadReader) ([]byte, Watermark, error) {
-	snapshot := s.copySnapshot()
+	encoded, watermark, _, _, err := s.marshalSnapshotWithQueue(log)
+	return encoded, watermark, err
+}
+
+// marshalSnapshotWithQueue encodes the state and copies the archive queue in
+// the same critical section, so every queued Work Unit was archived at or
+// before the snapshot's position.
+func (s *State) marshalSnapshotWithQueue(log ChainHeadReader) ([]byte, Watermark, []ArchivedWorkUnit, StateSnapshotChain, error) {
+	s.mu.RLock()
+	snapshot := s.copySnapshotLocked()
+	queue := s.copyArchiveQueue()
+	s.mu.RUnlock()
 	if log != nil {
 		head, hash, ok := log.ChainHead()
 		if !ok || head.Sequence < snapshot.Watermark.Sequence {
-			return nil, Watermark{}, errors.New("the Ledger has no chain head covering the state")
+			return nil, Watermark{}, nil, StateSnapshotChain{}, errors.New("the Ledger has no chain head covering the state")
 		}
 		snapshot.Chain = StateSnapshotChain{Sequence: head.Sequence, Hash: hash}
 	}
 	sortSnapshot(&snapshot)
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
-		return nil, Watermark{}, fmt.Errorf("encode ledger state snapshot: %w", err)
+		return nil, Watermark{}, nil, StateSnapshotChain{}, fmt.Errorf("encode ledger state snapshot: %w", err)
 	}
-	return encoded, snapshot.Watermark, nil
+	return encoded, snapshot.Watermark, queue, snapshot.Chain, nil
 }
 
 func (s *State) copySnapshot() stateSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.copySnapshotLocked()
+}
+
+func (s *State) copySnapshotLocked() stateSnapshot {
 	snapshot := stateSnapshot{
 		Version: StateSnapshotVersion, Watermark: s.watermark,
 		Balances:              make([]snapshotBalance, 0, len(s.balances)),
@@ -292,6 +307,7 @@ func unmarshalStateSnapshot(encoded []byte) (*State, StateSnapshotChain, error) 
 	for _, item := range snapshot.GovernanceIdempotency {
 		state.governanceIdempotency[governanceIdempotencyMapKey(item.ProjectID, item.Operation, item.KeyHash)] = item
 	}
+	state.rebuildArchiveIndexes()
 	return state, snapshot.Chain, nil
 }
 
@@ -315,9 +331,20 @@ func WriteStateSnapshot(path string, key []byte, state *State, log ChainHeadRead
 	if log == nil {
 		return Watermark{}, 0, errors.New("ledger state snapshot needs the Ledger's chain head")
 	}
-	encoded, watermark, err := state.marshalSnapshot(log)
+	encoded, watermark, queue, chain, err := state.marshalSnapshotWithQueue(log)
 	if err != nil {
 		return Watermark{}, 0, err
+	}
+	// The queue reaches the Archive before the snapshot that no longer holds
+	// it reaches the disk, together with the position it covers; a start
+	// refuses a snapshot past that position (see ArchivedThrough).
+	state.mu.RLock()
+	archive := state.archive
+	state.mu.RUnlock()
+	if archive != nil {
+		if err := archive.WriteArchived(queue, watermark.Sequence, chain); err != nil {
+			return Watermark{}, 0, fmt.Errorf("write archived work units: %w", err)
+		}
 	}
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -340,6 +367,7 @@ func WriteStateSnapshot(path string, key []byte, state *State, log ChainHeadRead
 	if err := durable.SyncDirectory(directory); err != nil {
 		return Watermark{}, 0, err
 	}
+	state.forgetArchived(queue)
 	return watermark, len(encoded) + sha256.Size, nil
 }
 

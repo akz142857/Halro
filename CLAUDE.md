@@ -155,6 +155,12 @@ Key `internal/` packages and what owns what:
   and must never be treated as sources of truth for balances. Attempt settlement
   atomically releases the reservation and commits cost/tokens; ambiguous Provider
   outcomes are conservatively accounted, never silently refunded.
+- `archive` — `data/history/archive.db`: finished Work Units (with Runs, cost totals,
+  idempotency records) and Outcomes once they leave the in-memory `ledger`/`governance`
+  state. Unlike the usage history it is not a free-standing derivative: the state no
+  longer holds what it holds, so it is bound to the Ledger chain head and the Governance
+  journal hash it was written from, and a start that cannot match them rebuilds both
+  from the logs rather than read it.
 - `audit` — append-only, integrity-checked audit trail (see `docs/contracts/audit-integrity.md`).
 - `masterkey`, `kms`, `vault` — key material and its lifecycle: the master key and its Slot
   transitions, a cloud-neutral KMS boundary that owns no SDK, credentials or persistence,

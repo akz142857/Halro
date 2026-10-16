@@ -1353,6 +1353,12 @@ func (c Config) HistoryPath() string {
 	return filepath.Join(c.Storage.DataDir, "history", "history.db")
 }
 
+// ArchivePath is the governance archive: finished Work Units and Outcomes
+// that have left the in-memory state.
+func (c Config) ArchivePath() string {
+	return filepath.Join(c.Storage.DataDir, "history", "archive.db")
+}
+
 func (c Config) AuditPath() string {
 	return filepath.Join(c.Storage.DataDir, "audit", "audit.log")
 }

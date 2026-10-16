@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
+	"github.com/akz142857/Halro/internal/archive"
+	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/vault"
 )
 
 // Accounting state snapshots.
@@ -34,6 +38,8 @@ type accountingStateRuntime struct {
 	fromSnapshot   bool
 	snapshots      ledgerStateSnapshots
 	reconciliation usageReconciliation
+	// archive holds the Work Units that have left the state (§13).
+	archive *archive.Store
 }
 
 // ledgerStateSnapshots is the snapshot writer's key and what it last wrote,
@@ -71,13 +77,69 @@ func (o openedLedgerState) lease(attemptID string) (ledger.Record, bool) {
 	return record, ok
 }
 
+// openArchive opens archive.db, where finished Work Units go once they leave
+// the accounting state.
+func openArchive(cfg config.Config, ledgerKey []byte, logger *slog.Logger) (*archive.Store, error) {
+	key, err := vault.DeriveArchiveHMACKey(ledgerKey)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(key)
+	if err := os.MkdirAll(filepath.Dir(cfg.ArchivePath()), 0o700); err != nil {
+		return nil, fmt.Errorf("create archive directory: %w", err)
+	}
+	store, reset, err := archive.Open(cfg.ArchivePath(), key)
+	if err != nil {
+		return nil, err
+	}
+	if reset {
+		logger.Warn("archive emptied", "reason", "format version or key changed")
+	}
+	return store, nil
+}
+
+// applyArchiving applies one replayed record and writes the archive queue out
+// whenever it fills, so a long replay holds no more than a queue's worth of
+// finished Work Units.
+//
+// The chain head is read once, before the replay: Replay holds the Log's lock
+// for the whole walk, so asking the Log during it would deadlock, and nothing
+// appends while a start replays, so the head read first covers every record.
+func applyArchiving(log *ledger.Log, state *ledger.State) func(ledger.Record) error {
+	head, hash, ok := log.ChainHead()
+	fixed := fixedChainHead{head: head, hash: hash, ok: ok}
+	return func(record ledger.Record) error {
+		if err := state.Apply(record); err != nil {
+			return err
+		}
+		if state.ArchiveQueueLen() >= archiveFlushThreshold {
+			return state.FlushArchive(fixed)
+		}
+		return nil
+	}
+}
+
+// archiveFlushThreshold is the queue length at which a replay writes the
+// queue out; tests lower it to reach that path without thousands of records.
+var archiveFlushThreshold = ledger.ArchiveQueueLimit
+
+// fixedChainHead is a chain head read once.
+type fixedChainHead struct {
+	head ledger.Watermark
+	hash [32]byte
+	ok   bool
+}
+
+func (h fixedChainHead) ChainHead() (ledger.Watermark, [32]byte, bool) { return h.head, h.hash, h.ok }
+
 // openLedgerState rebuilds the accounting state, from the snapshot at path
-// when there is a usable one and from the first frame otherwise.
-func openLedgerState(log *ledger.Log, path string, key []byte, logger *slog.Logger) (openedLedgerState, error) {
+// when there is a usable one and from the first frame otherwise. Finished Work
+// Units leave the state for archive as it is rebuilt.
+func openLedgerState(log *ledger.Log, path string, key []byte, archive ledger.Archive, logger *slog.Logger) (openedLedgerState, error) {
 	snapshot, chain, err := ledger.ReadStateSnapshot(path, key)
 	switch {
 	case err == nil:
-		opened, resumeErr := resumeLedgerState(log, snapshot, chain)
+		opened, resumeErr := resumeArchivedLedgerState(log, snapshot, chain, archive)
 		if resumeErr == nil {
 			return opened, nil
 		}
@@ -86,8 +148,14 @@ func openLedgerState(log *ledger.Log, path string, key []byte, logger *slog.Logg
 	default:
 		logger.Warn("ledger state snapshot is unusable; rebuilding from the first frame", "error", err)
 	}
+	// A rebuild writes every finished Work Unit again; emptying the archive
+	// first leaves nothing in it that this Ledger did not produce.
+	if err := archive.ResetArchived(); err != nil {
+		return openedLedgerState{}, fmt.Errorf("reset the archive: %w", err)
+	}
 	state := ledger.NewState()
-	head, err := log.Replay(ledger.Watermark{}, state.Apply)
+	state.SetArchive(archive)
+	head, err := log.Replay(ledger.Watermark{}, applyArchiving(log, state))
 	if err != nil {
 		return openedLedgerState{}, err
 	}
@@ -113,22 +181,48 @@ func openLedgerState(log *ledger.Log, path string, key []byte, logger *slog.Logg
 // under the same key that went another way can be the same length, frame for
 // frame. The chain head the snapshot carries does. The frame after it must
 // link to it, or, when it is this Ledger's head, the head must be it.
-func resumeLedgerState(log *ledger.Log, state *ledger.State, chain ledger.StateSnapshotChain) (openedLedgerState, error) {
+// resumeArchivedLedgerState resumes from a snapshot only when the archive
+// holds every Work Unit the snapshot no longer does: the archive records the
+// position each write covered, and a snapshot past it — an archive emptied by
+// a key or format change, or lost — would leave finished Work Units nowhere.
+//
+// The archive is checked against the Ledger the same way the snapshot is: its
+// recorded chain head must belong to this Ledger, or it may hold Work Units
+// from another copy of it.
+func resumeArchivedLedgerState(log *ledger.Log, state *ledger.State, chain ledger.StateSnapshotChain, archive ledger.Archive) (openedLedgerState, error) {
+	through, archiveChain, err := archive.ArchivedThrough()
+	if err != nil {
+		return openedLedgerState{}, fmt.Errorf("read the archive position: %w", err)
+	}
+	if position := state.Watermark(); through < position.Sequence {
+		return openedLedgerState{}, fmt.Errorf("the archive covers sequence %d, the snapshot is at %d", through, position.Sequence)
+	}
+	state.SetArchive(archive)
+	return resumeLedgerState(log, state, chain, archiveChain)
+}
+
+// resumeLedgerState replays the Ledger after the snapshot's position into the
+// snapshot's state, checking that every chain head given — the snapshot's
+// first — belongs to this Ledger.
+func resumeLedgerState(log *ledger.Log, state *ledger.State, chains ...ledger.StateSnapshotChain) (openedLedgerState, error) {
 	position := state.Watermark()
 	if position.Sequence == 0 {
 		return openedLedgerState{}, errors.New("snapshot is empty")
 	}
-	if chain.Sequence < position.Sequence || chain.Hash == ([32]byte{}) {
-		return openedLedgerState{}, errors.New("the snapshot carries no chain head covering its state")
-	}
 	chainHead, chainHash, chained := log.ChainHead()
-	switch {
-	case !chained || chain.Sequence > chainHead.Sequence:
-		return openedLedgerState{}, errors.New("the snapshot's chain head is ahead of the Ledger")
-	case chain.Sequence == chainHead.Sequence && chain.Hash != chainHash:
-		return openedLedgerState{}, errors.New("the snapshot's chain head is not this Ledger's")
+	linked := make([]bool, len(chains))
+	for index, chain := range chains {
+		if chain.Sequence < position.Sequence || chain.Hash == ([32]byte{}) {
+			return openedLedgerState{}, errors.New("a chain head does not cover the snapshot's state")
+		}
+		switch {
+		case !chained || chain.Sequence > chainHead.Sequence:
+			return openedLedgerState{}, errors.New("a chain head is ahead of the Ledger")
+		case chain.Sequence == chainHead.Sequence && chain.Hash != chainHash:
+			return openedLedgerState{}, errors.New("a chain head is not this Ledger's")
+		}
+		linked[index] = chain.Sequence == chainHead.Sequence
 	}
-	linked := chain.Sequence == chainHead.Sequence
 	// The snapshot is authenticated, but it may still describe another copy
 	// of this Ledger — one restored over, or cut back. Neither its sequence nor
 	// its offset may lie past what the Ledger holds.
@@ -147,12 +241,15 @@ func resumeLedgerState(log *ledger.Log, state *ledger.State, chain ledger.StateS
 		from, met = ledger.Watermark{Generation: segment.Generation, Sequence: segment.FirstSequence - 1}, false
 	}
 	opened := openedLedgerState{state: state, fromSnapshot: true, suffixLeases: map[string]ledger.Record{}, checkedThrough: position.Sequence}
+	apply := applyArchiving(log, state)
 	head, err := log.Replay(from, func(record ledger.Record) error {
-		if record.Sequence == chain.Sequence+1 {
-			if record.PreviousHash != chain.Hash {
-				return errors.New("the snapshot's chain head is not this Ledger's")
+		for index, chain := range chains {
+			if record.Sequence == chain.Sequence+1 {
+				if record.PreviousHash != chain.Hash {
+					return errors.New("a chain head is not this Ledger's")
+				}
+				linked[index] = true
 			}
-			linked = true
 		}
 		if record.Sequence <= position.Sequence {
 			if record.Sequence == position.Sequence {
@@ -166,7 +263,7 @@ func resumeLedgerState(log *ledger.Log, state *ledger.State, chain ledger.StateS
 		if !met {
 			return errors.New("the Ledger has no record at the snapshot's position")
 		}
-		if err := state.Apply(record); err != nil {
+		if err := apply(record); err != nil {
 			return err
 		}
 		if record.Event.Kind == ledger.EventReservationCreated && record.Event.PriceSnapshot != nil &&
@@ -181,8 +278,10 @@ func resumeLedgerState(log *ledger.Log, state *ledger.State, chain ledger.StateS
 	if !met || position.After(head) {
 		return openedLedgerState{}, errors.New("the snapshot is ahead of the Ledger")
 	}
-	if !linked {
-		return openedLedgerState{}, errors.New("the Ledger has no frame after the snapshot's chain head")
+	for _, ok := range linked {
+		if !ok {
+			return openedLedgerState{}, errors.New("the Ledger has no frame after a chain head")
+		}
 	}
 	opened.head = head
 	return opened, nil
@@ -219,7 +318,8 @@ func (r *Runtime) runLedgerStateSnapshots(ctx context.Context) {
 		}
 		r.sealLedgerGeneration()
 		nowGeneration, nowBytes := r.ledger.Generation(), r.ledger.ActiveBytes()
-		grown := nowGeneration != generation || nowBytes-bytes >= ledgerStateSnapshotBytes
+		grown := nowGeneration != generation || nowBytes-bytes >= ledgerStateSnapshotBytes ||
+			r.state.ArchiveQueueLen() >= ledger.ArchiveQueueLimit
 		if !grown && time.Since(last) < ledgerStateSnapshotInterval {
 			continue
 		}
