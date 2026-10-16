@@ -57,6 +57,14 @@ func (f *accountingFixture) open(state *ledger.State) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
+	f.log = log
+	f.attach(state)
+}
+
+// attach writes through the open Ledger into state from here on.
+func (f *accountingFixture) attach(state *ledger.State) {
+	f.t.Helper()
+	state.SetArchive(f.archive)
 	resolver, err := budget.NewFixedPeriodResolver("UTC")
 	if err != nil {
 		f.t.Fatal(err)
@@ -64,11 +72,11 @@ func (f *accountingFixture) open(state *ledger.State) {
 	// A fixed clock keeps every event the same length, so two fixtures that
 	// bill alike lay out their frames alike.
 	fixed := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
-	manager, err := budget.NewWithOptions(log, state, resolver, budget.Options{Now: func() time.Time { return fixed }})
+	manager, err := budget.NewWithOptions(f.log, state, resolver, budget.Options{Now: func() time.Time { return fixed }})
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	f.log, f.state, f.manager = log, state, manager
+	f.state, f.manager = state, manager
 }
 
 func (f *accountingFixture) bill(count int) {
@@ -255,7 +263,7 @@ func TestLedgerStateSnapshotFromAForkIsSetAside(t *testing.T) {
 	// This Ledger's own archive covers the fork's snapshot position, so the
 	// only thing left to refuse it is the chain.
 	ours.snapshot(filepath.Join(t.TempDir(), "ours.snap"))
-	if through, err := ours.archive.ArchivedThrough(); err != nil || through < forked.Sequence {
+	if through, _, err := ours.archive.ArchivedThrough(); err != nil || through < forked.Sequence {
 		t.Fatalf("archive through=%d err=%v, fork at %d", through, err, forked.Sequence)
 	}
 	opened := ours.reopen(snapshotPath)
@@ -371,5 +379,61 @@ func TestRuntimeShutdownWritesTheStateTheNextStartResumesFrom(t *testing.T) {
 	// snapshot; what it must match is a full replay of the same Ledger.
 	if !bytes.Equal(encodedLedgerState(t, reopened.state), encodedLedgerState(t, replayed)) {
 		t.Fatal("the reopened state differs from a full replay")
+	}
+}
+
+// finishWorkUnits opens and closes count Work Units through the accounting
+// manager; with no Run and nothing in flight each is archived as it closes.
+func (f *accountingFixture) finishWorkUnits(count int) []string {
+	f.t.Helper()
+	ctx := context.Background()
+	var ids []string
+	for range count {
+		f.billed++
+		intent := func(operation string) budget.GovernanceIntent {
+			return budget.GovernanceIntent{Operation: operation,
+				IdempotencyKeyHash: fmt.Sprintf("sha256:%064x", f.billed), RequestFingerprint: fmt.Sprintf("sha256:%064x", f.billed)}
+		}
+		workUnit, _, err := f.manager.CreateWorkUnit(ctx, "project_1", "key_1", 1000, intent("work_unit.create"))
+		if err != nil {
+			f.t.Fatal(err)
+		}
+		if _, _, err := f.manager.CloseWorkUnit(ctx, "project_1", "key_1", workUnit.ID, intent("work_unit.close")); err != nil {
+			f.t.Fatal(err)
+		}
+		ids = append(ids, workUnit.ID)
+	}
+	return ids
+}
+
+// A replay that fills the archive queue writes it out as it goes — while the
+// Ledger is being walked, both from the first frame and from a snapshot — and
+// every finished Work Unit is found in the archive afterwards.
+func TestLedgerStateReplayWritesTheArchiveAsItFills(t *testing.T) {
+	previous := archiveFlushThreshold
+	archiveFlushThreshold = 1
+	defer func() { archiveFlushThreshold = previous }()
+	f := newAccountingFixture(t)
+	snapshotPath := filepath.Join(filepath.Dir(f.path), "state.snap")
+	ids := f.finishWorkUnits(3)
+
+	rebuilt := f.reopen(snapshotPath)
+	if rebuilt.fromSnapshot || rebuilt.state.ArchiveQueueLen() != 0 {
+		t.Fatalf("from snapshot=%t queue=%d", rebuilt.fromSnapshot, rebuilt.state.ArchiveQueueLen())
+	}
+	f.attach(rebuilt.state)
+	f.snapshot(snapshotPath)
+	ids = append(ids, f.finishWorkUnits(2)...)
+
+	resumed := f.reopen(snapshotPath)
+	defer f.log.Close()
+	if !resumed.fromSnapshot || resumed.state.ArchiveQueueLen() != 0 {
+		t.Fatalf("from snapshot=%t queue=%d", resumed.fromSnapshot, resumed.state.ArchiveQueueLen())
+	}
+	for _, id := range ids {
+		item, found, err := f.archive.ArchivedWorkUnit(id)
+		if err != nil || !found || item.WorkUnit.Status != "closed" {
+			t.Fatalf("%s: archived %#v found=%t err=%v", id, item, found, err)
+		}
 	}
 }

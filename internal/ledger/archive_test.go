@@ -19,6 +19,7 @@ type memoryArchive struct {
 	runs        map[string]domain.Run
 	idempotency map[string]GovernanceIdempotency
 	through     uint64
+	chain       StateSnapshotChain
 	writes      int
 }
 
@@ -80,7 +81,8 @@ func (a *memoryArchive) VisitArchivedRuns(projectID, after string, visit func(do
 	return nil
 }
 
-func (a *memoryArchive) WriteArchived(items []ArchivedWorkUnit, through uint64) error {
+func (a *memoryArchive) WriteArchived(items []ArchivedWorkUnit, through uint64, chain StateSnapshotChain) error {
+	a.chain = chain
 	a.writes++
 	for _, item := range items {
 		a.workUnits[item.WorkUnit.ID] = item
@@ -95,7 +97,14 @@ func (a *memoryArchive) WriteArchived(items []ArchivedWorkUnit, through uint64) 
 	return nil
 }
 
-func (a *memoryArchive) ArchivedThrough() (uint64, error) { return a.through, nil }
+func (a *memoryArchive) ArchivedThrough() (uint64, StateSnapshotChain, error) {
+	return a.through, a.chain, nil
+}
+
+func (a *memoryArchive) ResetArchived() error {
+	*a = *newMemoryArchive()
+	return nil
+}
 
 func (a *memoryArchive) encoded(t *testing.T) []byte {
 	t.Helper()
@@ -198,7 +207,7 @@ func TestArchivedWorkUnitLeavesTheStateAndStaysFindable(t *testing.T) {
 		t.Fatalf("queue=%d", state.ArchiveQueueLen())
 	}
 	check("queued")
-	if err := state.FlushArchive(); err != nil {
+	if err := state.FlushArchive(fixedChainHead{sequence: state.Watermark().Sequence}); err != nil {
 		t.Fatal(err)
 	}
 	if state.ArchiveQueueLen() != 0 || archive.through != state.Watermark().Sequence {
@@ -271,7 +280,7 @@ func TestArchivingIsTheSameFromAnySnapshot(t *testing.T) {
 	fullArchive := newMemoryArchive()
 	full.SetArchive(fullArchive)
 	applyEvents(t, full, events, 1)
-	if err := full.FlushArchive(); err != nil {
+	if err := full.FlushArchive(fixedChainHead{sequence: full.Watermark().Sequence}); err != nil {
 		t.Fatal(err)
 	}
 	wantState, wantArchive := encodedState(t, full), fullArchive.encoded(t)
@@ -294,7 +303,7 @@ func TestArchivingIsTheSameFromAnySnapshot(t *testing.T) {
 		}
 		restored.SetArchive(archive)
 		applyEvents(t, restored, events[cut:], uint64(cut)+1)
-		if err := restored.FlushArchive(); err != nil {
+		if err := restored.FlushArchive(fixedChainHead{sequence: restored.Watermark().Sequence}); err != nil {
 			t.Fatal(err)
 		}
 		if got := encodedState(t, restored); !bytes.Equal(got, wantState) {
@@ -320,7 +329,7 @@ func TestVisitWorkUnitsMergesHeldAndArchivedInOrder(t *testing.T) {
 		}
 		next = applyEvents(t, state, events, next)
 		if index == 3 {
-			if err := state.FlushArchive(); err != nil {
+			if err := state.FlushArchive(fixedChainHead{sequence: state.Watermark().Sequence}); err != nil {
 				t.Fatal(err)
 			}
 		}

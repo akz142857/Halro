@@ -50,14 +50,14 @@ func TestArchiveRoundTripsAndPagesInIDOrder(t *testing.T) {
 		}
 		items = append(items, archivedItem(project, index))
 	}
-	if err := store.WriteArchived(items, 40); err != nil {
+	if err := store.WriteArchived(items, 40, ledger.StateSnapshotChain{Sequence: 41, Hash: [32]byte{4}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.WriteArchived(nil, 30); err != nil {
+	if err := store.WriteArchived(nil, 30, ledger.StateSnapshotChain{Sequence: 30, Hash: [32]byte{3}}); err != nil {
 		t.Fatal(err)
 	}
-	if through, err := store.ArchivedThrough(); err != nil || through != 40 {
-		t.Fatalf("through=%d err=%v (it must not move backwards)", through, err)
+	if through, chain, err := store.ArchivedThrough(); err != nil || through != 40 || chain.Sequence != 41 {
+		t.Fatalf("through=%d chain=%#v err=%v (it must not move backwards)", through, chain, err)
 	}
 	item, found, err := store.ArchivedWorkUnit("wku_02")
 	if err != nil || !found || item.Cost.KnownMicrosUSD != 2 || len(item.Runs) != 1 {
@@ -100,8 +100,20 @@ func TestArchiveRoundTripsAndPagesInIDOrder(t *testing.T) {
 
 	// Reopened under its own key it keeps everything.
 	store = openTest(t, path, testKey)
-	if through, err := store.ArchivedThrough(); err != nil || through != 40 {
+	if through, _, err := store.ArchivedThrough(); err != nil || through != 40 {
 		t.Fatalf("reopened through=%d err=%v", through, err)
+	}
+	if err := store.ResetArchived(); err != nil {
+		t.Fatal(err)
+	}
+	if through, _, err := store.ArchivedThrough(); err != nil || through != 0 {
+		t.Fatalf("reset through=%d err=%v", through, err)
+	}
+	if _, found, err := store.ArchivedWorkUnit("wku_02"); err != nil || found {
+		t.Fatalf("reset found=%t err=%v", found, err)
+	}
+	if err := store.WriteArchived(items, 40, ledger.StateSnapshotChain{Sequence: 41}); err != nil {
+		t.Fatal(err)
 	}
 	store.Close()
 
@@ -112,7 +124,7 @@ func TestArchiveRoundTripsAndPagesInIDOrder(t *testing.T) {
 		t.Fatalf("reset=%t err=%v", reset, err)
 	}
 	defer other.Close()
-	if through, err := other.ArchivedThrough(); err != nil || through != 0 {
+	if through, _, err := other.ArchivedThrough(); err != nil || through != 0 {
 		t.Fatalf("foreign through=%d err=%v", through, err)
 	}
 	if _, found, err := other.ArchivedWorkUnit("wku_02"); err != nil || found {
@@ -125,7 +137,7 @@ func TestArchiveRoundTripsAndPagesInIDOrder(t *testing.T) {
 func TestArchiveRefusesTamperedRowsAndIndexEntries(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "archive.db")
 	store := openTest(t, path, testKey)
-	if err := store.WriteArchived([]ledger.ArchivedWorkUnit{archivedItem("prj_a", 1)}, 10); err != nil {
+	if err := store.WriteArchived([]ledger.ArchivedWorkUnit{archivedItem("prj_a", 1)}, 10, ledger.StateSnapshotChain{Sequence: 10}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.db.Update(func(tx *bbolt.Tx) error {

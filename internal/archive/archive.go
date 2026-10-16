@@ -45,6 +45,8 @@ var (
 	keyVersion       = []byte("version")
 	keyCheck         = []byte("key_check")
 	keyLedgerThrough = []byte("ledger_through")
+	keyLedgerChain   = []byte("ledger_chain")
+	ledgerBuckets    = [][]byte{bucketWorkUnits, bucketWorkUnitIndex, bucketRuns, bucketRunIndex, bucketIdempotency}
 	keyCheckLabel    = []byte("halro archive key check v1")
 
 	// ErrTampered is a row that failed authentication. A read that meets
@@ -171,24 +173,25 @@ func (s *Store) through(name []byte) (uint64, error) {
 	return value, err
 }
 
-// advance records a position, never moving it backwards.
-func (s *Store) advance(tx *bbolt.Tx, name []byte, value uint64) error {
+// advance records a position, never moving it backwards, and reports
+// whether it moved or stayed.
+func (s *Store) advance(tx *bbolt.Tx, name []byte, value uint64) (bool, error) {
 	meta := tx.Bucket(bucketMeta)
 	if raw := meta.Get(name); raw != nil {
 		var current uint64
 		if err := s.get(bucketMeta, name, raw, &current); err != nil {
-			return err
+			return false, err
 		}
 		if value < current {
-			return nil
+			return false, nil
 		}
 	}
-	return s.put(meta, bucketMeta, name, value)
+	return true, s.put(meta, bucketMeta, name, value)
 }
 
 var _ ledger.Archive = (*Store)(nil)
 
-func (s *Store) WriteArchived(items []ledger.ArchivedWorkUnit, through uint64) error {
+func (s *Store) WriteArchived(items []ledger.ArchivedWorkUnit, through uint64, chain ledger.StateSnapshotChain) error {
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		workUnits, index := tx.Bucket(bucketWorkUnits), tx.Bucket(bucketWorkUnitIndex)
 		runs, runIndex, idempotency := tx.Bucket(bucketRuns), tx.Bucket(bucketRunIndex), tx.Bucket(bucketIdempotency)
@@ -214,11 +217,55 @@ func (s *Store) WriteArchived(items []ledger.ArchivedWorkUnit, through uint64) e
 				}
 			}
 		}
-		return s.advance(tx, keyLedgerThrough, through)
+		advanced, err := s.advance(tx, keyLedgerThrough, through)
+		if err != nil || !advanced {
+			return err
+		}
+		return s.put(tx.Bucket(bucketMeta), bucketMeta, keyLedgerChain, chain)
 	})
 }
 
-func (s *Store) ArchivedThrough() (uint64, error) { return s.through(keyLedgerThrough) }
+func (s *Store) ArchivedThrough() (uint64, ledger.StateSnapshotChain, error) {
+	through, err := s.through(keyLedgerThrough)
+	if err != nil || through == 0 {
+		return 0, ledger.StateSnapshotChain{}, err
+	}
+	var chain ledger.StateSnapshotChain
+	err = s.db.View(func(tx *bbolt.Tx) error {
+		raw := tx.Bucket(bucketMeta).Get(keyLedgerChain)
+		if raw == nil {
+			return ErrTampered
+		}
+		return s.get(bucketMeta, keyLedgerChain, raw, &chain)
+	})
+	return through, chain, err
+}
+
+// ResetArchived empties the Work Unit side of the archive and its position.
+func (s *Store) ResetArchived() error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		if err := recreate(tx, ledgerBuckets); err != nil {
+			return err
+		}
+		meta := tx.Bucket(bucketMeta)
+		if err := meta.Delete(keyLedgerThrough); err != nil {
+			return err
+		}
+		return meta.Delete(keyLedgerChain)
+	})
+}
+
+func recreate(tx *bbolt.Tx, names [][]byte) error {
+	for _, name := range names {
+		if err := tx.DeleteBucket(name); err != nil && !errors.Is(err, bbolt.ErrBucketNotFound) {
+			return err
+		}
+		if _, err := tx.CreateBucket(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func (s *Store) ArchivedWorkUnit(id string) (ledger.ArchivedWorkUnit, bool, error) {
 	var item ledger.ArchivedWorkUnit

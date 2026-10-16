@@ -63,10 +63,15 @@ type Archive interface {
 	// projectID is empty) in ID order after the cursor.
 	VisitArchivedRuns(projectID, after string, visit func(domain.Run) (bool, error)) error
 	// WriteArchived stores items durably and records that every Work Unit
-	// archived at or before through is stored.
-	WriteArchived(items []ArchivedWorkUnit, through uint64) error
-	// ArchivedThrough is the position WriteArchived last recorded.
-	ArchivedThrough() (uint64, error)
+	// archived at or before through is stored, together with the Ledger's
+	// chain head at or past through, which ties the archive to one history.
+	WriteArchived(items []ArchivedWorkUnit, through uint64, chain StateSnapshotChain) error
+	// ArchivedThrough is the position and chain head WriteArchived last
+	// recorded.
+	ArchivedThrough() (uint64, StateSnapshotChain, error)
+	// ResetArchived discards every archived Work Unit and the recorded
+	// position, before a rebuild from the first frame writes them again.
+	ResetArchived() error
 }
 
 // SetArchive enables archiving into archive. It is set once, before the first
@@ -278,8 +283,9 @@ func (s *State) forgetArchived(items []ArchivedWorkUnit) {
 // drops what was written. A start rebuilding the state from the first frame
 // calls it as the queue fills, so the rebuild holds no more than a queue's
 // worth; a running instance's snapshot writer does the same before each
-// snapshot.
-func (s *State) FlushArchive() error {
+// snapshot. The chain head is read after the queue is copied, so it is at or
+// past the position.
+func (s *State) FlushArchive(log ChainHeadReader) error {
 	s.mu.RLock()
 	archive := s.archive
 	items := s.copyArchiveQueue()
@@ -288,7 +294,11 @@ func (s *State) FlushArchive() error {
 	if archive == nil {
 		return nil
 	}
-	if err := archive.WriteArchived(items, through); err != nil {
+	head, hash, ok := log.ChainHead()
+	if !ok || head.Sequence < through {
+		return errors.New("the Ledger has no chain head covering the archive")
+	}
+	if err := archive.WriteArchived(items, through, StateSnapshotChain{Sequence: head.Sequence, Hash: hash}); err != nil {
 		return err
 	}
 	s.forgetArchived(items)
