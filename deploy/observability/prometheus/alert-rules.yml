@@ -112,6 +112,19 @@ groups:
         annotations:
           summary: Halro Ledger queue exceeds 75 percent
           runbook_url: /docs/observability/operations-runbook.md#halroledgerqueuehigh
+      - alert: HalroLedgerHotStateHigh
+        expr: halro_ledger_hot_state_estimated_bytes / halro_ledger_hot_state_limit_bytes > 0.8
+        for: 10m
+        labels: {severity: warning, service: halro, owner: sre, category: accounting}
+        annotations:
+          summary: Halro accounting state exceeds 80 percent of its memory limit
+          runbook_url: /docs/observability/operations-runbook.md#halroledgerhotstatehigh
+      - alert: HalroLedgerHotStateRejecting
+        expr: sum without (operation) (increase(halro_ledger_hot_state_rejections_total[10m])) > 0
+        labels: {severity: critical, service: halro, owner: sre, category: accounting}
+        annotations:
+          summary: Halro is refusing new work because the accounting state is at its memory limit
+          runbook_url: /docs/observability/operations-runbook.md#halroledgerhotstaterejecting
       - alert: HalroAlertDeliveryFailing
         expr: increase(halro_alert_delivery_total{status=~"failed|dropped"}[10m]) > 0
         for: 10m

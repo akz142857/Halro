@@ -462,7 +462,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		secretVault.Close()
 		return fail(fmt.Errorf("resolve accounting timezone: %w", err))
 	}
-	accounting, err := budget.New(ledgerLog, ledgerState, periods)
+	accounting, err := budget.NewWithOptions(ledgerLog, ledgerState, periods, budget.Options{MaxHotStateBytes: cfg.Ledger.MaxHotStateBytes})
 	if err != nil {
 		ledgerLog.Close()
 		metadata.Close()

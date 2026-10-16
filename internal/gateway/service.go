@@ -444,6 +444,9 @@ func (s *Service) beginRequestRun(
 		if errors.Is(err, budget.ErrRunNotActive) {
 			return nil, gatewayError("run_not_active", "run is closed or expired", 409, err)
 		}
+		if errors.Is(err, budget.ErrHotStateFull) {
+			return nil, accountingCapacityExhausted(err)
+		}
 		if governanceRunID != "" {
 			return nil, gatewayError("run_governance_unavailable", "run governance state is unavailable", 503, err)
 		}
@@ -3587,6 +3590,17 @@ func (s *Service) mapLimitError(err error) error {
 
 func gatewayError(code, message string, status int, cause error) *Error {
 	return &Error{Code: code, Message: message, HTTPStatus: status, Cause: cause}
+}
+
+// AccountingCapacityRetryAfter is what a caller refused because the
+// accounting state is at its memory limit is told to wait: about as long as
+// the requests already admitted take to settle and shrink it.
+const AccountingCapacityRetryAfter = 5 * time.Second
+
+func accountingCapacityExhausted(cause error) *Error {
+	err := gatewayError("accounting_capacity_exhausted", "accounting state is at its memory limit; retry later", 503, cause)
+	err.RetryAfter = AccountingCapacityRetryAfter
+	return err
 }
 
 // returnFailure is gatewayError for the failures on the way back: the upstream

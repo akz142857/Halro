@@ -189,6 +189,13 @@ ledger:
     enabled: true
     max_active_bytes: 268435456
     compress: true
+  # The accounting state held in memory — requests in flight, open Work Units
+  # and Runs, balances — is estimated from its entries. Past this size new
+  # requests, Work Units and Runs are refused with 503
+  # accounting_capacity_exhausted until admitted work settles, so the process
+  # stops taking work rather than running out of memory. 128 MiB is about
+  # 40,000 requests in flight; raise it for many projects with Run Governance.
+  max_hot_state_bytes: 134217728
 
 gateway:
   # The whole request, across retries and fallbacks.

@@ -245,6 +245,18 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	metricHeader(output, "halro_ledger_state_snapshot_bytes", "gauge",
 		"Size of the last accounting state snapshot, which is the size of the accounting state.")
 	fmt.Fprintf(output, "halro_ledger_state_snapshot_bytes %d\n", r.accountingState.snapshots.bytes.Load())
+	hotState := r.accounting.HotStateStats()
+	metricHeader(output, "halro_ledger_hot_state_estimated_bytes", "gauge",
+		"Estimated heap the accounting state holds, counted from its entries.")
+	fmt.Fprintf(output, "halro_ledger_hot_state_estimated_bytes %d\n", hotState.Bytes)
+	metricHeader(output, "halro_ledger_hot_state_limit_bytes", "gauge",
+		"Accounting state size beyond which new requests, Work Units and Runs are refused.")
+	fmt.Fprintf(output, "halro_ledger_hot_state_limit_bytes %d\n", hotState.Limit)
+	metricHeader(output, "halro_ledger_hot_state_rejections_total", "counter",
+		"New requests, Work Units and Runs refused because the accounting state was at its limit.")
+	fmt.Fprintf(output, "halro_ledger_hot_state_rejections_total{operation=\"request\"} %d\n", hotState.RequestRejections)
+	fmt.Fprintf(output, "halro_ledger_hot_state_rejections_total{operation=\"work_unit\"} %d\n", hotState.WorkUnitRejections)
+	fmt.Fprintf(output, "halro_ledger_hot_state_rejections_total{operation=\"run\"} %d\n", hotState.RunRejections)
 	metricHeader(output, "halro_ledger_state_snapshot_timestamp_seconds", "gauge",
 		"Unix time the last accounting state snapshot was written.")
 	fmt.Fprintf(output, "halro_ledger_state_snapshot_timestamp_seconds %d\n", r.accountingState.snapshots.unix.Load())

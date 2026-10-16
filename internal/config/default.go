@@ -74,6 +74,7 @@ func Default() Config {
 				MaxActiveBytes: DefaultLedgerSealMaxActiveBytes,
 				Compress:       true,
 			},
+			MaxHotStateBytes: DefaultLedgerMaxHotStateBytes,
 		},
 		Gateway: Gateway{
 			RouteTotalTimeout:             Duration(2 * time.Minute),

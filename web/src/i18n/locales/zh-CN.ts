@@ -406,6 +406,7 @@ export const zhCN = {
       provider_timeout: "上游服务商超时。同上，可加回退目标或调高超时。",
       provider_authentication_error: "上游服务商拒绝了凭据，请检查该部署所属连接的凭据是否仍然有效。",
       accounting_unavailable: "账务不可用，网关按 fail-closed 拒绝了这次请求，未调用上游。",
+      accounting_capacity_exhausted: "内存中的账务状态达到 ledger.max_hot_state_bytes，网关暂停接收新请求，等已接收的请求结算。稍后重试，或调高该上限。",
       streaming_unsupported: "网关当前无法承载流式响应（内部错误，非部署能力问题）。请改用普通响应并查看服务端日志。",
     },
     billedProject: "计费项目",

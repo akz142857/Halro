@@ -472,3 +472,67 @@ HA 代码在 `ha` 分支（`098a3214`）。本方案落地后，HA 基于新的 
 任何一项不达标，停下来记录原因并裁定。
 
 **结果**（[P3 结果](../verification/memory-bounded-baseline.zh-CN.md) §7）：治理实体 1 万 → 10 万 heap 15.1 → 15.2 MiB；普通请求除并发 64 吞吐为基线的 93.8%（差 1.2 个百分点，记录与裁定见结果页 §7.2）外均达标；`archive.db` 每个 WorkUnit 约 5.3 KB。
+
+## 14. 热状态上限的执行（拒绝与告警）
+
+2026-10-17 起草。P3 合入后测了 §6 第二项（[基线 §8](../verification/memory-bounded-baseline.zh-CN.md)）：正常流量远低于 128 MiB，但没有任何机制保证不超过，§6 要求的"超出时拒绝新请求并告警"没有实现。这一节补上。
+
+### 14.1 量什么
+
+不读真实 heap：`runtime.ReadMemStats` 会暂停整个进程，不能放在请求路径上；heap 也包含热状态以外的一切。改为在 `ledger.State` 里按条目数估算：
+
+    估算字节 = Σ 各 map 的条目数 × 该类条目的单价 + 固定部分（事件摘要环、归档队列上限）
+
+单价是常量，取 §8.2 探针的实测值并向上取整；探针改为同时检查估算与实测 heap 的偏差（每类不超过 ±25%），单价过时会让它失败。估算在 `State` 的读锁下只读 `len()`，是 O(1)。
+
+计入的：在途请求、预留与租约、余额、WorkUnit、Run、治理幂等记录、归档队列。
+
+### 14.2 拒绝什么
+
+估算超过上限时，**只拒绝会让热状态变大的新入口**：
+
+| 入口 | 超限时 |
+| --- | --- |
+| `BeginRequest*`（新请求进入） | 拒绝，503 `accounting_capacity_exhausted`，带 `Retry-After` |
+| `CreateWorkUnit*`、`CreateRun` | 拒绝，503，同一错误码 |
+| 已进入的请求再预留（重试、fallback） | 不拒绝：每个请求的尝试数已由 `max_total_attempts` 限住，半途拒绝只会把已开始的请求变成失败 |
+| 结算、结束、关闭 WorkUnit/Run、恢复 | 不拒绝：它们让热状态变小 |
+
+余额行在当天第一次预留时创建，随天数增长、不随请求增长，不单独拒绝，但计入估算。
+
+不是 fail-open：超限时拒绝的是新工作，已有的账务照常结算，不丢任何记录。
+
+### 14.3 配置
+
+`ledger.max_hot_state_bytes`，默认 128 MiB（§6），允许 16 MiB～4 GiB。项目很多、又开了 Run Governance 的部署（§8.3：约 53 个项目到上限）可以调高，代价是内存。
+
+### 14.4 指标与告警
+
+- `halro_ledger_hot_state_estimated_bytes`（gauge）、`halro_ledger_hot_state_limit_bytes`（gauge）。
+- `halro_ledger_hot_state_rejections_total{operation}`（counter；`operation` 只有 `request`、`work_unit`、`run` 三个值）。
+- 告警 `HalroLedgerHotStateHigh`：估算超过上限的 80% 持续 10 分钟，warning。
+- 告警 `HalroLedgerHotStateRejecting`：10 分钟内有拒绝，critical。
+- 两条都写进 `rule-tests.yml` 和运维手册（`runbook_links_test` 要求有锚点）。
+
+`halro_ledger_state_snapshot_bytes`（快照文件大小）保留：它量的是磁盘上的文件，不是同一件事。
+
+### 14.5 测试
+
+- 确定性：把上限设得很小，确认新请求、新 WorkUnit、新 Run 被拒为 503，已进入请求的重试预留和结算照常完成，估算回落后恢复接受。
+- 估算的单价由 §8.2 探针校准（见 14.1）。
+- 不需要 Linux 容器复测：不涉及 I/O。
+
+### 14.6 规模
+
+预计生产代码 200～300 行（估算、四个入口的检查、配置、指标），加告警规则、手册与测试。
+
+### 14.7 实现记录（2026-10-17）
+
+按上面的设计实现，偏差两处：
+
+- **预留的单价按真实事件校准。** §8.2 的探针用最小字段的事件，预留 2074 B；按网关实际填写的字段（路由、部署、价格快照、Token Guard 摘要）测得 2847 B，单价取 3072 B。校准测试 `TestHotStateEstimateTracksTheHeap` 覆盖计量价格和未知价格两种预留。
+- **新请求的检查只在 `BeginRequest*`。** 设计里写的"四个入口"是新请求、新 WorkUnit、新 Run，加上已有请求的再预留；后者按 14.2 不检查，所以实际是三处。
+
+各类单价与实测见[基线 §8.4](../verification/memory-bounded-baseline.zh-CN.md)。控制台的错误说明新增 `accounting_capacity_exhausted`（中英文）。
+
+请求路径上的开销：`HotStateBytes` 在 8 核并发争用下每次 80 ns（单核 3.7 ns）。并发 64 时一个请求生命周期约 560 µs，占比约 0.01%。`BenchmarkRequestLifecycle`（8 项目、并发 64、2 万次，与 `main` 交替各 5 轮）：`main` 1741～1853、本分支（检查生效）1666～1854 lifecycles/s，区间重叠，差异在噪声内。
