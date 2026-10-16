@@ -412,46 +412,49 @@ HA 代码在 `ha` 分支（`098a3214`）。本方案落地后，HA 基于新的 
 
 只看"已关闭"不够：关闭时可能还有尝试在途，结算会在关闭之后继续记到 Run 和 `workUnitCosts` 上；关闭的 WorkUnit 下的 Run 也可能还活着、还在接请求（WorkUnit 关闭不会关闭 Run）。归档时它和它的全部 Run、成本合计、指向它们的治理幂等记录一起移出。
 
-热状态因此只有：未关闭的 WorkUnit（每项目 ≤ 1000）及其 Run（每个 ≤ 32）；已关闭、但还有活着的 Run（每项目活跃 Run ≤ 1000）或在途请求的 WorkUnit；以及**归档队列**——已归档、还没写进 `history.db` 的条目。
+热状态因此只有：未关闭的 WorkUnit（每项目 ≤ 1000）及其 Run（每个 ≤ 32）；已关闭、但还有活着的 Run（每项目活跃 Run ≤ 1000）或在途请求的 WorkUnit；以及**归档队列**——已归档、还没写进 `archive.db` 的条目。
 
-**归档队列与持久化顺序。** 快照写入流程改为：在状态锁内同时复制热状态和队列；把队列里的条目写入 `history.db`（一个事务，同时写"归档水位"=快照位置）；成功后才写快照文件，然后从队列删掉已写入的条目。崩溃发生在任一步之间，都从上一份快照恢复并重放后缀，归档会在同样的位置再次发生，再次写入（写入是幂等的覆盖）。队列超过 4096 条时提前触发一次快照写入，所以队列有上限。全量重建时每应用一段就写一次队列。
+**归档队列与持久化顺序。** 快照写入流程改为：在状态锁内同时复制热状态和队列；把队列里的条目写入 `archive.db`（一个事务，同时写"归档水位"=快照位置）；成功后才写快照文件，然后从队列删掉已写入的条目。崩溃发生在任一步之间，都从上一份快照恢复并重放后缀，归档会在同样的位置再次发生，再次写入（写入是幂等的覆盖）。队列超过 4096 条时提前触发一次快照写入，所以队列有上限。全量重建时每应用一段就写一次队列。
 
-**查找顺序**：热状态 → 归档队列 → `history.db`。由于条目先进队列、写入 `history.db` 之后才离开队列，查找不会落空，不需要"追赶中"的 503。
+**查找顺序**：热状态 → 归档队列 → `archive.db`。由于条目先进队列、写入 `archive.db` 之后才离开队列，查找不会落空，不需要"追赶中"的 503。
 
-**启动时的一致性**：`history.db` 记录归档水位。快照位置超过归档水位（例如 `history.db` 因格式版本或密钥变化被清空），说明快照声称已归档的条目在 `history.db` 里不存在，就丢弃快照，从第一帧重建（重建会重新产生全部归档）。
+**启动时的一致性**：`archive.db` 记录归档水位。快照位置超过归档水位（例如 `archive.db` 因格式版本或密钥变化被清空），说明快照声称已归档的条目在 `archive.db` 里不存在，就丢弃快照，从第一帧重建（重建会重新产生全部归档）。
 
-**Governance 一侧。** Outcome 一写入就进归档队列（与 Ledger 相同的持久化顺序，挂在 Governance 检查点上）。热状态只保留**最近 4096 个**修订头和最近 4096 条幂等记录（按 journal 序号的固定容量环）。`Apply` 检查修订连续性时，头在环里就核对；不在环里就接受——这条事件在写入前已由 Manager 对照完整的头（环 → 队列 → `history.db`）校验过，journal 有链式 MAC。环的内容只取决于 journal 前缀，所以从检查点回放和从头重建结果相同。
+**Governance 一侧。** Outcome 一写入就进归档队列（与 Ledger 相同的持久化顺序，挂在 Governance 检查点上）。热状态只保留**最近 4096 个**修订头和最近 4096 条幂等记录（按 journal 序号的固定容量环）。`Apply` 检查修订连续性时，头在环里就核对；不在环里就接受——这条事件在写入前已由 Manager 对照完整的头（环 → 队列 → `archive.db`）校验过，journal 有链式 MAC。环的内容只取决于 journal 前缀，所以从检查点回放和从头重建结果相同。
 
 ### 13.3 读取与校验
 
-- **`Apply` 的唯一性检查**：`WorkUnitCreated`、`RunCreated` 只对热状态和队列检查 ID 是否已存在；已写入 `history.db` 的不查。ID 由服务端随机生成，WAL 有链式 MAC，重复只能来自篡改。API 路径上创建前照旧生成新 ID，不受影响。
-- **幂等重放**：Manager 查幂等记录按热状态 → 队列 → `history.db` 的顺序。
+- **`Apply` 的唯一性检查**：`WorkUnitCreated`、`RunCreated` 只对热状态和队列检查 ID 是否已存在；已写入 `archive.db` 的不查。ID 由服务端随机生成，WAL 有链式 MAC，重复只能来自篡改。API 路径上创建前照旧生成新 ID，不受影响。
+- **幂等重放**：Manager 查幂等记录按热状态 → 队列 → `archive.db` 的顺序。
 - **项目内计数**：每项目维护未关闭 WorkUnit 集合和未关闭 Run 集合（都在热状态里，有上限），替代 §13.1 的两处全量遍历。
-- **管理端列表**（`run-governance/work-units`、`runs`、`governance/outcomes`）：按 ID 游标分页，合并热状态、队列和 `history.db` 的结果，顺序与现在一致（按 ID）。
-- **治理汇总与导出**：汇总仍有 100,000 个 WorkUnit 的上限；导出现在一次读入全部 WorkUnit、Run 和 Outcome，P3 保持这个语义（读的来源变成热状态 + `history.db`），**导出时的瞬时内存仍与历史成正比**，改成流式导出放到 P4。
+- **管理端列表**（`run-governance/work-units`、`runs`、`governance/outcomes`）：按 ID 游标分页，合并热状态、队列和 `archive.db` 的结果，顺序与现在一致（按 ID）。
+- **治理汇总与导出**：汇总仍有 100,000 个 WorkUnit 的上限；导出现在一次读入全部 WorkUnit、Run 和 Outcome，P3 保持这个语义（读的来源变成热状态 + `archive.db`），**导出时的瞬时内存仍与历史成正比**，改成流式导出放到 P4。
 
-### 13.4 `history.db` 新增内容
+### 13.4 归档文件 `archive.db`
+
+实现时没有放进 `history.db`，而是单独一个文件 `data/history/archive.db`（`internal/archive`）。原因：`history.db` 是 Usage 的派生数据，运行中会被 `Reset` 清空重建（`runtime.go` 的 `openUsageHistory`、`usage.go`）；而写进归档的条目已经从内存里删掉，归档被单独清空就等于丢数据。归档只和依赖它的快照一起失效，见下面的水位与链绑定。行级 MAC 的密钥从 Ledger 密钥派生（`vault.DeriveArchiveHMACKey`）。
 
 | bucket | 键 | 值 |
 | --- | --- | --- |
-| `work_units` | WorkUnit ID | 归档时的 WorkUnit 与成本合计；行级 MAC |
-| `work_unit_index` | 项目 + 期间 + ID | 空（按项目分页、按期间取队列） |
+| `work_units` | WorkUnit ID | WorkUnit、成本合计、Run ID 列表；行级 MAC |
+| `work_unit_index` | 项目 + ID | 空 |
 | `runs` | Run ID | 归档时的 Run；行级 MAC |
-| `run_index` | 项目 + WorkUnit + ID | 空 |
-| `governance_idempotency` | 项目 / 操作 / 键哈希 | 与现在 `GovernanceIdempotency` 相同；行级 MAC |
-| `outcomes` | Outcome ID | Outcome；行级 MAC |
-| `outcome_index` | 项目 + WorkUnit + 定义 + ID | 空 |
-| `outcome_heads` | 项目 + WorkUnit + 定义 + 版本 | 当前头的 Outcome ID 与修订号；行级 MAC |
+| `run_index` | 项目 + Run ID | 空 |
+| `idempotency` | 项目 + 操作 + 键哈希 | `GovernanceIdempotency`；行级 MAC |
+| `outcomes` | Outcome ID | Outcome 与写入它的幂等键、指纹；行级 MAC |
+| `outcome_project_index`、`outcome_work_unit_index` | 项目或 WorkUnit + ID | 空 |
+| `outcome_heads` | 项目 + WorkUnit + 定义 + 版本 | 当前头的 Outcome ID 与修订号；行级 MAC，读取时与 Outcome 行核对 |
 | `outcome_idempotency` | 项目 + 键哈希 | 指纹与 Outcome ID；行级 MAC |
-| `meta` | `ledger_archive`、`governance_archive` | 两条日志各自的归档水位 |
+| `meta` | `ledger_through`、`ledger_chain`、`governance_through`、`governance_hash` | 两条日志各自已归档到的位置，以及该位置对应的链头哈希或 journal 记录哈希 |
 
-索引条目没有 MAC，读取时与它指向的带 MAC 的行核对（与 #408 相同）。格式版本加一；旧的 `history.db` 会被清空并从 WAL 重建（P1 已有的机制）。
+索引条目没有 MAC，读取时与它指向的带 MAC 的行核对（与 #408 相同），不一致就报错，不跳过。WorkUnit 行只记 Run ID，读取时再取 Run 行并核对归属；写入的页面填充到 90%（bbolt 默认 50%，归档几乎只追加）。
 
-### 13.5 快照与检查点
+### 13.5 快照、检查点与绑定
 
-- Ledger 热状态快照（P2）的格式版本加一，内容是 §13.2 的热部分；旧快照走全量重建。
-- Governance 的 bbolt 检查点改为只含环与水位，格式版本加一；旧检查点不再读取，从 journal 重建一次。
-- 升级后首次启动：两份状态都从日志重建，归档条目边重建边写入 `history.db`，不在内存里累积。
+- **Ledger 快照**（P2）格式不变，内容只剩 §13.2 的热部分。启动时要求归档的 `ledger_through` 不小于快照位置，并且归档记录的链头与快照的链头一样，在同一次回放里对照 Ledger 核对（下一帧的前一哈希，或 WAL 头部的哈希）；任一不符就走全量重建。全量重建前先清空归档里的 WorkUnit 部分，重建过程中每满 4096 条写一次。这样另一份数据目录副本留下的归档不会被拿来用（与 #421 的快照链绑定同一个问题）。
+- **Governance 检查点**：代码核对发现，生产代码从未写入过它（`SaveGovernanceCheckpoint` 只在测试里调用，自 #272 引入起如此），每次启动都从头回放整个 journal。它的内容是整份状态，与有界的设计矛盾，所以读取路径删除；残留的旧检查点直接丢弃，不解析。
+- **Governance 归档**：每次启动仍从头回放 journal，归档位置之前的记录只更新环、不再写入；回放到归档记录的位置时核对 journal 记录哈希，不符就清空归档的 Outcome 部分再回放一次。运行时每次报告在 journal 追加后立即写入归档；写入失败则 Governance 进入不可用，下次启动从 journal 补回。
+- **升级后首次启动**：没有 `archive.db`，归档位置为 0，Ledger 快照被拒，两份状态都从日志重建，归档边重建边写，不在内存里累积。之后每次启动从快照恢复。
 
 ### 13.6 本阶段不做
 
@@ -467,3 +470,5 @@ HA 代码在 `ha` 分支（`098a3214`）。本方案落地后，HA 基于新的 
 4. 新增生产代码行数（预计 2000–3000 行；P1 新增 2324、删除 2356 行，P2 新增 1052、删除 137 行，三阶段新增合计仍在 1 万行以内）。
 
 任何一项不达标，停下来记录原因并裁定。
+
+**结果**（[P3 结果](../verification/memory-bounded-baseline.zh-CN.md) §7）：治理实体 1 万 → 10 万 heap 15.1 → 15.2 MiB；普通请求除并发 64 吞吐为基线的 93.8%（差 1.2 个百分点，记录与裁定见结果页 §7.2）外均达标；`archive.db` 每个 WorkUnit 约 5.3 KB。
