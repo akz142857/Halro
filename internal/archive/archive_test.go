@@ -60,7 +60,7 @@ func TestArchiveRoundTripsAndPagesInIDOrder(t *testing.T) {
 		t.Fatalf("through=%d chain=%#v err=%v (it must not move backwards)", through, chain, err)
 	}
 	item, found, err := store.ArchivedWorkUnit("wku_02")
-	if err != nil || !found || item.Cost.KnownMicrosUSD != 2 || len(item.Runs) != 1 {
+	if err != nil || !found || item.Cost.KnownMicrosUSD != 2 || len(item.Runs) != 1 || item.Runs[0].ID != "run_02" {
 		t.Fatalf("work unit %#v found=%t err=%v", item, found, err)
 	}
 	if run, found, err := store.ArchivedRun("run_03"); err != nil || !found || run.ProjectID != "prj_b" {

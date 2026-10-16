@@ -42,8 +42,8 @@ var _ governance.Archive = (*Store)(nil)
 // same head is the one that remains its head.
 func (s *Store) WriteOutcomes(items []governance.SnapshotRecord, through uint64, hash [32]byte) error {
 	return s.db.Update(func(tx *bbolt.Tx) error {
-		outcomes, heads, idempotency := tx.Bucket(bucketOutcomes), tx.Bucket(bucketOutcomeHeads), tx.Bucket(bucketOutcomeIdempotency)
-		byProject, byWorkUnit := tx.Bucket(bucketOutcomeProject), tx.Bucket(bucketOutcomeWorkUnit)
+		outcomes, heads, idempotency := packed(tx, bucketOutcomes), packed(tx, bucketOutcomeHeads), packed(tx, bucketOutcomeIdempotency)
+		byProject, byWorkUnit := packed(tx, bucketOutcomeProject), packed(tx, bucketOutcomeWorkUnit)
 		for _, item := range items {
 			outcome := item.Outcome
 			id := []byte(outcome.ID)

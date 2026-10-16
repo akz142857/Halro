@@ -127,6 +127,18 @@ func (s *Store) mac(bucket, key, value []byte) []byte {
 	return mac.Sum(nil)
 }
 
+// fillPercent is how full bbolt packs a page it writes. The archive only
+// appends and rarely rewrites a row, so pages are packed close to full; at
+// bbolt's default of one half the file was twice the size of its rows.
+const fillPercent = 0.9
+
+// packed is a bucket opened for writing, packed to fillPercent.
+func packed(tx *bbolt.Tx, name []byte) *bbolt.Bucket {
+	bucket := tx.Bucket(name)
+	bucket.FillPercent = fillPercent
+	return bucket
+}
+
 func (s *Store) put(bucket *bbolt.Bucket, name, key []byte, value any) error {
 	encoded, err := json.Marshal(value)
 	if err != nil {
@@ -192,13 +204,61 @@ func (s *Store) advance(tx *bbolt.Tx, name []byte, value uint64) (bool, error) {
 
 var _ ledger.Archive = (*Store)(nil)
 
+// storedWorkUnit is a Work Unit row. Its Runs and idempotency records have
+// rows of their own, so it names the Runs instead of copying them; reading it
+// back joins them in.
+type storedWorkUnit struct {
+	WorkUnit domain.WorkUnit     `json:"work_unit"`
+	Cost     ledger.WorkUnitCost `json:"cost"`
+	RunIDs   []string            `json:"run_ids,omitempty"`
+	Sequence uint64              `json:"sequence"`
+}
+
+// workUnitTx reads one Work Unit row and its Runs inside tx. Each Run row
+// must exist and name the Work Unit.
+func (s *Store) workUnitTx(tx *bbolt.Tx, id []byte) (ledger.ArchivedWorkUnit, bool, error) {
+	raw := tx.Bucket(bucketWorkUnits).Get(id)
+	if raw == nil {
+		return ledger.ArchivedWorkUnit{}, false, nil
+	}
+	var stored storedWorkUnit
+	if err := s.get(bucketWorkUnits, id, raw, &stored); err != nil {
+		return ledger.ArchivedWorkUnit{}, false, err
+	}
+	if stored.WorkUnit.ID != string(id) {
+		return ledger.ArchivedWorkUnit{}, false, ErrTampered
+	}
+	item := ledger.ArchivedWorkUnit{WorkUnit: stored.WorkUnit, Cost: stored.Cost, Sequence: stored.Sequence}
+	runs := tx.Bucket(bucketRuns)
+	for _, runID := range stored.RunIDs {
+		key := []byte(runID)
+		raw := runs.Get(key)
+		if raw == nil {
+			return ledger.ArchivedWorkUnit{}, false, ErrTampered
+		}
+		var run domain.Run
+		if err := s.get(bucketRuns, key, raw, &run); err != nil {
+			return ledger.ArchivedWorkUnit{}, false, err
+		}
+		if run.ID != runID || run.WorkUnitID != stored.WorkUnit.ID {
+			return ledger.ArchivedWorkUnit{}, false, ErrTampered
+		}
+		item.Runs = append(item.Runs, run)
+	}
+	return item, true, nil
+}
+
 func (s *Store) WriteArchived(items []ledger.ArchivedWorkUnit, through uint64, chain ledger.StateSnapshotChain) error {
 	return s.db.Update(func(tx *bbolt.Tx) error {
-		workUnits, index := tx.Bucket(bucketWorkUnits), tx.Bucket(bucketWorkUnitIndex)
-		runs, runIndex, idempotency := tx.Bucket(bucketRuns), tx.Bucket(bucketRunIndex), tx.Bucket(bucketIdempotency)
+		workUnits, index := packed(tx, bucketWorkUnits), packed(tx, bucketWorkUnitIndex)
+		runs, runIndex, idempotency := packed(tx, bucketRuns), packed(tx, bucketRunIndex), packed(tx, bucketIdempotency)
 		for _, item := range items {
 			id := []byte(item.WorkUnit.ID)
-			if err := s.put(workUnits, bucketWorkUnits, id, item); err != nil {
+			stored := storedWorkUnit{WorkUnit: item.WorkUnit, Cost: item.Cost, Sequence: item.Sequence}
+			for _, run := range item.Runs {
+				stored.RunIDs = append(stored.RunIDs, run.ID)
+			}
+			if err := s.put(workUnits, bucketWorkUnits, id, stored); err != nil {
 				return err
 			}
 			if err := index.Put(joinKey(item.WorkUnit.ProjectID, item.WorkUnit.ID), nil); err != nil {
@@ -268,22 +328,15 @@ func recreate(tx *bbolt.Tx, names [][]byte) error {
 	return nil
 }
 
+// ArchivedWorkUnit reads a Work Unit with its Runs. Its idempotency records
+// are read through ArchivedIdempotency, not with it.
 func (s *Store) ArchivedWorkUnit(id string) (ledger.ArchivedWorkUnit, bool, error) {
 	var item ledger.ArchivedWorkUnit
-	found := false
+	var found bool
 	err := s.db.View(func(tx *bbolt.Tx) error {
-		raw := tx.Bucket(bucketWorkUnits).Get([]byte(id))
-		if raw == nil {
-			return nil
-		}
-		found = true
-		if err := s.get(bucketWorkUnits, []byte(id), raw, &item); err != nil {
-			return err
-		}
-		if item.WorkUnit.ID != id {
-			return ErrTampered
-		}
-		return nil
+		var err error
+		item, found, err = s.workUnitTx(tx, []byte(id))
+		return err
 	})
 	return item, found && err == nil, err
 }
@@ -328,17 +381,12 @@ func (s *Store) ArchivedIdempotency(projectID, operation, keyHash string) (ledge
 // entry carries no MAC, so the row it names must exist and agree with it.
 func (s *Store) VisitArchivedWorkUnits(query ledger.ArchiveQuery, visit func(ledger.ArchivedWorkUnit) (bool, error)) error {
 	return s.db.View(func(tx *bbolt.Tx) error {
-		workUnits := tx.Bucket(bucketWorkUnits)
 		emit := func(id []byte) (bool, error) {
-			raw := workUnits.Get(id)
-			if raw == nil {
-				return false, ErrTampered
-			}
-			var item ledger.ArchivedWorkUnit
-			if err := s.get(bucketWorkUnits, id, raw, &item); err != nil {
+			item, found, err := s.workUnitTx(tx, id)
+			if err != nil {
 				return false, err
 			}
-			if item.WorkUnit.ID != string(id) || query.ProjectID != "" && item.WorkUnit.ProjectID != query.ProjectID {
+			if !found || query.ProjectID != "" && item.WorkUnit.ProjectID != query.ProjectID {
 				return false, ErrTampered
 			}
 			if query.CohortStart != "" && (item.WorkUnit.PeriodID < query.CohortStart || item.WorkUnit.PeriodID > query.CohortEnd) {
