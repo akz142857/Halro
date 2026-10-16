@@ -411,6 +411,11 @@ type Record struct {
 	Offset     int64
 	Epoch      uint8
 	Event      Event
+	// PreviousHash is the chain head this frame links to: the hash of the
+	// history before it. It is zero for a frame written before the chain.
+	// It is read from the frame, not computed, so it is authenticated only as
+	// far as the walk that read it was.
+	PreviousHash [32]byte `json:"-"`
 }
 
 type Watermark struct {
@@ -481,27 +486,69 @@ type PendingLease struct {
 	Started     bool
 }
 
-type SettledAttempt struct {
-	Settlement       Event
-	SettlementDigest string
-	CostMicrosUSD    int64
-	CostKnown        bool
+// WorkUnitCost is what a Work Unit's settled attempts add up to. It is kept
+// as running totals because the totals are all anything reads: holding every
+// settled attempt to add them up again on each read is what made the state
+// grow with the history.
+//
+// Overflowed records that a total passed the int64 range. The totals are
+// derived, so an overflow is reported to whoever reads them and never refuses
+// the settlement that caused it.
+type WorkUnitCost struct {
+	KnownMicrosUSD     int64
+	EstimatedMicrosUSD int64
+	UnknownAttempts    int64
+	Overflowed         bool
 }
 
+func (c *WorkUnitCost) add(event Event) {
+	var err error
+	if event.CommittedMicrosUSD == nil {
+		c.UnknownAttempts, err = checkedAdd(c.UnknownAttempts, 1)
+	} else {
+		c.KnownMicrosUSD, err = checkedAdd(c.KnownMicrosUSD, *event.CommittedMicrosUSD)
+		if err == nil && event.CostEstimated {
+			c.EstimatedMicrosUSD, err = checkedAdd(c.EstimatedMicrosUSD, *event.CommittedMicrosUSD)
+		}
+	}
+	if err != nil {
+		c.Overflowed = true
+	}
+}
+
+// OutcomePinCommitFailed settles an attempt whose price pin could not be
+// committed after its lease was written. The pin is left prepared, and the
+// startup that resolves it needs the lease, so a settlement with this outcome
+// keeps its lease in the state. It happens only when the metadata store fails a
+// write, so the leases it keeps stay few.
+const OutcomePinCommitFailed = "pin_commit_failed"
+
+// recentEventDigests is how many event digests the state remembers. The only
+// event written twice is a deterministic recovery settlement, and both copies
+// come from one recovery pass at startup, a few records apart; a window this
+// size covers that many times over without growing with the history.
+const recentEventDigests = 1 << 16
+
 type State struct {
-	mu                    sync.RWMutex
-	balances              map[BalanceKey]Balance
-	reservations          map[string]attemptReservation
-	leaseRecords          map[string]Record
-	settled               map[string]SettledAttempt
+	mu           sync.RWMutex
+	balances     map[BalanceKey]Balance
+	reservations map[string]attemptReservation
+	// leaseRecords holds the lease of each attempt still in flight; a
+	// settlement deletes it, except one settled as OutcomePinCommitFailed.
+	leaseRecords map[string]Record
+	// eventDigests remembers the digests of the most recent events, in the
+	// order eventOrder records, so a duplicate is recognised without keeping
+	// every event ever written.
 	eventDigests          map[string][32]byte
+	eventOrder            []string
+	eventNext             int
 	workUnits             map[string]domain.WorkUnit
 	runs                  map[string]domain.Run
 	requestRuns           map[string]requestAttribution
 	runsByWorkUnit        map[string][]string
 	activeByWorkUnit      map[string]map[string]struct{}
 	pendingByWorkUnit     map[string]map[string]struct{}
-	settledByWorkUnit     map[string][]string
+	workUnitCosts         map[string]WorkUnitCost
 	governanceIdempotency map[string]GovernanceIdempotency
 	watermark             Watermark
 }
@@ -525,7 +572,6 @@ func NewState() *State {
 		balances:              make(map[BalanceKey]Balance),
 		reservations:          make(map[string]attemptReservation),
 		leaseRecords:          make(map[string]Record),
-		settled:               make(map[string]SettledAttempt),
 		eventDigests:          make(map[string][32]byte),
 		workUnits:             make(map[string]domain.WorkUnit),
 		runs:                  make(map[string]domain.Run),
@@ -533,7 +579,7 @@ func NewState() *State {
 		runsByWorkUnit:        make(map[string][]string),
 		activeByWorkUnit:      make(map[string]map[string]struct{}),
 		pendingByWorkUnit:     make(map[string]map[string]struct{}),
-		settledByWorkUnit:     make(map[string][]string),
+		workUnitCosts:         make(map[string]WorkUnitCost),
 		governanceIdempotency: make(map[string]GovernanceIdempotency),
 	}
 }
@@ -575,7 +621,7 @@ func (s *State) Apply(record Record) error {
 			if existing.RequestFingerprint != event.RequestFingerprint {
 				return errors.New("idempotency key conflicts with another governance request")
 			}
-			s.eventDigests[event.EventID] = digest
+			s.rememberDigest(event.EventID, digest)
 			s.watermark = Watermark{Generation: record.Generation, Offset: record.Offset, Sequence: record.Sequence}
 			return nil
 		}
@@ -643,13 +689,7 @@ func (s *State) Apply(record Record) error {
 		if !exists || workUnit.ProjectID != event.ProjectID || workUnit.Status != domain.WorkUnitOpen {
 			return fmt.Errorf("work unit %q is not open in project", event.WorkUnitID)
 		}
-		count := 0
-		for _, existing := range s.runs {
-			if existing.WorkUnitID == event.WorkUnitID {
-				count++
-			}
-		}
-		if count >= domain.MaxRunsPerWorkUnit {
+		if len(s.runsByWorkUnit[event.WorkUnitID]) >= domain.MaxRunsPerWorkUnit {
 			return errors.New("work unit run limit exceeded")
 		}
 		run := domain.Run{
@@ -678,11 +718,12 @@ func (s *State) Apply(record Record) error {
 		if event.ReservationMicrosUSD != nil {
 			amount = *event.ReservationMicrosUSD
 		}
+		// An attempt settled earlier has left the state, so reusing its id is
+		// not caught here. Attempt ids are 128 random bits and the WAL is
+		// chained under a MAC, so a reused one could only be a forgery, and a
+		// forgery does not get past the chain.
 		if _, exists := s.reservations[event.AttemptID]; exists {
 			return fmt.Errorf("attempt %q already has a reservation", event.AttemptID)
-		}
-		if _, exists := s.settled[event.AttemptID]; exists {
-			return fmt.Errorf("attempt %q is already settled", event.AttemptID)
 		}
 		if event.LeaseMode != LeaseModeUnknownAllowed {
 			balance.ReservedMicrosUSD, err = checkedAdd(balance.ReservedMicrosUSD, amount)
@@ -717,9 +758,6 @@ func (s *State) Apply(record Record) error {
 		reservation.Started = true
 		s.reservations[event.AttemptID] = reservation
 	case EventAttemptSettled:
-		if _, exists := s.settled[event.AttemptID]; exists {
-			return fmt.Errorf("attempt %q is already settled", event.AttemptID)
-		}
 		reservation, exists := s.reservations[event.AttemptID]
 		if !exists {
 			return fmt.Errorf("attempt %q has no reservation", event.AttemptID)
@@ -795,20 +833,17 @@ func (s *State) Apply(record Record) error {
 			s.runs[event.RunID] = run
 		}
 		delete(s.reservations, event.AttemptID)
+		if event.Outcome != OutcomePinCommitFailed {
+			delete(s.leaseRecords, event.AttemptID)
+		}
 		if event.WorkUnitID != "" {
 			delete(s.pendingByWorkUnit[event.WorkUnitID], event.AttemptID)
 			if len(s.pendingByWorkUnit[event.WorkUnitID]) == 0 {
 				delete(s.pendingByWorkUnit, event.WorkUnitID)
 			}
-		}
-		settlementDigest := "sha256:" + fmt.Sprintf("%x", digest)
-		base := int64(0)
-		if event.CommittedMicrosUSD != nil {
-			base = *event.CommittedMicrosUSD
-		}
-		s.settled[event.AttemptID] = SettledAttempt{Settlement: event, SettlementDigest: settlementDigest, CostMicrosUSD: base, CostKnown: event.CommittedMicrosUSD != nil}
-		if event.WorkUnitID != "" {
-			s.settledByWorkUnit[event.WorkUnitID] = append(s.settledByWorkUnit[event.WorkUnitID], event.AttemptID)
+			cost := s.workUnitCosts[event.WorkUnitID]
+			cost.add(event)
+			s.workUnitCosts[event.WorkUnitID] = cost
 		}
 	case EventRequestFinalized:
 		if attribution, ok := s.requestRuns[event.RequestID]; ok {
@@ -827,13 +862,26 @@ func (s *State) Apply(record Record) error {
 			RequestFingerprint: event.RequestFingerprint, WorkUnitID: event.WorkUnitID, RunID: event.RunID,
 		}
 	}
-	s.eventDigests[event.EventID] = digest
+	s.rememberDigest(event.EventID, digest)
 	s.watermark = Watermark{
 		Generation: record.Generation,
 		Offset:     record.Offset,
 		Sequence:   record.Sequence,
 	}
 	return nil
+}
+
+// rememberDigest records an event's digest, forgetting the oldest once the
+// window is full.
+func (s *State) rememberDigest(eventID string, digest [32]byte) {
+	if len(s.eventOrder) < recentEventDigests {
+		s.eventOrder = append(s.eventOrder, eventID)
+	} else {
+		delete(s.eventDigests, s.eventOrder[s.eventNext])
+		s.eventOrder[s.eventNext] = eventID
+		s.eventNext = (s.eventNext + 1) % recentEventDigests
+	}
+	s.eventDigests[eventID] = digest
 }
 
 var ErrGovernanceCohortLimit = errors.New("governance cohort work unit limit exceeded")
@@ -847,7 +895,7 @@ type GovernanceSnapshotOptions struct {
 	CohortEnd         string
 	MaxWorkUnits      int
 	IncludeRuns       bool
-	IncludeAttempts   bool
+	IncludeCosts      bool
 }
 
 // GovernanceSnapshot captures every accounting input used by one governance
@@ -856,7 +904,7 @@ type GovernanceSnapshotOptions struct {
 type GovernanceSnapshot struct {
 	WorkUnits        []domain.WorkUnit
 	Runs             []domain.Run
-	SettledAttempts  []SettledAttempt
+	Costs            map[string]WorkUnitCost
 	InflightWorkUnit map[string]bool
 	Watermark        Watermark
 }
@@ -864,7 +912,7 @@ type GovernanceSnapshot struct {
 func (s *State) GovernanceSnapshot(ctx context.Context, options GovernanceSnapshotOptions) (GovernanceSnapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	result := GovernanceSnapshot{InflightWorkUnit: make(map[string]bool), Watermark: s.watermark}
+	result := GovernanceSnapshot{InflightWorkUnit: make(map[string]bool), Costs: make(map[string]WorkUnitCost), Watermark: s.watermark}
 	selected := make(map[string]struct{})
 	for _, workUnit := range s.workUnits {
 		if err := ctx.Err(); err != nil {
@@ -910,9 +958,9 @@ func (s *State) GovernanceSnapshot(ctx context.Context, options GovernanceSnapsh
 		if len(s.activeByWorkUnit[workUnitID]) > 0 || len(s.pendingByWorkUnit[workUnitID]) > 0 {
 			result.InflightWorkUnit[workUnitID] = true
 		}
-		if options.IncludeAttempts {
-			for _, attemptID := range s.settledByWorkUnit[workUnitID] {
-				result.SettledAttempts = append(result.SettledAttempts, s.settled[attemptID])
+		if options.IncludeCosts {
+			if cost, ok := s.workUnitCosts[workUnitID]; ok {
+				result.Costs[workUnitID] = cost
 			}
 		}
 	}
@@ -985,6 +1033,45 @@ func (s *State) Balance(projectID, periodID string, timezoneVersion uint64) Bala
 	return s.balances[BalanceKey{ProjectID: projectID, PeriodID: periodID, TimezoneVersion: timezoneVersion}]
 }
 
+// PeriodKey names one accounting day under one timezone generation, across
+// every project.
+type PeriodKey struct {
+	PeriodID        string
+	TimezoneVersion uint64
+}
+
+// PeriodTotals adds the balances up per accounting day across projects, and
+// reports the days some lease is still open against: a settlement may yet land
+// in those, so their totals are not final.
+func (s *State) PeriodTotals() (totals map[PeriodKey]Balance, open map[PeriodKey]bool, watermark Watermark, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	totals, open = make(map[PeriodKey]Balance), make(map[PeriodKey]bool)
+	for key, balance := range s.balances {
+		period := PeriodKey{PeriodID: key.PeriodID, TimezoneVersion: key.TimezoneVersion}
+		total := totals[period]
+		for _, pair := range []struct {
+			into  *int64
+			value int64
+		}{
+			{&total.ReservedMicrosUSD, balance.ReservedMicrosUSD},
+			{&total.CommittedMicrosUSD, balance.CommittedMicrosUSD},
+			{&total.InputTokens, balance.InputTokens},
+			{&total.OutputTokens, balance.OutputTokens},
+			{&total.UnknownAttempts, balance.UnknownAttempts},
+		} {
+			if *pair.into, err = checkedAdd(*pair.into, pair.value); err != nil {
+				return nil, nil, Watermark{}, err
+			}
+		}
+		totals[period] = total
+	}
+	for _, reservation := range s.reservations {
+		open[PeriodKey{PeriodID: reservation.Key.PeriodID, TimezoneVersion: reservation.Key.TimezoneVersion}] = true
+	}
+	return totals, open, s.watermark, nil
+}
+
 func (s *State) PendingReservations() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1017,28 +1104,14 @@ func (s *State) PendingLeaseStats(now time.Time) (int, time.Duration) {
 	return len(s.reservations), now.Sub(oldest)
 }
 
+// AccountingLease is the lease of an attempt still in flight, or of one settled
+// as OutcomePinCommitFailed. Any other settled attempt's lease has left the
+// state.
 func (s *State) AccountingLease(attemptID string) (Record, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	record, ok := s.leaseRecords[attemptID]
 	return record, ok
-}
-
-func (s *State) SettledAttempt(attemptID string) (SettledAttempt, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	value, ok := s.settled[attemptID]
-	return value, ok
-}
-
-func (s *State) SettledAttempts() []SettledAttempt {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	items := make([]SettledAttempt, 0, len(s.settled))
-	for _, item := range s.settled {
-		items = append(items, item)
-	}
-	return items
 }
 
 func (s *State) Watermark() Watermark {

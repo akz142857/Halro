@@ -68,15 +68,25 @@ type memoryBaselineLevel struct {
 }
 
 type memoryBaselineResult struct {
-	History        int64                 `json:"history_requests"`
-	FillPerSecond  float64               `json:"fill_requests_per_second"`
-	OpenSeconds    float64               `json:"open_seconds"`
-	HeapAllocBytes uint64                `json:"heap_alloc_bytes"`
-	HeapInuseBytes uint64                `json:"heap_inuse_bytes"`
-	SysBytes       uint64                `json:"sys_bytes"`
-	LedgerBytes    int64                 `json:"ledger_bytes"`
-	DataDirBytes   int64                 `json:"data_dir_bytes"`
-	Levels         []memoryBaselineLevel `json:"levels"`
+	History       int64   `json:"history_requests"`
+	FillPerSecond float64 `json:"fill_requests_per_second"`
+	OpenSeconds   float64 `json:"open_seconds"`
+	// OpenFromSnapshot reports that the timed start resumed from the
+	// accounting state snapshot rather than replaying the whole Ledger.
+	OpenFromSnapshot bool `json:"open_from_snapshot"`
+	// ActiveLedgerBytes is the generation Open reads end to end.
+	ActiveLedgerBytes int64 `json:"active_ledger_bytes"`
+	// RebuildSeconds and RebuildHeapAllocBytes time a start with the
+	// snapshot removed — the first start after an upgrade, or after a
+	// snapshot is set aside — and the heap it leaves.
+	RebuildSeconds        float64               `json:"rebuild_seconds"`
+	RebuildHeapAllocBytes uint64                `json:"rebuild_heap_alloc_bytes"`
+	HeapAllocBytes        uint64                `json:"heap_alloc_bytes"`
+	HeapInuseBytes        uint64                `json:"heap_inuse_bytes"`
+	SysBytes              uint64                `json:"sys_bytes"`
+	LedgerBytes           int64                 `json:"ledger_bytes"`
+	DataDirBytes          int64                 `json:"data_dir_bytes"`
+	Levels                []memoryBaselineLevel `json:"levels"`
 }
 
 func TestMemoryBaseline(t *testing.T) {
@@ -154,6 +164,7 @@ func TestMemoryBaseline(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reopen at %d: %v", result.History, err)
 		}
+		result.OpenFromSnapshot, result.ActiveLedgerBytes = r.accountingState.fromSnapshot, r.ledger.ActiveBytes()
 
 		runtime.GC()
 		runtime.GC()
@@ -161,7 +172,7 @@ func TestMemoryBaseline(t *testing.T) {
 		runtime.ReadMemStats(&memory)
 		result.HeapAllocBytes, result.HeapInuseBytes, result.SysBytes = memory.HeapAlloc, memory.HeapInuse, memory.Sys
 		memoryBaselineHeapProfile(t, filepath.Join(out, fmt.Sprintf("heap-%d.pb.gz", result.History)))
-		result.LedgerBytes = memoryBaselineDirBytes(cfg.LedgerPath())
+		result.LedgerBytes = memoryBaselineDirBytes(filepath.Dir(cfg.LedgerPath()))
 		result.DataDirBytes = memoryBaselineDirBytes(cfg.Storage.DataDir)
 
 		for _, concurrency := range []int{1, 16, 64} {
@@ -215,6 +226,28 @@ func TestMemoryBaseline(t *testing.T) {
 			result.Levels = append(result.Levels, level)
 		}
 
+		// The rebuild comes last, so the windows above ran on the start that
+		// resumed from the snapshot.
+		if err := r.Close(); err != nil {
+			t.Fatalf("close before rebuild at %d: %v", result.History, err)
+		}
+		if err := os.Remove(cfg.LedgerStatePath()); err != nil {
+			t.Fatalf("remove snapshot at %d: %v", result.History, err)
+		}
+		started = time.Now()
+		r, err = Open(ctx, cfg, logger)
+		result.RebuildSeconds = time.Since(started).Seconds()
+		if err != nil {
+			t.Fatalf("rebuild at %d: %v", result.History, err)
+		}
+		if r.accountingState.fromSnapshot {
+			t.Fatalf("rebuild at %d resumed from a snapshot", result.History)
+		}
+		runtime.GC()
+		runtime.GC()
+		runtime.ReadMemStats(&memory)
+		result.RebuildHeapAllocBytes = memory.HeapAlloc
+
 		line, err := json.Marshal(result)
 		if err != nil {
 			t.Fatal(err)
@@ -222,6 +255,8 @@ func TestMemoryBaseline(t *testing.T) {
 		if _, err := fmt.Fprintf(results, "%s\n", line); err != nil {
 			t.Fatal(err)
 		}
+		t.Logf("history=%d snapshot=%t active=%dMiB rebuild=%.2fs rebuild-heap=%.1fMiB", result.History, result.OpenFromSnapshot,
+			result.ActiveLedgerBytes>>20, result.RebuildSeconds, float64(result.RebuildHeapAllocBytes)/(1<<20))
 		t.Logf("history=%d heap=%.1fMiB open=%.2fs fill=%.0f/s c1=%.0f/s c16=%.0f/s c64=%.0f/s p99(c64)=%.1fms lag(c64)=%.2fs commit(c1)=%.1fms pages(c1)=%.0f free=%d file=%dMiB",
 			result.History, float64(result.HeapAllocBytes)/(1<<20), result.OpenSeconds, result.FillPerSecond,
 			result.Levels[0].Throughput, result.Levels[1].Throughput, result.Levels[2].Throughput, result.Levels[2].P99Ms,

@@ -13,28 +13,78 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-func (s *Store) ValidateDeploymentPriceReferences(state *ledger.State) error {
-	if state == nil {
-		return errors.New("Ledger state is required")
+// PriceReferenceCheck validates the pricing references against the Ledger as
+// the Ledger is replayed, one record at a time, so the check needs neither
+// every settled attempt nor every lease in memory. Observe every replayed
+// record, then Finish.
+//
+// Each observation reads in its own short transaction: a backup may run beside
+// a live instance, and one read transaction held across a whole replay would
+// stop the metadata file from growing under it.
+type PriceReferenceCheck struct {
+	store   *Store
+	matched int
+}
+
+func (s *Store) BeginPriceReferenceCheck() *PriceReferenceCheck {
+	return &PriceReferenceCheck{store: s}
+}
+
+// Observe checks one replayed record: a lease or settlement priced from a
+// versioned price must match that price, and a lease that a price pin names
+// must be the one the pin recorded.
+func (c *PriceReferenceCheck) Observe(record ledger.Record) error {
+	event := record.Event
+	if event.Kind != ledger.EventReservationCreated && event.Kind != ledger.EventAttemptSettled {
+		return nil
 	}
-	return s.db.View(func(tx *bbolt.Tx) error {
+	return c.store.db.View(func(tx *bbolt.Tx) error {
 		prices := tx.Bucket(bucketDeploymentPriceVersions)
-		for _, pending := range state.PendingLeases() {
-			snapshot := pending.Reservation.PriceSnapshot
-			if snapshot != nil && snapshot.PriceEvidenceStatus == domain.PriceEvidenceVersioned {
-				if err := validateSnapshotAgainstPrice(prices, *snapshot); err != nil {
-					return fmt.Errorf("pending lease %q: %w", pending.Reservation.AttemptID, err)
-				}
+		snapshot := event.PriceSnapshot
+		if snapshot != nil && snapshot.PriceEvidenceStatus == domain.PriceEvidenceVersioned {
+			if err := validateSnapshotAgainstPrice(prices, *snapshot); err != nil {
+				return fmt.Errorf("attempt %q: %w", event.AttemptID, err)
 			}
 		}
-		for _, settled := range state.SettledAttempts() {
-			snapshot := settled.Settlement.PriceSnapshot
-			if snapshot != nil && snapshot.PriceEvidenceStatus == domain.PriceEvidenceVersioned {
-				if err := validateSnapshotAgainstPrice(prices, *snapshot); err != nil {
-					return fmt.Errorf("settled attempt %q: %w", settled.Settlement.AttemptID, err)
-				}
-			}
+		if event.Kind != ledger.EventReservationCreated {
+			return nil
 		}
+		raw := tx.Bucket(bucketDeploymentPricePins).Get([]byte(event.AttemptID))
+		if raw == nil {
+			return nil
+		}
+		var pin domain.PricePinIntent
+		if err := json.Unmarshal(raw, &pin); err != nil {
+			return err
+		}
+		if err := pin.Validate(); err != nil {
+			return err
+		}
+		if pin.State != domain.PricePinCommitted {
+			return fmt.Errorf("prepared price pin %q is unresolved", pin.AttemptID)
+		}
+		if snapshot == nil {
+			return fmt.Errorf("price pin %q has no authoritative Ledger lease", pin.AttemptID)
+		}
+		digest, err := snapshot.Digest()
+		if err != nil || digest != pin.SnapshotSHA256 || record.Sequence != pin.LedgerSequence {
+			return fmt.Errorf("price pin %q conflicts with Ledger", pin.AttemptID)
+		}
+		if prices.Get([]byte(pin.PriceVersionID)) == nil {
+			return fmt.Errorf("price pin %q references missing price", pin.AttemptID)
+		}
+		c.matched++
+		return nil
+	})
+}
+
+// Finish checks what only the whole replay can show: every committed pin met
+// its lease, none is left prepared, and the pricing high-water marks name
+// prices that exist.
+func (c *PriceReferenceCheck) Finish() error {
+	return c.store.db.View(func(tx *bbolt.Tx) error {
+		prices := tx.Bucket(bucketDeploymentPriceVersions)
+		committed := 0
 		if err := tx.Bucket(bucketDeploymentPricePins).ForEach(func(_, raw []byte) error {
 			var pin domain.PricePinIntent
 			if err := json.Unmarshal(raw, &pin); err != nil {
@@ -46,20 +96,13 @@ func (s *Store) ValidateDeploymentPriceReferences(state *ledger.State) error {
 			if pin.State != domain.PricePinCommitted {
 				return fmt.Errorf("prepared price pin %q is unresolved", pin.AttemptID)
 			}
-			lease, ok := state.AccountingLease(pin.AttemptID)
-			if !ok || lease.Event.PriceSnapshot == nil {
-				return fmt.Errorf("price pin %q has no authoritative Ledger lease", pin.AttemptID)
-			}
-			digest, err := lease.Event.PriceSnapshot.Digest()
-			if err != nil || digest != pin.SnapshotSHA256 || lease.Sequence != pin.LedgerSequence {
-				return fmt.Errorf("price pin %q conflicts with Ledger", pin.AttemptID)
-			}
-			if prices.Get([]byte(pin.PriceVersionID)) == nil {
-				return fmt.Errorf("price pin %q references missing price", pin.AttemptID)
-			}
+			committed++
 			return nil
 		}); err != nil {
 			return err
+		}
+		if committed != c.matched {
+			return fmt.Errorf("%d committed price pins have no authoritative Ledger lease", committed-c.matched)
 		}
 		return tx.Bucket(bucketDeploymentPricingHighWater).ForEach(func(_, raw []byte) error {
 			var high domain.DeploymentPricingHighWater

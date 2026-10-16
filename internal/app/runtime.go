@@ -57,6 +57,9 @@ type Runtime struct {
 	status     *ledger.Status
 	governance governanceRuntime
 	vault      *vault.Vault
+	// accountingState is the accounting state snapshot writer and the
+	// reconciliation of the usage history against it.
+	accountingState accountingStateRuntime
 	// failureCapture holds the payloads of failed requests. Nil when the
 	// operator has not switched it on, which is the default; every read path
 	// treats nil as "the feature is off" rather than as an error.
@@ -353,14 +356,22 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		secretVault.Close()
 		return fail(err)
 	}
-	ledgerState := ledger.NewState()
-	ledgerHead, err := ledgerLog.Replay(ledger.Watermark{}, ledgerState.Apply)
+	ledgerStateKey, err := vault.DeriveLedgerStateMACKey(ledgerKey)
+	if err != nil {
+		ledgerLog.Close()
+		metadata.Close()
+		secretVault.Close()
+		return fail(err)
+	}
+	openedState, err := openLedgerState(ledgerLog, cfg.LedgerStatePath(), ledgerStateKey, logger)
 	if err != nil {
 		ledgerLog.Close()
 		metadata.Close()
 		secretVault.Close()
 		return fail(fmt.Errorf("replay ledger: %w", err))
 	}
+	ledgerState, ledgerHead := openedState.state, openedState.head
+	logger.Info("accounting state opened", "from_snapshot", openedState.fromSnapshot, "head_sequence", ledgerHead.Sequence)
 	governanceKey, err := vault.DeriveGovernanceHMACKey(ledgerKey)
 	if err != nil {
 		ledgerLog.Close()
@@ -453,7 +464,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		return fail(fmt.Errorf("create usage collector: %w", err))
 	}
 	accounting.AddObserver(usageCollector.Observe)
-	if err := metadata.RecoverDeploymentPricePins(ctx, ledgerState); err != nil {
+	if err := metadata.RecoverDeploymentPricePins(ctx, openedState.lease, openedState.checkedThrough); err != nil {
 		ledgerLog.Close()
 		metadata.Close()
 		secretVault.Close()
@@ -745,6 +756,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		store:               metadata,
 		ledger:              ledgerLog,
 		state:               ledgerState,
+		accountingState:     accountingStateRuntime{fromSnapshot: openedState.fromSnapshot, snapshots: ledgerStateSnapshots{key: ledgerStateKey}},
 		status:              accountingStatus,
 		governance:          governanceRuntime{log: governanceLog, manager: governanceManager},
 		vault:               secretVault,
@@ -938,10 +950,14 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	runtime.backgroundCancel = backgroundCancel
 	runtime.alerts.SetObserver(runtime.auditAlertDelivery)
 	runtime.alerts.Start()
-	runtime.backgroundWait.Add(11)
+	runtime.backgroundWait.Add(12)
 	go func() {
 		defer runtime.backgroundWait.Done()
 		runtime.usageCollector.Run(backgroundContext)
+	}()
+	go func() {
+		defer runtime.backgroundWait.Done()
+		runtime.runLedgerStateSnapshots(backgroundContext)
 	}()
 	// The index resumes from its own watermark. Replaying the suffix happens
 	// here rather than on the start path, so a long gap — the first start
@@ -1174,12 +1190,13 @@ func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 			// gone after the window, and a promise kept by a goroutine nobody
 			// notices stopping is not one.
 			r.purgeFailureCaptures()
-			// Sealing rides the same tick and comes last, after both
-			// derivatives have advanced: the roll is bounded by size alone, but
-			// compaction is bounded by how far the export and the checkpoint
-			// have got, and reading those before advancing them would hold a
-			// generation uncompressed for an extra interval for no reason.
-			r.sealLedgerGeneration()
+			r.reconcileUsageHistory(time.Now())
+			// Compaction rides the same tick and comes last, after both
+			// derivatives have advanced: it is bounded by how far the export
+			// and the history have got, and reading those before advancing
+			// them would hold a generation uncompressed for an extra interval
+			// for no reason. The roll itself is bounded by size alone and is
+			// checked every few seconds beside the state snapshot.
 			r.compactLedgerSegments()
 		case <-ctx.Done():
 			r.saveTokenGuardCheckpoint()
@@ -1486,6 +1503,9 @@ func (r *Runtime) Close() error {
 		// written goes to the index now, so the next start resumes from here
 		// rather than replaying it.
 		historyErr := r.usage.Flush()
+		// Accounting has stopped with the listeners, so the state is final:
+		// the next start resumes from here rather than from the last tick.
+		r.writeLedgerStateSnapshot()
 		r.alerts.Close()
 		captureCtx, cancelCapture := context.WithTimeout(context.Background(), r.config.Server.ShutdownTimeout.Value())
 		captureErr := r.gatewayService.ShutdownFailureCapture(captureCtx)

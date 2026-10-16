@@ -157,9 +157,19 @@ func TestGatewayCommitsPricePinBeforeProviderAttempt(t *testing.T) {
 		priceStore.committed.AttemptID != priceStore.prepared.AttemptID {
 		t.Fatalf("provider calls=%d prepared=%#v committed=%#v", f.adapter.calls, priceStore.prepared, priceStore.committed)
 	}
-	lease, ok := f.state.AccountingLease(priceStore.prepared.AttemptID)
-	if !ok || !domain.ValidSHA256Label(lease.Event.TokenGuardPricingViewDigest) || lease.Event.RequestID != "req_developer_debug" {
-		t.Fatalf("accounting lease pricing view digest=%q exists=%t", lease.Event.TokenGuardPricingViewDigest, ok)
+	// The attempt has settled, so its lease is read from the Ledger.
+	var lease ledger.Event
+	ok := false
+	if _, err := f.log.Replay(ledger.Watermark{}, func(record ledger.Record) error {
+		if record.Event.Kind == ledger.EventReservationCreated && record.Event.AttemptID == priceStore.prepared.AttemptID {
+			lease, ok = record.Event, true
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !domain.ValidSHA256Label(lease.TokenGuardPricingViewDigest) || lease.RequestID != "req_developer_debug" {
+		t.Fatalf("accounting lease pricing view digest=%q exists=%t", lease.TokenGuardPricingViewDigest, ok)
 	}
 }
 
@@ -189,12 +199,17 @@ func TestPricePinCommitFailureSettlementNamesTheAccountingPhase(t *testing.T) {
 	if _, err := service.Chat(context.Background(), f.plaintext, chatRequest()); err == nil {
 		t.Fatal("pin commit failure answered successfully")
 	}
-	settled, ok := f.state.SettledAttempt(priceStore.prepared.AttemptID)
-	if !ok {
+	var settled *ledger.Event
+	for _, event := range settlementsInLog(t, f.log) {
+		if event.AttemptID == priceStore.prepared.AttemptID {
+			settled = &event
+		}
+	}
+	if settled == nil {
 		t.Fatal("pin commit failure left no durable settlement")
 	}
-	if settled.Settlement.Outcome != "pin_commit_failed" || settled.Settlement.FailurePhase != phaseAccounting {
-		t.Fatalf("pin failure settlement=%#v", settled.Settlement)
+	if settled.Outcome != "pin_commit_failed" || settled.FailurePhase != phaseAccounting {
+		t.Fatalf("pin failure settlement=%#v", *settled)
 	}
 	if f.adapter.calls != 0 {
 		t.Fatalf("provider was called %d times after pin commit failed", f.adapter.calls)
@@ -437,6 +452,22 @@ func (a *fakeAdapter) Embed(_ context.Context, call provider.EmbeddingCall) (ope
 		return openaiapi.EmbeddingResponse{}, errors.New("provider model was not mapped")
 	}
 	return a.embeddingResponse, a.err
+}
+
+// settlementsInLog reads the settlements back from the Ledger: the state keeps
+// no settled attempts.
+func settlementsInLog(t *testing.T, log *ledger.Log) []ledger.Event {
+	t.Helper()
+	var settled []ledger.Event
+	if _, err := log.Replay(ledger.Watermark{}, func(record ledger.Record) error {
+		if record.Event.Kind == ledger.EventAttemptSettled {
+			settled = append(settled, record.Event)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return settled
 }
 
 type fixture struct {

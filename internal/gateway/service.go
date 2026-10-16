@@ -736,7 +736,7 @@ func (s *Service) startAttempt(
 			pricingUnlock()
 			providerLease.Release()
 			gateLease.Abandon()
-			cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "pin_commit_failed", FailurePhase: phaseAccounting})
+			cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: ledger.OutcomePinCommitFailed, FailurePhase: phaseAccounting})
 			finalizeErr := run.finalize("accounting_error")
 			return nil, gatewayError("accounting_unavailable", "accounting price pin could not be committed", 503, errors.Join(err, cleanupErr, finalizeErr))
 		}

@@ -70,11 +70,9 @@ func Default() Config {
 		},
 		Ledger: Ledger{
 			Seal: LedgerSeal{
+				Enabled:        true,
 				MaxActiveBytes: DefaultLedgerSealMaxActiveBytes,
-				// Off, but pre-answered: an operator who turns sealing on in
-				// the shipped template gets the compression that is the point
-				// of sealing, rather than a second switch to discover.
-				Compress: true,
+				Compress:       true,
 			},
 		},
 		Gateway: Gateway{

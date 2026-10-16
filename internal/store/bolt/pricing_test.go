@@ -409,7 +409,7 @@ func TestPreparedPricePinRecoveryUsesLedgerSnapshotOrDeletesOrphan(t *testing.T)
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecoverDeploymentPricePins(ctx, state); err != nil {
+	if err := store.RecoverDeploymentPricePins(ctx, state.AccountingLease, state.Watermark().Sequence); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.db.View(func(tx *bbolt.Tx) error {
@@ -463,7 +463,7 @@ func TestRestoreIncoherentPricingHighWaterIsPersistentlyQuarantined(t *testing.T
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecoverDeploymentPricePins(ctx, ledger.NewState()); err != nil {
+	if err := store.RecoverDeploymentPricePins(ctx, ledger.NewState().AccountingLease, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.PricingReadiness(ctx); !errors.Is(err, ErrPricingQuarantined) {
