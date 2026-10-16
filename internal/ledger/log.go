@@ -1126,7 +1126,7 @@ func scan(file io.ReadSeeker, generation uint64, fromOffset int64, initialSequen
 			verifier.offset = nextOffset
 		}
 		if visit != nil {
-			if err := visit(Record{Generation: generation, Sequence: sequence, Offset: nextOffset, Epoch: epoch, Event: event}); err != nil {
+			if err := visit(Record{Generation: generation, Sequence: sequence, Offset: nextOffset, Epoch: epoch, Event: event, PreviousHash: previousHash}); err != nil {
 				return Watermark{}, false, visitError{err}
 			}
 		}

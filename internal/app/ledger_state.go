@@ -74,10 +74,10 @@ func (o openedLedgerState) lease(attemptID string) (ledger.Record, bool) {
 // openLedgerState rebuilds the accounting state, from the snapshot at path
 // when there is a usable one and from the first frame otherwise.
 func openLedgerState(log *ledger.Log, path string, key []byte, logger *slog.Logger) (openedLedgerState, error) {
-	snapshot, err := ledger.ReadStateSnapshot(path, key)
+	snapshot, chain, err := ledger.ReadStateSnapshot(path, key)
 	switch {
 	case err == nil:
-		opened, resumeErr := resumeLedgerState(log, snapshot)
+		opened, resumeErr := resumeLedgerState(log, snapshot, chain)
 		if resumeErr == nil {
 			return opened, nil
 		}
@@ -108,11 +108,27 @@ func openLedgerState(log *ledger.Log, path string, key []byte, logger *slog.Logg
 // at that position must end exactly where the snapshot says. The active
 // generation was authenticated end to end when the Ledger opened, so a
 // snapshot in it resumes at its own offset.
-func resumeLedgerState(log *ledger.Log, state *ledger.State) (openedLedgerState, error) {
+//
+// Positions alone do not tie the snapshot to this Ledger: a copy written
+// under the same key that went another way can be the same length, frame for
+// frame. The chain head the snapshot carries does. The frame after it must
+// link to it, or, when it is this Ledger's head, the head must be it.
+func resumeLedgerState(log *ledger.Log, state *ledger.State, chain ledger.StateSnapshotChain) (openedLedgerState, error) {
 	position := state.Watermark()
 	if position.Sequence == 0 {
 		return openedLedgerState{}, errors.New("snapshot is empty")
 	}
+	if chain.Sequence < position.Sequence || chain.Hash == ([32]byte{}) {
+		return openedLedgerState{}, errors.New("the snapshot carries no chain head covering its state")
+	}
+	chainHead, chainHash, chained := log.ChainHead()
+	switch {
+	case !chained || chain.Sequence > chainHead.Sequence:
+		return openedLedgerState{}, errors.New("the snapshot's chain head is ahead of the Ledger")
+	case chain.Sequence == chainHead.Sequence && chain.Hash != chainHash:
+		return openedLedgerState{}, errors.New("the snapshot's chain head is not this Ledger's")
+	}
+	linked := chain.Sequence == chainHead.Sequence
 	// The snapshot is authenticated, but it may still describe another copy
 	// of this Ledger — one restored over, or cut back. Neither its sequence nor
 	// its offset may lie past what the Ledger holds.
@@ -132,6 +148,12 @@ func resumeLedgerState(log *ledger.Log, state *ledger.State) (openedLedgerState,
 	}
 	opened := openedLedgerState{state: state, fromSnapshot: true, suffixLeases: map[string]ledger.Record{}, checkedThrough: position.Sequence}
 	head, err := log.Replay(from, func(record ledger.Record) error {
+		if record.Sequence == chain.Sequence+1 {
+			if record.PreviousHash != chain.Hash {
+				return errors.New("the snapshot's chain head is not this Ledger's")
+			}
+			linked = true
+		}
 		if record.Sequence <= position.Sequence {
 			if record.Sequence == position.Sequence {
 				if record.Generation != position.Generation || record.Offset != position.Offset {
@@ -158,6 +180,9 @@ func resumeLedgerState(log *ledger.Log, state *ledger.State) (openedLedgerState,
 	}
 	if !met || position.After(head) {
 		return openedLedgerState{}, errors.New("the snapshot is ahead of the Ledger")
+	}
+	if !linked {
+		return openedLedgerState{}, errors.New("the Ledger has no frame after the snapshot's chain head")
 	}
 	opened.head = head
 	return opened, nil
@@ -209,7 +234,7 @@ func (r *Runtime) writeLedgerStateSnapshot() {
 	if r.state.Watermark().Sequence == r.accountingState.snapshots.sequence.Load() {
 		return
 	}
-	watermark, size, err := ledger.WriteStateSnapshot(r.config.LedgerStatePath(), r.accountingState.snapshots.key, r.state)
+	watermark, size, err := ledger.WriteStateSnapshot(r.config.LedgerStatePath(), r.accountingState.snapshots.key, r.state, r.ledger)
 	if err != nil {
 		r.accountingState.snapshots.failures.Add(1)
 		r.logger.Warn("ledger state snapshot was not written", "error", err)

@@ -17,7 +17,7 @@ import (
 
 // StateSnapshotVersion is the format of a state snapshot. A snapshot of any
 // other version is not read: the state is rebuilt from the Ledger instead.
-const StateSnapshotVersion = 1
+const StateSnapshotVersion = 2
 
 var (
 	stateSnapshotMACLabel = []byte("halro:ledger-hot-state:v1\x00")
@@ -32,6 +32,7 @@ var (
 type stateSnapshot struct {
 	Version               int                     `json:"version"`
 	Watermark             Watermark               `json:"watermark"`
+	Chain                 StateSnapshotChain      `json:"chain"`
 	Balances              []snapshotBalance       `json:"balances"`
 	Reservations          []snapshotReservation   `json:"reservations"`
 	Leases                []Record                `json:"leases"`
@@ -44,6 +45,22 @@ type stateSnapshot struct {
 	PendingByWorkUnit     []snapshotMembers       `json:"pending_by_work_unit"`
 	WorkUnitCosts         []snapshotWorkUnitCost  `json:"work_unit_costs"`
 	GovernanceIdempotency []GovernanceIdempotency `json:"governance_idempotency"`
+}
+
+// StateSnapshotChain is the Ledger's chain head as the snapshot was written:
+// read after the state was copied, so it is at or past the state's own
+// position, and it commits to every frame the state was built from. It is what
+// binds a snapshot to one history. Two copies of a Ledger written under the
+// same key can agree on every offset and sequence up to the snapshot and still
+// hold different frames; their chains differ.
+type StateSnapshotChain struct {
+	Sequence uint64   `json:"sequence"`
+	Hash     [32]byte `json:"hash"`
+}
+
+// ChainHeadReader is the part of a Log a snapshot writer reads.
+type ChainHeadReader interface {
+	ChainHead() (Watermark, [32]byte, bool)
 }
 
 type snapshotBalance struct {
@@ -89,7 +106,21 @@ type snapshotWorkUnitCost struct {
 // lock; sorting and encoding happen after it is released, so appends wait
 // for no more than the copy.
 func (s *State) MarshalSnapshot() ([]byte, Watermark, error) {
+	return s.marshalSnapshot(nil)
+}
+
+// marshalSnapshot encodes the state with the chain head log reports after the
+// copy. The state only ever holds frames already committed, so a head read
+// after it is at or past it and commits to every one of them.
+func (s *State) marshalSnapshot(log ChainHeadReader) ([]byte, Watermark, error) {
 	snapshot := s.copySnapshot()
+	if log != nil {
+		head, hash, ok := log.ChainHead()
+		if !ok || head.Sequence < snapshot.Watermark.Sequence {
+			return nil, Watermark{}, errors.New("the Ledger has no chain head covering the state")
+		}
+		snapshot.Chain = StateSnapshotChain{Sequence: head.Sequence, Hash: hash}
+	}
 	sortSnapshot(&snapshot)
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
@@ -206,17 +237,22 @@ func sortSnapshot(snapshot *stateSnapshot) {
 
 // UnmarshalStateSnapshot rebuilds a state from MarshalSnapshot's encoding.
 func UnmarshalStateSnapshot(encoded []byte) (*State, error) {
+	state, _, err := unmarshalStateSnapshot(encoded)
+	return state, err
+}
+
+func unmarshalStateSnapshot(encoded []byte) (*State, StateSnapshotChain, error) {
 	var snapshot stateSnapshot
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&snapshot); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrStateSnapshotUnusable, err)
+		return nil, StateSnapshotChain{}, fmt.Errorf("%w: %v", ErrStateSnapshotUnusable, err)
 	}
 	if snapshot.Version != StateSnapshotVersion {
-		return nil, fmt.Errorf("%w: version %d", ErrStateSnapshotUnusable, snapshot.Version)
+		return nil, StateSnapshotChain{}, fmt.Errorf("%w: version %d", ErrStateSnapshotUnusable, snapshot.Version)
 	}
 	if len(snapshot.EventDigests) > recentEventDigests {
-		return nil, fmt.Errorf("%w: %d event digests", ErrStateSnapshotUnusable, len(snapshot.EventDigests))
+		return nil, StateSnapshotChain{}, fmt.Errorf("%w: %d event digests", ErrStateSnapshotUnusable, len(snapshot.EventDigests))
 	}
 	state := NewState()
 	state.watermark = snapshot.Watermark
@@ -256,7 +292,7 @@ func UnmarshalStateSnapshot(encoded []byte) (*State, error) {
 	for _, item := range snapshot.GovernanceIdempotency {
 		state.governanceIdempotency[governanceIdempotencyMapKey(item.ProjectID, item.Operation, item.KeyHash)] = item
 	}
-	return state, nil
+	return state, snapshot.Chain, nil
 }
 
 func setOf(members []string) map[string]struct{} {
@@ -270,12 +306,16 @@ func setOf(members []string) map[string]struct{} {
 // WriteStateSnapshot writes the state to path under a MAC: a temporary file,
 // fsynced, renamed over the old snapshot, and the directory fsynced, so a
 // crash leaves either the old snapshot or the new one. It returns the position
-// the snapshot describes and its size.
-func WriteStateSnapshot(path string, key []byte, state *State) (Watermark, int, error) {
+// the snapshot describes and its size. The snapshot carries log's chain head,
+// which a start checks the Ledger it resumes against.
+func WriteStateSnapshot(path string, key []byte, state *State, log ChainHeadReader) (Watermark, int, error) {
 	if len(key) != 32 {
 		return Watermark{}, 0, errors.New("ledger state snapshot key must be 32 bytes")
 	}
-	encoded, watermark, err := state.MarshalSnapshot()
+	if log == nil {
+		return Watermark{}, 0, errors.New("ledger state snapshot needs the Ledger's chain head")
+	}
+	encoded, watermark, err := state.marshalSnapshot(log)
 	if err != nil {
 		return Watermark{}, 0, err
 	}
@@ -306,19 +346,19 @@ func WriteStateSnapshot(path string, key []byte, state *State) (Watermark, int, 
 // ReadStateSnapshot reads and authenticates the snapshot at path. A missing
 // file is reported as os.ErrNotExist; anything present that cannot be trusted
 // is ErrStateSnapshotUnusable.
-func ReadStateSnapshot(path string, key []byte) (*State, error) {
+func ReadStateSnapshot(path string, key []byte) (*State, StateSnapshotChain, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, StateSnapshotChain{}, err
 	}
 	if len(raw) < sha256.Size {
-		return nil, fmt.Errorf("%w: truncated", ErrStateSnapshotUnusable)
+		return nil, StateSnapshotChain{}, fmt.Errorf("%w: truncated", ErrStateSnapshotUnusable)
 	}
 	encoded, tag := raw[:len(raw)-sha256.Size], raw[len(raw)-sha256.Size:]
 	if !hmac.Equal(tag, stateSnapshotMAC(key, encoded)) {
-		return nil, fmt.Errorf("%w: authentication failed", ErrStateSnapshotUnusable)
+		return nil, StateSnapshotChain{}, fmt.Errorf("%w: authentication failed", ErrStateSnapshotUnusable)
 	}
-	return UnmarshalStateSnapshot(encoded)
+	return unmarshalStateSnapshot(encoded)
 }
 
 func stateSnapshotMAC(key, encoded []byte) []byte {

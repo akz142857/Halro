@@ -411,6 +411,11 @@ type Record struct {
 	Offset     int64
 	Epoch      uint8
 	Event      Event
+	// PreviousHash is the chain head this frame links to: the hash of the
+	// history before it. It is zero for a frame written before the chain.
+	// It is read from the frame, not computed, so it is authenticated only as
+	// far as the walk that read it was.
+	PreviousHash [32]byte `json:"-"`
 }
 
 type Watermark struct {

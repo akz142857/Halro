@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Halro/internal/budget"
 	"github.com/akz142857/Halro/internal/ledger"
@@ -25,11 +26,13 @@ type accountingFixture struct {
 	state   *ledger.State
 	manager *budget.Manager
 	billed  int
+	// cost is what each billed attempt commits.
+	cost int64
 }
 
 func newAccountingFixture(t *testing.T) *accountingFixture {
 	t.Helper()
-	f := &accountingFixture{t: t, path: filepath.Join(t.TempDir(), "ledger", "ledger.wal")}
+	f := &accountingFixture{t: t, path: filepath.Join(t.TempDir(), "ledger", "ledger.wal"), cost: 7}
 	if err := os.MkdirAll(filepath.Dir(f.path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +50,10 @@ func (f *accountingFixture) open(state *ledger.State) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	manager, err := budget.New(log, state, resolver)
+	// A fixed clock keeps every event the same length, so two fixtures that
+	// bill alike lay out their frames alike.
+	fixed := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	manager, err := budget.NewWithOptions(log, state, resolver, budget.Options{Now: func() time.Time { return fixed }})
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -72,7 +78,7 @@ func (f *accountingFixture) bill(count int) {
 		if err := f.manager.MarkStarted(ctx, attempt); err != nil {
 			f.t.Fatal(err)
 		}
-		if err := f.manager.Settle(ctx, attempt, budget.Settlement{CommittedMicrosUSD: 7, ProviderInputTokens: 3, ProviderOutputTokens: 2, Outcome: "success"}); err != nil {
+		if err := f.manager.Settle(ctx, attempt, budget.Settlement{CommittedMicrosUSD: f.cost, ProviderInputTokens: 3, ProviderOutputTokens: 2, Outcome: "success"}); err != nil {
 			f.t.Fatal(err)
 		}
 		if err := f.manager.Finalize(ctx, request, "success"); err != nil {
@@ -120,7 +126,7 @@ func encodedLedgerState(t *testing.T, state *ledger.State) []byte {
 
 func (f *accountingFixture) snapshot(path string) {
 	f.t.Helper()
-	if _, _, err := ledger.WriteStateSnapshot(path, ledgerStateTestKey, f.state); err != nil {
+	if _, _, err := ledger.WriteStateSnapshot(path, ledgerStateTestKey, f.state, f.log); err != nil {
 		f.t.Fatal(err)
 	}
 }
@@ -189,6 +195,62 @@ func TestLedgerStateSnapshotAheadOfTheLedgerIsSetAside(t *testing.T) {
 	}
 }
 
+// A snapshot from a fork of this Ledger — a copy written under the same key
+// that went another way after a common prefix — is set aside even when the
+// fork is the same length, so its offsets and sequences all line up. Only the
+// chain says the histories differ.
+func TestLedgerStateSnapshotFromAForkIsSetAside(t *testing.T) {
+	ours := newAccountingFixture(t)
+	ours.bill(2)
+	if err := ours.log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fork := newAccountingFixture(t)
+	fork.log.Close()
+	raw, err := os.ReadFile(ours.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fork.path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ours.open(ours.state)
+	fork.open(ledger.NewState())
+	if _, err := fork.log.Replay(ledger.Watermark{}, fork.state.Apply); err != nil {
+		t.Fatal(err)
+	}
+	fork.billed = ours.billed
+
+	fork.cost = 8
+	fork.bill(3)
+	snapshotPath := filepath.Join(t.TempDir(), "state.snap")
+	fork.snapshot(snapshotPath)
+	forked := fork.state.Watermark()
+	fork.log.Close()
+
+	ours.bill(4)
+	var at ledger.Watermark
+	if _, err := ours.log.Replay(ledger.Watermark{}, func(record ledger.Record) error {
+		if record.Sequence == forked.Sequence {
+			at = ledger.Watermark{Generation: record.Generation, Offset: record.Offset, Sequence: record.Sequence}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if at != forked {
+		t.Fatalf("the fork does not line up with this Ledger: fork %#v, ours %#v", forked, at)
+	}
+	opened := ours.reopen(snapshotPath)
+	defer ours.log.Close()
+	if opened.fromSnapshot {
+		t.Fatal("a snapshot from a fork of the Ledger was used")
+	}
+	if !bytes.Equal(encodedLedgerState(t, opened.state), ours.replayed()) {
+		t.Fatal("the rebuilt state differs from a full replay")
+	}
+}
+
 // A damaged snapshot is set aside the same way.
 func TestLedgerStateDamagedSnapshotIsSetAside(t *testing.T) {
 	f := newAccountingFixture(t)
@@ -246,7 +308,7 @@ func TestRuntimeShutdownWritesTheStateTheNextStartResumesFrom(t *testing.T) {
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}
-	written, err := ledger.ReadStateSnapshot(cfg.LedgerStatePath(), stateKey)
+	written, _, err := ledger.ReadStateSnapshot(cfg.LedgerStatePath(), stateKey)
 	if err != nil {
 		t.Fatal(err)
 	}

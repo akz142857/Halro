@@ -127,26 +127,33 @@ func TestStateSnapshotKeepsTheDigestWindowOrder(t *testing.T) {
 func TestStateSnapshotFileIsAuthenticated(t *testing.T) {
 	key := bytes.Repeat([]byte{7}, 32)
 	path := filepath.Join(t.TempDir(), "ledger-state.snap")
-	if _, err := ReadStateSnapshot(path, key); !errors.Is(err, os.ErrNotExist) {
+	if _, _, err := ReadStateSnapshot(path, key); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing snapshot err=%v", err)
 	}
 	state := NewState()
 	applyAll(t, state, snapshotFixtureEvents(), 1)
-	watermark, _, err := WriteStateSnapshot(path, key, state)
+	if _, _, err := WriteStateSnapshot(path, key, state, fixedChainHead{sequence: state.Watermark().Sequence - 1}); err == nil {
+		t.Fatal("a snapshot was written with a chain head behind its state")
+	}
+	written := fixedChainHead{sequence: state.Watermark().Sequence + 2, hash: [32]byte{9}}
+	watermark, _, err := WriteStateSnapshot(path, key, state, written)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if watermark != state.Watermark() {
 		t.Fatalf("watermark=%#v state=%#v", watermark, state.Watermark())
 	}
-	restored, err := ReadStateSnapshot(path, key)
+	restored, chain, err := ReadStateSnapshot(path, key)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if chain != (StateSnapshotChain{Sequence: written.sequence, Hash: written.hash}) {
+		t.Fatalf("chain=%#v, written %#v", chain, written)
 	}
 	if !bytes.Equal(encodedState(t, restored), encodedState(t, state)) {
 		t.Fatal("the read snapshot differs from the written state")
 	}
-	if _, err := ReadStateSnapshot(path, bytes.Repeat([]byte{8}, 32)); !errors.Is(err, ErrStateSnapshotUnusable) {
+	if _, _, err := ReadStateSnapshot(path, bytes.Repeat([]byte{8}, 32)); !errors.Is(err, ErrStateSnapshotUnusable) {
 		t.Fatalf("another key err=%v", err)
 	}
 	raw, err := os.ReadFile(path)
@@ -157,10 +164,20 @@ func TestStateSnapshotFileIsAuthenticated(t *testing.T) {
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadStateSnapshot(path, key); !errors.Is(err, ErrStateSnapshotUnusable) {
+	if _, _, err := ReadStateSnapshot(path, key); !errors.Is(err, ErrStateSnapshotUnusable) {
 		t.Fatalf("edited snapshot err=%v", err)
 	}
-	if _, err := UnmarshalStateSnapshot([]byte(`{"version":2}`)); !errors.Is(err, ErrStateSnapshotUnusable) {
+	if _, err := UnmarshalStateSnapshot([]byte(`{"version":1}`)); !errors.Is(err, ErrStateSnapshotUnusable) {
 		t.Fatalf("another version err=%v", err)
 	}
+}
+
+// fixedChainHead is a Ledger chain head for snapshots written without a Ledger.
+type fixedChainHead struct {
+	sequence uint64
+	hash     [32]byte
+}
+
+func (h fixedChainHead) ChainHead() (Watermark, [32]byte, bool) {
+	return Watermark{Generation: 1, Sequence: h.sequence}, h.hash, true
 }
