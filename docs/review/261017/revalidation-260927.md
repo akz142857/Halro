@@ -15,7 +15,7 @@
 | R-007 | P2 | **仍有效**（#404 改动后重点复核） | #404 的 `202a1419` 让离线 clear 改回直接开库，但删除与审计意图仍在同一事务（`internal/app/route_suspensions.go:98-111` → `DeleteRouteSuspensionWithAuditIntent`），投递失败保留待处理意图。`TestOfflineRouteSuspensionClearKeepsAnIntentWhenAuditDeliveryFails` 通过；把 intent 换成 nil 后以 `pending intents=[]` 失败 |
 | R-008 | P2 | **仍有效** | 持久挂起读失败返回存储错误（`internal/app/admin_route_suspensions.go:57-65`）；`TestRouteSuspensionListingFailsClosedWhenTheDurableStateCannotBeRead` 通过，去掉 `adminStoreError` 后失败 |
 | R-009 | P2 | **仍有效** | `web/src/pages/RouteSuspensionsPanel.test.tsx` 17 个测试通过，含"确认后按句柄清除"与"短时 live-only 挂起不提供清除" |
-| R-010 | P2 | **门禁仍有效；问题在本范围内复现** | `release.yml` 仍拒绝缺失 `## Changelog coverage` 或含 `TODO` 的评估（`.github/workflows/release.yml:96-107`）。但 `main` 的 Unreleased 再次缺项：P2、P3、对账、控制台两项、Go 1.26.9 均无条目，是在 #426 的逐提交表中才发现的。门禁在发布时起作用，`main` 上的 CHANGELOG 漂移仍会发生 → 见 V-008 |
+| R-010 | P2 | **门禁仍有效；问题在本范围内复现** | `release.yml` 仍拒绝缺失 `## Changelog coverage` 或含 `TODO` 的评估（`.github/workflows/release.yml:96-107`）。但 `main` 的 Unreleased 再次缺项：P2、P3、对账、控制台两项、Go 1.26.9 均无条目，是在 #426 的逐提交表中才发现的。门禁在发布时起作用，`main` 上的 CHANGELOG 漂移仍会发生 → 见 V-007 |
 | R-011 | P2 | **仍有效** | 原列 8 条告警各有 3–4 个 `alert_rule_test`；本范围新增的 `HalroLedgerHotStateHigh`/`Rejecting` 各 2 个。缺测试的 `HalroReloadFailing`、`HalroTLSCertificateExpired`、`HalroTLSCertificateExpiringSoon` 在 v0.8.5 已存在且已缺测试，不在本范围 |
 | R-012 | P2 | **随 HA 移除** | seed 不存在 |
 | R-013 | P2 | **仍有效** | `discovery ⇒ inference` 在 domain 校验（`internal/domain/models.go:1516-1520`）；`TestGatewayKeyDiscoveryScopeRequiresInference` 通过，去掉蕴含检查后失败 |
@@ -26,7 +26,7 @@
 - 10 项仍有效（R-002、R-005–R-011、R-013、R-014），其中 7 项经反向验证证明测试确实守护修复；
 - 4 项随 HA 移除（R-001、R-003、R-004、R-012），其中 R-001、R-004 检查了单机下的同类问题，不存在；
 - 没有"回退后失效、需要重修"的项；
-- R-010 的门禁有效，但同类问题在本范围复现（V-008）。
+- R-010 的门禁有效，但同类问题在本范围复现（V-007）。
 
 ## F 项前提复核
 

@@ -11,7 +11,7 @@
 | E01 | 从真实 v0.8.5 数据升级（macOS） | **PASS**，附 V-005、V-006 的实测 |
 | E02 | 回滚围栏 + 用升级前备份回到 v0.8.5 | **PASS** |
 | E03 | 崩溃恢复（Linux 容器，SIGKILL） | **PASS**（11 轮） |
-| E04 | 磁盘异常 | 见 E04 节 |
+| E04 | 磁盘异常 | **PASS**（磁盘满失败关闭、无损坏）；只读与慢盘 BLOCKED；E04c 复现 V-001 |
 | E05 | 4 小时内存长跑 | 见 E05 节 |
 | E06 | 热状态上限触发 | 见 E06 节 |
 | E07 | 有规模数据的备份/恢复 | **PASS** |
@@ -62,6 +62,23 @@ v0.8.5 停机后自检：`ledger verify` 515,580 帧 `ChainVerified: true`；`us
 最后一次正常启动（`from_snapshot=true`，head 1,671,752）与移走 `state.snap` 后的全量重建（`from_snapshot=false`）读出的 2,648 个 Work Unit 与 Project 预算占用**完全一致**；预算占用 `committed_micros_usd: 576` 来自被杀时在途尝试的保守结算，所以比较覆盖了非零余额。结束时 Ledger 共 6 代（5 代封存未压缩：压缩在之后的维护周期进行，本轮未到达；压缩代内的快照恢复由发布准备时的一次性测试覆盖）、`history.db` 1.87 GB、`archive.db` 52 MB。
 
 说明：`usage verify` 只核对已导出到 Parquet 的前缀（`usage.parquet_interval: 1h`），所以前 11 轮报告的 `ledger_records` 一直是 102,830，最后一轮导出后为 332,278；这是既有语义，不是本范围的变化。
+
+## E04 · 磁盘异常（Linux 容器）
+
+**E04a 磁盘满**：数据放在 1,900 MB 的 tmpfs 上（E01 升级后目录的拷贝，开封存），填充文件只留约 20 MB。
+
+| 阶段 | 结果 |
+| --- | --- |
+| 16 线程 20,000 请求期间写满 | 2,694 个 502（正常的上游失败），17,306 个 **503**（失败关闭）；`ledger generation was not sealed: accounting is not healthy`；`history.db` 写失败 12 次，待写行 361 |
+| 写满之后 | 新请求全部 503 |
+| 删除填充文件、**不重启** | 仍全部 503：Ledger 写失败后记账保持"不健康"直到重启（fsync 失败后的保守做法） |
+| 停机后离线校验 | `ledger verify`/`usage verify` 拒绝：`ledger has a partial tail; run halro doctor or start Halro to repair it`，`doctor` 不健康——符合文档 |
+| 重启 | `from_snapshot=true`，修复尾部；请求恢复 502；四项校验全部通过 |
+| 第二次写满（E04b 期间 `history.db` 继续增长） | 快照写入失败计数 +1（`no space left on device`）；Parquet 导出失败；再次启动时租约恢复追加失败，**拒绝启动**并给出 `recover pending accounting leases: … no space left on device` |
+
+没有任何一次出现数据损坏：每次腾出空间并重启后，校验全部通过。只读文件系统与慢盘需要特权容器与块设备节流，本轮 **BLOCKED**。
+
+**E04c 一行用量历史损坏（V-001 的真实二进制复现）**：在普通 volume 上，先写入当前小时，停机后用一次性工具翻转 `history.db` hourly 桶最后一行的首字节，再以 16 线程持续请求 120 s：`flush_failures_total` 与 `row_auth_failures_total` 每 10 s 涨约 450，`pending_records` 始终为 0；日志 `usage history catch-up failed`、`usage parquet export skipped; history write failed`；重启后同样失败。翻转最早一行（E04b）则毫无影响。详见 V-001。
 
 ## E07 · 有规模数据的备份/恢复（候选版本）
 
