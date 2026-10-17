@@ -182,7 +182,7 @@ jobs:
           fi
       - name: Preserve any failing input
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: fuzz-failures
           path: internal/**/testdata/fuzz/**
@@ -313,7 +313,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Generate SPDX SBOM with digest-pinned Syft
         run: ./scripts/sbom-gate.sh "registry:${{ matrix.image }}" "${{ matrix.name }}.spdx.json"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: observability-sbom-${{ matrix.name }}
           path: ${{ matrix.name }}.spdx.json
@@ -333,7 +333,7 @@ jobs:
           -t halro-deadman:ci .
       - name: Generate independent dead-man SPDX SBOM
         run: ./scripts/sbom-gate.sh docker:halro-deadman:ci independent-deadman.spdx.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: observability-sbom-independent-deadman
           path: independent-deadman.spdx.json
