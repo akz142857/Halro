@@ -2,10 +2,34 @@
 
 Release comparisons use the previous tag and the candidate on the **same host
 and toolchain**, with identical benchmark fixtures. The current paired evidence
-is in [2026-09-06 v0.7.0](performance/2026-09-06-v0.7.0/README.md), including
-raw samples, exact source hashes, method and benchstat output.
+is in [2026-10-17 v0.9.0](performance/2026-10-17-v0.9.0/README.md), including
+raw samples, source revisions, method and benchstat output.
 
-## Current comparison, 2026-09-06
+## Current comparison, 2026-10-17
+
+Apple M4 / macOS 27.2 / Go 1.26.9 on both sides / `GOMAXPROCS=4`. Six samples
+per version, serial package execution, baseline then candidate in each round.
+Baseline: v0.8.5 (`28ea173`); candidate: the v0.9.0 release-preparation commit
+`8394fd3`.
+
+| Benchmark | v0.8.5 median | Candidate median | benchstat time comparison |
+|---|---:|---:|---|
+| Route candidate resolution, 8 targets | 4.865 µs | 4.824 µs | −0.84%, p=0.026 |
+| Strict response redaction | 70.63 µs | 70.77 µs | no significant difference, p=1.000 |
+| Bounded streaming redaction | 15.90 µs | 15.89 µs | no significant difference, p=0.965 |
+| Token Guard admit, fixed | 163.0 ns | 163.0 ns | no significant difference, p=0.961 |
+| Token Guard admit, EWMA | 175.3 ns | 175.8 ns | no significant difference, p=0.675 |
+| Token Guard acquire/release, contended | 324.2 ns | 324.7 ns | no significant difference, p=0.331 |
+| Project admission/reconcile/release, unlimited | 102.6 ns | 104.4 ns | no significant difference, p=0.121 |
+| Project admission/reconcile/release, limited | 132.2 ns | 132.6 ns | no significant difference, p=0.195 |
+| Project admission/reconcile/release, contended | 273.6 ns | 273.6 ns | no significant difference, p=0.818 |
+| Open and replay 100,000 WAL records | 530.8 ms | 526.9 ms | no significant difference, p=0.485 |
+| Request lifecycle, 9 combinations (geomean) | 5.476 ms | 5.385 ms | no significant difference in any combination |
+
+Request-lifecycle allocations fall 2.6–3.5% in every combination (geomean
+168.5 → 163.4); route resolution keeps 41 allocations at 16.59 KiB (+1.72%).
+
+## Previous comparison, 2026-09-06
 
 Apple M4 / macOS 26.7 / 24 GiB / Go 1.26.6 / `GOMAXPROCS=4`.
 Six samples per version, serial package execution, baseline then candidate in

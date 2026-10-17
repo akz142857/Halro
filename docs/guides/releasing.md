@@ -183,18 +183,10 @@ exact `main` commit.
 
 `publish_packages` defaults to `true` and preserves that complete chain.
 
-**The job it enables had still never run as of v0.8.4.** Every release from
-v0.7.0 through v0.8.4 was dispatched with `false`, so
-`downstream-package-repositories` — the step that sends `halro-release-published`
-to Homebrew and APT — has never executed. Both downstream workflows themselves
-were exercised on 2026-09-18 through their own `workflow_dispatch` entries and
-both work end to end; the untested part is exactly the dispatch seam between
-them. Its payload (`client_payload.version` / `.commit`) matches what both
-downstream workflows read, but that is a reading, not a run. Watch the first
-release that sets this `true`, and delete this paragraph once it has succeeded.
-Failure there is bounded by design: the tag and Release are already published
-before it runs, and a downstream failure delays a channel without retracting
-anything.
+The job ran for the first time with v0.8.5 (run 35486905590): the downstream
+preflight, `publish` and `downstream-package-repositories` all succeeded; the APT repository's
+`halro-release-published` dispatch run succeeded the same day, and the Homebrew
+tap's formula carries 0.8.5.
 
 Set it to `false` only for an intentional GitHub/GHCR-only publication: the workflow
 still runs every artifact, signature, attestation and release gate, then creates
