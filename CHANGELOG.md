@@ -498,6 +498,11 @@ Also expect:
   described in one sentence, and with a control that opens the workbench already
   filled in. It says how many projects authorize the alias, and the workbench
   reports what a call cost and which project paid for it.
+- The console's Providers page shows, above its tabs, what an upstream is
+  refusing — which credential, connection or deployment, for what reason, and
+  against which credential revision — read from the route-suspension list, so
+  an operator answering `HalroCredentialUnusable` no longer has to query the
+  Admin API for it. Re-saving the credential, the remedy, is on the same page.
 
 ### Fixed
 
