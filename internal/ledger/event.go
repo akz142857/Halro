@@ -555,6 +555,9 @@ type State struct {
 	// are derived and never snapshotted.
 	archive Archive
 	indexes archiveIndexes
+	// peaks are the largest sizes the maps that empty out reached since they
+	// were last rebuilt (hot_state.go).
+	peaks mapPeaks
 }
 
 type requestAttribution struct {
@@ -600,6 +603,7 @@ func (s *State) Apply(record Record) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.shrinkMaps()
 	if existing, ok := s.eventDigests[record.Event.EventID]; ok {
 		if existing != digest {
 			return fmt.Errorf("event id %q was reused with different content", record.Event.EventID)

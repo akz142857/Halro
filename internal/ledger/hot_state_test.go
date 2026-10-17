@@ -53,6 +53,9 @@ func hotReservation(index int, at time.Time, unknown bool) []Event {
 	return []Event{accepted, reserved}
 }
 
+// hotHeap is the live heap after collection. What is measured must still be
+// reachable when it is read — runtime.KeepAlive after the reading — or the
+// reading is of the heap without it.
 func hotHeap() int64 {
 	runtime.GC()
 	runtime.GC()
@@ -136,11 +139,11 @@ func TestHotStateEstimateTracksTheHeap(t *testing.T) {
 			sequence = applyEvents(t, state, []Event{warm}, sequence)
 		}
 		sequence = applyEvents(t, state, kind.setup, sequence)
-		heapBefore, estimateBefore := hotHeap(), state.HotStateBytes()
+		heapBefore, estimateBefore := hotHeap(), state.HotStateBytes(0)
 		for index := 1; index <= count; index++ {
 			sequence = applyEvents(t, state, kind.events(index), sequence)
 		}
-		heapAfter, estimateAfter := hotHeap(), state.HotStateBytes()
+		heapAfter, estimateAfter := hotHeap(), state.HotStateBytes(0)
 		runtime.KeepAlive(state)
 		heap, estimate := float64(heapAfter-heapBefore)/count, float64(estimateAfter-estimateBefore)/count
 		t.Logf("%-40s heap %5.0f B  estimate %5.0f B  (%.2f)", kind.name, heap, estimate, estimate/heap)
@@ -164,10 +167,51 @@ func TestHotStateEstimatePricesTheDigestWindow(t *testing.T) {
 		warm.RequestID = hotIdent("rqw", index)
 		sequence = applyEvents(t, state, []Event{warm}, sequence)
 	}
-	heap, estimate := float64(hotHeap()-heapBefore), float64(state.HotStateBytes())
+	heap, estimate := float64(hotHeap()-heapBefore), float64(state.HotStateBytes(0))
 	runtime.KeepAlive(state)
 	t.Logf("digest window heap %.1f MiB  estimate %.1f MiB", heap/(1<<20), estimate/(1<<20))
 	if estimate < 0.75*heap || estimate > 1.25*heap {
 		t.Errorf("digest window estimate %.0f B is not within 25%% of the heap's %.0f B", estimate, heap)
+	}
+}
+
+// A burst of reservations that settles leaves no slots behind: the maps it
+// filled are rebuilt once they empty out, so the heap falls back with the
+// estimate instead of keeping the burst's size while the estimate says zero.
+func TestASettledBurstGivesItsMemoryBack(t *testing.T) {
+	if testing.Short() {
+		t.Skip("measures the heap")
+	}
+	base := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	state := NewState()
+	sequence := uint64(1)
+	for index := 0; index < recentEventDigests; index++ {
+		warm := governanceEvent(hotIdent("evtwarm", index), EventRequestAccepted, base)
+		warm.RequestID = hotIdent("rqw", index)
+		sequence = applyEvents(t, state, []Event{warm}, sequence)
+	}
+	heapBefore := hotHeap()
+	const burst = 40_000
+	for index := 1; index <= burst; index++ {
+		sequence = applyEvents(t, state, hotReservation(index, base, false), sequence)
+	}
+	heapPeak := hotHeap()
+	for index := 1; index <= burst; index++ {
+		events := hotReservation(index, base, false)
+		settled := events[1]
+		settled.EventID, settled.Kind = hotIdent("evtset", index), EventAttemptSettled
+		settled.ReservationMicrosUSD, settled.CommittedMicrosUSD = nil, MicrosUSD(75)
+		finalized := events[0]
+		finalized.EventID, finalized.Kind = hotIdent("evtfin", index), EventRequestFinalized
+		sequence = applyEvents(t, state, []Event{settled, finalized}, sequence)
+	}
+	retained := hotHeap() - heapBefore
+	runtime.KeepAlive(state)
+	t.Logf("burst peak +%.1f MiB, retained after settling %.2f MiB", float64(heapPeak-heapBefore)/(1<<20), float64(retained)/(1<<20))
+	// The digest window holds the newest events whatever happens; what is
+	// left beyond it is the balance row and slack, far under the 3.3 MiB the
+	// emptied maps kept before they were rebuilt.
+	if retained > 1<<20 {
+		t.Fatalf("a settled burst left %d bytes behind", retained)
 	}
 }
