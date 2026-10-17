@@ -7,8 +7,8 @@
 | 0 范围冻结 | 完成（19:47） | 冻结 `main` = `2e749db132751c4e1bab947e0af1856be7161039`；`git fetch` 后 `origin/main` 未前进 |
 | 1 回退完整性 + 260927 复核 | 完成（19:56） | `revert-integrity.md`、`revalidation-260927.md`：回退干净；R-xxx 10 项仍有效（7 项反向验证）、4 项随 HA 移除、0 项失效 |
 | 2 D 段深读 | 完成（20:20） | `findings/V-001`–`V-009`（1 个 P1、6 个 P2、2 个 P3）；V-001 与 V-003 有一次性测试复现/测量 |
-| 3 净 diff + 交叉点 | 进行中 | `memory-bounds.md` 已起草；X10–X19 结论待写入 `range-map.md` |
-| 4 运行时证据 | 进行中 | `runtime-evidence.md`：E01、E02、E07、E08 完成（PASS），E09 BLOCKED；E03（Linux 容器 SIGKILL，11 轮）运行中，前 7 轮恢复与校验全部通过；E04、E06 待跑；**E05（4 小时长跑）开始前须先向协调者报告，等待主机空闲确认** |
+| 3 净 diff + 交叉点 | 完成（21:25） | `memory-bounds.md`、`range-map.md`（X10–X19：6 PASS、2 PARTIAL、3 FAIL 对应 V-001/V-002/V-005） |
+| 4 运行时证据 | 进行中 | `runtime-evidence.md`：E01、E02、E07、E08 完成（PASS），E09 BLOCKED；E03 PASS（11 轮）；E04 运行中；E06 待跑；**E05（4 小时长跑）开始前须先向协调者报告，等待主机空闲确认** |
 | 5 对抗复核与报告 | 未开始 | `adversarial-verdicts.md`、`review-report.md`、`range-map.md` |
 
 ## 恢复工作所需的现场
