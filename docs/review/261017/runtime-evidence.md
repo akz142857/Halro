@@ -2,13 +2,15 @@
 
 > 全部使用真实二进制与真实数据目录。候选版本：从冻结 `main` `2e749db1` 构建的 `halro`（darwin/arm64 与 linux/arm64，`-ldflags` 标记 `v0.8.5-127-g2e749db1`）。基线：GitHub Release 下载的 v0.8.5 二进制（darwin-arm64、linux-arm64），均按 `checksums.txt` 校验通过。Provider 一律指向不可解析的 `https://halro-smoke.invalid`，没有任何计费或外部调用。数据目录与日志留在 scratch，不入仓。
 
+**环境说明**：取证期间主机上一直运行着 owner 的两个容器 `langfuse` 与 `midigi-postgres`（服务于其他业务，按 owner 要求保持运行、未做任何操作）；另有 owner 的开发实例 `halro start`（主检出目录，端口 8080/8081/9090）在运行，取证实例全部使用 18180/18181/19190 端口与独立数据目录。时间类数字（就绪耗时、吞吐）因此不是独占主机下的测量。
+
 ## 总表
 
 | ID | 证据 | 结果 |
 | --- | --- | --- |
 | E01 | 从真实 v0.8.5 数据升级（macOS） | **PASS**，附 V-005、V-006 的实测 |
 | E02 | 回滚围栏 + 用升级前备份回到 v0.8.5 | **PASS** |
-| E03 | 崩溃恢复（Linux 容器，SIGKILL） | 见 E03 节 |
+| E03 | 崩溃恢复（Linux 容器，SIGKILL） | **PASS**（11 轮） |
 | E04 | 磁盘异常 | 见 E04 节 |
 | E05 | 4 小时内存长跑 | 见 E05 节 |
 | E06 | 热状态上限触发 | 见 E06 节 |
@@ -45,6 +47,21 @@ v0.8.5 停机后自检：`ledger verify` 515,580 帧 `ChainVerified: true`；`us
 - 用 v0.8.5 把升级前备份恢复到新目录：恢复成功；`ledger verify` 515,580 帧、`usage verify` 102,282/102,282、`audit verify`、`doctor` 全部通过；v0.8.5 在恢复目录上 12.18 s 就绪。
 
 结论：回滚只能经由升级前备份；这条路径实测可用。
+
+## E03 · 崩溃恢复（Linux 容器，SIGKILL）
+
+环境：Docker `python:3.13-alpine`（linux/arm64），数据在 Docker volume（ext4），候选 linux 二进制。起点是 E01 升级后的目录，配置只改 `ledger.seal.enabled: true`、`max_active_bytes: 268435456`。每轮：启动 → 就绪 → 16 线程普通请求 + 8 Key 治理周期 → 指定秒数后 `kill -9` → `ledger verify`、`usage verify`、`audit verify`、`doctor`。
+
+| 轮 | 负载秒数后 kill | 命中的写路径 | 就绪 | 恢复方式 | 校验 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 6 | 首次封存（启动后 5.4 s 封存 619 MB 的第 1 代）之后 | 6 s | `from_snapshot=true` | 全部通过 |
+| 2–5 | 7、9、15、31 | 历史批量写；其间无新快照 | 5–7 s | 快照仍在已封存的第 1 代，按设计从该代首帧重放 | 全部通过 |
+| 6–9 | 59、61、62、63 | 每分钟快照与归档刷写；第 6、8 轮期间各封存一代 | 1–3 s | 快照在活动代 | 全部通过 |
+| 10–11 | 90、125 | 第 4、5 代封存之后 | 4 s | `from_snapshot=true` | 全部通过 |
+
+最后一次正常启动（`from_snapshot=true`，head 1,671,752）与移走 `state.snap` 后的全量重建（`from_snapshot=false`）读出的 2,648 个 Work Unit 与 Project 预算占用**完全一致**；预算占用 `committed_micros_usd: 576` 来自被杀时在途尝试的保守结算，所以比较覆盖了非零余额。结束时 Ledger 共 6 代（5 代封存未压缩：压缩在之后的维护周期进行，本轮未到达；压缩代内的快照恢复由发布准备时的一次性测试覆盖）、`history.db` 1.87 GB、`archive.db` 52 MB。
+
+说明：`usage verify` 只核对已导出到 Parquet 的前缀（`usage.parquet_interval: 1h`），所以前 11 轮报告的 `ledger_records` 一直是 102,830，最后一轮导出后为 332,278；这是既有语义，不是本范围的变化。
 
 ## E07 · 有规模数据的备份/恢复（候选版本）
 
