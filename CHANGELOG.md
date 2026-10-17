@@ -6,6 +6,44 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-17
+
+### Upgrading from v0.8.5
+
+Re-initialisation is not required, but the upgrade is one-way and asks three
+things of the operator.
+
+1. **Back up with v0.8.5 first.** The first start migrates `halro.db` from
+   metadata schema 38 to 41, after which v0.8.5 refuses the directory
+   (`metadata schema version 41 is newer than this build supports (38)`).
+   Rolling back means restoring the backup taken before the upgrade.
+2. **Migrate the configuration.** A v0.8.5 file says `version: 1` and still has
+   `circuit_breaker`, and this release refuses it at start. `halro config
+   migrate --config config.yaml` prints the edit; `--write` applies it and keeps
+   the original as `config.yaml.before-migrate`.
+3. **Turn Ledger sealing on.** A configuration copied from the v0.8.5 example
+   sets `ledger.seal.enabled: false` and `max_active_bytes: 8589934592`
+   explicitly, and `config migrate` keeps values the operator set. Set
+   `enabled: true` and `max_active_bytes: 268435456`, or delete both keys to take
+   the new defaults; otherwise every start still reads the whole active WAL.
+
+Also expect:
+
+- The first start rebuilds the accounting state from the Ledger before the
+  instance is ready — about 48 s at a million requests of history, measured —
+  creates `data/history/archive.db`, and builds `data/history/history.db` in the
+  background. Later starts resume from a snapshot in under a second.
+- `halro doctor` run with this release before that first start reports the
+  schema 38/41 mismatch, because it is read-only and does not migrate. Start
+  once, then run it.
+- Existing Gateway Keys have no `discovery` scope, so `GET /v1/models` answers
+  403 `gateway_key_scope_denied` until an operator grants it.
+- Dashboards and alerts that read `halro_usage_window_*` or
+  `halro_usage_checkpoint_*` need the `halro_usage_history_*` series instead.
+- Callers can see two new answers: 503 `accounting_capacity_exhausted` when the
+  hot-state limit is reached, and 504 `provider_timeout` where a response-header
+  timeout used to answer 502.
+
 ### Added
 
 - `ledger.max_hot_state_bytes` (default 128 MiB) bounds the accounting state
@@ -74,122 +112,6 @@ semantic versioning.
   step-up endpoint rather than capability detection alone, so inheriting the old
   value would widen a security window on the operator's behalf.
 
-### Changed
-
-- Usage history moved out of memory into an on-disk index,
-  `data/history/history.db`. Every settled attempt and finished request is kept
-  there, written in batches off the request path with a per-row HMAC, and
-  rebuilt from the Ledger whenever it cannot be trusted. Memory for usage no
-  longer grows with history: at one million requests of history the resident
-  heap is about 1.3 GB smaller and a cold start no longer reloads the usage
-  window. The first start after upgrading builds the index from the Ledger in
-  the background; readiness does not wait for it. `halro.db` migrates to schema
-  41, which drops the old usage checkpoint and daily rollup tables.
-- `usage.console_window_days` and Settings → Instance now set only the default
-  range of the attempt log and the failed-request list. Shortening it discards
-  nothing, so it no longer asks for confirmation, and it is no longer bounded by
-  `usage.retention_days`; `acknowledge_trim` and `max_days` are gone from the
-  settings API. Dashboard request-latency percentiles are read from the hourly
-  histogram, the same way the summary view reads them.
-- The `halro_usage_window_*` and `halro_usage_checkpoint_*` metrics are
-  replaced by `halro_usage_history_*`, which report pending rows, the stored
-  watermark, build state and write cost.
-
-- **The configuration schema version advances, and a configuration file now says
-  which shape it is.** `version` shipped as `1` in every release from v0.3.0 to
-  v0.8.5 — across two retirements — so the key recorded nothing and the
-  exact-equality check against it was inert. It is `2` as of this change, and
-  `halro config migrate` moves a file from one version to the next.
-
-  The check is now directional, because the two directions do not have the same
-  answer: an older file has a way forward and is told what it is, while a file
-  from a newer Halro is refused outright. Repairing a shape this binary has
-  never seen would be the fail-open half of the same check.
-
-  Operators editing a configuration by hand: the `version:` line becomes `2`,
-  which is what `config migrate` writes for you. No data directory is affected.
-
-- **The v0.8.1 `providers` section is refused rather than accepted.** It was
-  kept in the decoding contract when provider connections moved into the
-  Admin-managed credential workflow, so `providers.bedrock.region` was decoded,
-  trimmed and validated while nothing read it — an operator who still had it
-  believed it was choosing the region their Bedrock calls used, and the fact
-  that the value was checked made it look acted on. It is a row in the
-  retirement table now, with the same refusal and the same way out as every
-  other retired key: `config migrate` deletes it, and there is no value to carry
-  because the region belongs to the credential the console holds.
-
-  `LegacyProviders`, its validation and its trimming are deleted with it. A
-  section that is read by nothing and accepted anyway is the "retired but still
-  accepted" placeholder pre-1.0.0 exists to avoid.
-
-- A retired configuration key now names the key that replaced it and why, from
-  one table rather than a hand-written branch per removal. `circuit_breaker` had
-  such a message; `elevation_window` had none, and an operator holding a v0.3.0
-  configuration met `field elevation_window not found in type
-  config.ModelCapabilityDetection` — a sentence about a Go type. The
-  `RetiredCircuitBreaker` struct that existed only to be refused is gone with
-  it: the table is checked against the file before decoding, so a retired shape
-  no longer has to survive in Go to be answerable.
-
-### Fixed
-
-- The idempotency index bucket was the only durable bucket missing from
-  `requiredBuckets()`, so the check that runs after every migration — "metadata
-  schema N is missing bucket X" — did not cover it.
-
-  Nothing was wrong in practice: migration 40 creates it in the same
-  transaction as the schema bump, so it always exists. What was wrong is that
-  the one bucket whose absence has a bad failure mode was the one not asserted.
-  `tx.Bucket` returns nil for a bucket that is not there and bbolt's `Get`
-  dereferences the receiver, so a missing index would panic on the first keyed
-  request rather than refuse to start with the message that exists for exactly
-  this. Both other index buckets, and every bucket added since, are listed; this
-  one is now too.
-
-- A response-header timeout was reported as a connection that could not be
-  established, which sent operators to check DNS, TLS and the egress proxy for
-  an upstream that had been reachable the whole time.
-
-  `TransportClass` recognised exactly one timeout, `context.DeadlineExceeded`.
-  Both HTTP transports answer an expired `gateway.attempt_response_header_timeout`
-  with a `net.Error` of their own instead — `http2: timeout awaiting response
-  headers`, and the HTTP/1 equivalent — which reports `Timeout()` and wraps no
-  sentinel, so it fell through to `connect`. The console then showed "No secure
-  connection could be established" beside "The upstream may have executed or
-  billed the request", which cannot both be true, and the advice attached to that
-  class pointed at the network rather than at the timeout the operator had
-  configured. It is the failure a slow reasoning model produces on a long
-  prompt, so the class was wrong exactly where it was most consulted.
-
-  A timeout is now recognised by reporting itself as one, and only when the
-  request had already gone out: a dial or a resolution that ran out of time
-  never reached the upstream, and stays `connect`, because "the connection was
-  not made" is the true thing to say about it.
-
-  That also ends a disagreement a stalled TLS handshake had with itself. The
-  handshake is bounded by a context and by the same deadline on the connection,
-  so which error surfaces is a race: the context's
-  `context.DeadlineExceeded`, or a read returning `*net.OpError`. The first was
-  already `timeout` and the second was `connect`, so one stall reported two
-  classes — and two statuses, `504` and `502` — depending on which deadline
-  fired first. Both now say `timeout`. Making them agree the other way would
-  mean deciding that every expired `attempt_connect_timeout` is a connection
-  failure rather than a timeout, which is a larger change than this one and has
-  not been made.
-
-  **The status a caller receives changes with the class.** A response-header
-  timeout answered `502 provider_error` and now answers `504 provider_timeout`,
-  which is the status the condition has always deserved — a gateway whose
-  upstream did not answer in time is what 504 is for. Clients that switch on the
-  status or the code see the new pair. Retry and accounting semantics do not
-  move: both follow from whether anything was sent rather than from the class,
-  and the attempt stays ambiguous and non-retryable. Routing does not move
-  either — `internal/routegate` already widened the suspension scope identically
-  for both classes — and the Ledger already held both as valid classes.
-
-### Added
-
 - `Idempotency-Key` on `POST /v1/chat/completions` and `POST /v1/embeddings`.
 
   A client that times out does not know whether the upstream ran. Retrying was
@@ -245,72 +167,6 @@ semantic versioning.
   first kind whose population scales with inference traffic, and the full-bucket
   scan that served files and batches would have run on every keyed request,
   once inside the write transaction.
-
-### Fixed
-
-- A row in the usage summary said how many tokens were reported and not how
-  many were estimated, so a row could sit visibly below a provider's own figure
-  with nothing on screen explaining the difference.
-
-  The figure has always been the accounting total minus the part that came from
-  a conservative upper bound rather than from what the provider said. The tile
-  above the table says so whenever there is a remainder; the rows did not, which
-  is exactly where an operator reconciles against an upstream console. A gap of
-  a few per cent between the two reads as lost data when it is a column
-  definition.
-
-  Each row now carries the same note the tile does, and only when there is
-  something to note — a row with nothing estimated stays quiet rather than
-  showing a zero that reads as a qualification.
-
-- An upstream that answered "your allowance is spent" was routed as though it
-  had answered "you are going too fast".
-
-  Six of the nine upstreams Halro speaks to put both on HTTP 429 and separate
-  them only by the code in the body — Kimi's own troubleshooting page says it
-  outright: *"429 is not a single cause. Check the `error.type` in the response
-  first."* Halro read the status and stopped, so every one of them was
-  classified `rate_limited`, which probes again after a second and doubles to a
-  minute. An exhausted balance does not clear on that timescale; Anthropic
-  documents its spend-cap refusal as carrying no `retry-after` and failing until
-  access resumes.
-
-  The consequences were the ones the admission gate was built to prevent.
-  `subscription_quota_exhausted` was produced by nothing in the tree, so the
-  quota policy — fifteen minutes doubling to six hours, the centrepiece of the
-  route-eligibility design — was unreachable on live traffic, and
-  `HalroProviderQuotaExhausted` watched a series that could never appear.
-
-  Refusals are now read for the code before the status, and on the code half
-  alone: an upstream that names the field it refused arrives as `code:param`,
-  and a table keyed on the whole identifier would miss it. What landed is
-  exactly what each vendor publishes, and no further: OpenAI's
-  `insufficient_quota`, `credit_balance_exhausted` and its two spend-limit
-  codes, Kimi's `exceeded_current_quota_error`, Anthropic's `402 billing_error`,
-  BigModel's `1113` and DeepSeek's `402`, with the two that need to know who
-  said them gated on the provider type — a bare number means nothing without its
-  vendor. MiniMax's
-  `1008` and `2056` are classified in its adapter, because they arrive as
-  business codes inside a body the gateway's classifier never sees; `2056` was
-  previously read as an ambiguous 5xx, which is to say as a call that might have
-  been billed.
-
-  **Two documented cases are deliberately not detected**, and both wait for a
-  real response rather than a cleverer guess. Anthropic's monthly spend cap
-  arrives as `429 rate_limit_error` — the same status and the same type as an
-  ordinary rate limit — distinguishable only by a missing `retry-after` header;
-  reading an indefinite condition out of an absent header would turn a transient
-  limit into a suspension a human has to clear. Gemini's daily quota is the same
-  shape one level down: its adapter surfaces `error.status`, which for a 429 is
-  the RPC name `RESOURCE_EXHAUSTED` for both the daily quota and the per-minute
-  limit, so the distinction lives somewhere the adapter does not read. An entry
-  for a spelling no Gemini path produces would be unreachable code that reads as
-  coverage, which is the failure being fixed here.
-
-  The window lengths and whether a quota is metered per credential or per model
-  still wait on real refusals; the design takes the conservative side of both.
-
-### Added
 
 - `GET /v1/models` and `GET /v1/models/{id}` on the Gateway listener. An
   application had no way to find out which aliases its own Gateway Key may put
@@ -432,60 +288,6 @@ semantic versioning.
   shipped; it now shares the implementation (`internal/keylimit`) rather than
   owning a second copy of it.
 
-### Changed
-
-- The SBOM steps no longer treat "could not reach the registry" as "the SBOM is
-  bad". Each `docker run` of the digest-pinned Syft was one step, so every reason
-  it could not finish looked identical — and on 2026-09-20 Docker Hub's auth
-  endpoint reset the connection while pulling Syft itself, turning a
-  documentation-only commit red in eight seconds. That is the same shape as the
-  npm advisory incident the day before, and `scripts/sbom-gate.sh` carries the
-  same reasoning: a red main everybody knows to ignore is worse than no gate.
-
-  The discriminator is structural rather than a match on error text. A completed
-  run leaves a parseable SPDX document naming at least one package; a run that
-  never reached a registry leaves none. Only the second earns a retry, and after
-  the retries branch CI warns and carries on. **A document that is not usable
-  SPDX still fails immediately and is not retried** — that is a corrupt artifact
-  rather than a busy registry, and retrying would only publish it later. The
-  release workflow passes `--require-registry`, so a released artifact still
-  never ships without its SBOM.
-
-### Changed
-
-- **Breaking configuration change.** The `circuit_breaker` section is replaced by
-  `routing`, and an instance that still has the old section refuses to start with
-  a message naming the three keys that moved. It is a refusal rather than a
-  silent default because the two are not the same control: the breaker counted
-  only upstreams that stopped answering, and counted an upstream that answered
-  and refused — a 429, a 401, a spent quota — as a *success* that cleared its
-  failure streak.
-
-  `consecutive_failures` becomes `routing.availability_failures`, `open_duration`
-  becomes `routing.suspend_for` (with a new `routing.max_suspend_for` ceiling it
-  doubles towards), and `half_open_max_requests` becomes
-  `routing.probe_requests`.
-
-- An upstream that refuses to serve is now remembered, and remembered against
-  the thing the refusal was actually about. A dead credential behind five
-  deployments is discovered once rather than five times; a spent quota stops
-  collecting a failed attempt from every request; and a refusal the gate has
-  recorded no longer ends the request that found it, so a 401 falls over to the
-  next provider instead of failing the caller. Ambiguous failures still stop the
-  walk, because a 5xx that may already be billing must not be duplicated
-  elsewhere.
-
-  Credential refusals do not expire on a clock — a dead key does not heal — and
-  clear when the operator replaces the secret, so fixing it is the whole of the
-  fix. Everything else uses a doubling window that honours the upstream's own
-  `Retry-After` where it gave one.
-
-  This replaces the circuit breaker and the registry's probe-health map, which
-  were two answers to one question, keyed differently and unable to see each
-  other. `internal/circuit` is removed.
-
-### Added
-
 - An alias with nothing left to try now says which kind of nothing. Where every
   candidate is suspended, the refusal is `all_candidates_suspended` (503) and its
   sentence separates an exhausted quota from an unusable credential from an
@@ -529,7 +331,118 @@ semantic versioning.
   label set and reports what it dropped as
   `halro_provider_failure_reason_dropped_total`.
 
+- The usage history is reconciled against the Ledger every hour. Each
+  accounting day older than 48 hours with no open lease has its total row
+  compared with that day's balances (known cost, provider tokens and
+  unknown-cost attempts), so a deleted history row — which fails no MAC — is
+  noticed. A disagreement is counted in
+  `halro_usage_history_reconcile_mismatches_total` and logged per day.
+
 ### Changed
+
+- Usage history moved out of memory into an on-disk index,
+  `data/history/history.db`. Every settled attempt and finished request is kept
+  there, written in batches off the request path with a per-row HMAC, and
+  rebuilt from the Ledger whenever it cannot be trusted. Memory for usage no
+  longer grows with history: at one million requests of history the resident
+  heap is about 1.3 GB smaller and a cold start no longer reloads the usage
+  window. The first start after upgrading builds the index from the Ledger in
+  the background; readiness does not wait for it. `halro.db` migrates to schema
+  41, which drops the old usage checkpoint and daily rollup tables.
+- `usage.console_window_days` and Settings → Instance now set only the default
+  range of the attempt log and the failed-request list. Shortening it discards
+  nothing, so it no longer asks for confirmation, and it is no longer bounded by
+  `usage.retention_days`; `acknowledge_trim` and `max_days` are gone from the
+  settings API. Dashboard request-latency percentiles are read from the hourly
+  histogram, the same way the summary view reads them.
+- The `halro_usage_window_*` and `halro_usage_checkpoint_*` metrics are
+  replaced by `halro_usage_history_*`, which report pending rows, the stored
+  watermark, build state and write cost.
+
+- **The configuration schema version advances, and a configuration file now says
+  which shape it is.** `version` shipped as `1` in every release from v0.3.0 to
+  v0.8.5 — across two retirements — so the key recorded nothing and the
+  exact-equality check against it was inert. It is `2` as of this change, and
+  `halro config migrate` moves a file from one version to the next.
+
+  The check is now directional, because the two directions do not have the same
+  answer: an older file has a way forward and is told what it is, while a file
+  from a newer Halro is refused outright. Repairing a shape this binary has
+  never seen would be the fail-open half of the same check.
+
+  Operators editing a configuration by hand: the `version:` line becomes `2`,
+  which is what `config migrate` writes for you. No data directory is affected.
+
+- **The v0.8.1 `providers` section is refused rather than accepted.** It was
+  kept in the decoding contract when provider connections moved into the
+  Admin-managed credential workflow, so `providers.bedrock.region` was decoded,
+  trimmed and validated while nothing read it — an operator who still had it
+  believed it was choosing the region their Bedrock calls used, and the fact
+  that the value was checked made it look acted on. It is a row in the
+  retirement table now, with the same refusal and the same way out as every
+  other retired key: `config migrate` deletes it, and there is no value to carry
+  because the region belongs to the credential the console holds.
+
+  `LegacyProviders`, its validation and its trimming are deleted with it. A
+  section that is read by nothing and accepted anyway is the "retired but still
+  accepted" placeholder pre-1.0.0 exists to avoid.
+
+- A retired configuration key now names the key that replaced it and why, from
+  one table rather than a hand-written branch per removal. `circuit_breaker` had
+  such a message; `elevation_window` had none, and an operator holding a v0.3.0
+  configuration met `field elevation_window not found in type
+  config.ModelCapabilityDetection` — a sentence about a Go type. The
+  `RetiredCircuitBreaker` struct that existed only to be refused is gone with
+  it: the table is checked against the file before decoding, so a retired shape
+  no longer has to survive in Go to be answerable.
+
+- The SBOM steps no longer treat "could not reach the registry" as "the SBOM is
+  bad". Each `docker run` of the digest-pinned Syft was one step, so every reason
+  it could not finish looked identical — and on 2026-09-20 Docker Hub's auth
+  endpoint reset the connection while pulling Syft itself, turning a
+  documentation-only commit red in eight seconds. That is the same shape as the
+  npm advisory incident the day before, and `scripts/sbom-gate.sh` carries the
+  same reasoning: a red main everybody knows to ignore is worse than no gate.
+
+  The discriminator is structural rather than a match on error text. A completed
+  run leaves a parseable SPDX document naming at least one package; a run that
+  never reached a registry leaves none. Only the second earns a retry, and after
+  the retries branch CI warns and carries on. **A document that is not usable
+  SPDX still fails immediately and is not retried** — that is a corrupt artifact
+  rather than a busy registry, and retrying would only publish it later. The
+  release workflow passes `--require-registry`, so a released artifact still
+  never ships without its SBOM.
+
+- **Breaking configuration change.** The `circuit_breaker` section is replaced by
+  `routing`, and an instance that still has the old section refuses to start with
+  a message naming the three keys that moved. It is a refusal rather than a
+  silent default because the two are not the same control: the breaker counted
+  only upstreams that stopped answering, and counted an upstream that answered
+  and refused — a 429, a 401, a spent quota — as a *success* that cleared its
+  failure streak.
+
+  `consecutive_failures` becomes `routing.availability_failures`, `open_duration`
+  becomes `routing.suspend_for` (with a new `routing.max_suspend_for` ceiling it
+  doubles towards), and `half_open_max_requests` becomes
+  `routing.probe_requests`.
+
+- An upstream that refuses to serve is now remembered, and remembered against
+  the thing the refusal was actually about. A dead credential behind five
+  deployments is discovered once rather than five times; a spent quota stops
+  collecting a failed attempt from every request; and a refusal the gate has
+  recorded no longer ends the request that found it, so a 401 falls over to the
+  next provider instead of failing the caller. Ambiguous failures still stop the
+  walk, because a 5xx that may already be billing must not be duplicated
+  elsewhere.
+
+  Credential refusals do not expire on a clock — a dead key does not heal — and
+  clear when the operator replaces the secret, so fixing it is the whole of the
+  fix. Everything else uses a doubling window that honours the upstream's own
+  `Retry-After` where it gave one.
+
+  This replaces the circuit breaker and the registry's probe-health map, which
+  were two answers to one question, keyed differently and unable to see each
+  other. `internal/circuit` is removed.
 
 - A route target now carries the credential it authenticates with and that
   credential's revision. The scope of an upstream refusal is not always the
@@ -556,6 +469,158 @@ semantic versioning.
   both keys are already written in the file, so this changes new installs only.
   `docs/guides/alias-failover.zh-CN.md` has the arithmetic, including why the
   figure is a floor rather than a ceiling.
+
+- The Ledger's accounting state no longer grows with history. Settled attempts,
+  leases and event digests leave memory once they are final, and a start resumes
+  from an authenticated snapshot of the remaining state bound to the Ledger chain
+  head, replaying only the suffix written after it. A missing or mismatched
+  snapshot falls back to a full rebuild from the WAL. At a million requests of
+  history the heap is about 19 MiB, down from about 2.9 GiB, and a start from the
+  snapshot takes under a second (0.5–0.9 s measured).
+
+- Ledger sealing is on by default, at 256 MiB of active WAL (it was off, at
+  8 GiB). Opening the Ledger reads the whole active generation, so its size is
+  what bounds a start. Sealing renames a full generation aside and continues the
+  hash chain in a new one; nothing is deleted. An existing configuration that
+  sets the old values keeps them — see "Upgrading from v0.8.5".
+
+- Finished Work Units, their Runs, and Outcomes move out of memory into
+  `data/history/archive.db`, which is bound to the Ledger chain head and the
+  Governance journal it was written from and rebuilt from them when it does not
+  match. Memory keeps the 4096 most recent Outcome heads. At 100,000 finished
+  Work Units the governance heap stays at about 15 MiB, where it used to hold
+  about 360 MiB; the archive takes about 5 KB on disk per Work Unit. Admin
+  listings of Work Units, Runs and Outcomes are paged through the archive. The
+  archive is not carried in backups: a restore rebuilds it from the Ledger and
+  the journal.
+
+- In the console, a route group is headed by its public model alias: copyable,
+  described in one sentence, and with a control that opens the workbench already
+  filled in. It says how many projects authorize the alias, and the workbench
+  reports what a call cost and which project paid for it.
+
+### Fixed
+
+- The idempotency index bucket was the only durable bucket missing from
+  `requiredBuckets()`, so the check that runs after every migration — "metadata
+  schema N is missing bucket X" — did not cover it.
+
+  Nothing was wrong in practice: migration 40 creates it in the same
+  transaction as the schema bump, so it always exists. What was wrong is that
+  the one bucket whose absence has a bad failure mode was the one not asserted.
+  `tx.Bucket` returns nil for a bucket that is not there and bbolt's `Get`
+  dereferences the receiver, so a missing index would panic on the first keyed
+  request rather than refuse to start with the message that exists for exactly
+  this. Both other index buckets, and every bucket added since, are listed; this
+  one is now too.
+
+- A response-header timeout was reported as a connection that could not be
+  established, which sent operators to check DNS, TLS and the egress proxy for
+  an upstream that had been reachable the whole time.
+
+  `TransportClass` recognised exactly one timeout, `context.DeadlineExceeded`.
+  Both HTTP transports answer an expired `gateway.attempt_response_header_timeout`
+  with a `net.Error` of their own instead — `http2: timeout awaiting response
+  headers`, and the HTTP/1 equivalent — which reports `Timeout()` and wraps no
+  sentinel, so it fell through to `connect`. The console then showed "No secure
+  connection could be established" beside "The upstream may have executed or
+  billed the request", which cannot both be true, and the advice attached to that
+  class pointed at the network rather than at the timeout the operator had
+  configured. It is the failure a slow reasoning model produces on a long
+  prompt, so the class was wrong exactly where it was most consulted.
+
+  A timeout is now recognised by reporting itself as one, and only when the
+  request had already gone out: a dial or a resolution that ran out of time
+  never reached the upstream, and stays `connect`, because "the connection was
+  not made" is the true thing to say about it.
+
+  That also ends a disagreement a stalled TLS handshake had with itself. The
+  handshake is bounded by a context and by the same deadline on the connection,
+  so which error surfaces is a race: the context's
+  `context.DeadlineExceeded`, or a read returning `*net.OpError`. The first was
+  already `timeout` and the second was `connect`, so one stall reported two
+  classes — and two statuses, `504` and `502` — depending on which deadline
+  fired first. Both now say `timeout`. Making them agree the other way would
+  mean deciding that every expired `attempt_connect_timeout` is a connection
+  failure rather than a timeout, which is a larger change than this one and has
+  not been made.
+
+  **The status a caller receives changes with the class.** A response-header
+  timeout answered `502 provider_error` and now answers `504 provider_timeout`,
+  which is the status the condition has always deserved — a gateway whose
+  upstream did not answer in time is what 504 is for. Clients that switch on the
+  status or the code see the new pair. Retry and accounting semantics do not
+  move: both follow from whether anything was sent rather than from the class,
+  and the attempt stays ambiguous and non-retryable. Routing does not move
+  either — `internal/routegate` already widened the suspension scope identically
+  for both classes — and the Ledger already held both as valid classes.
+
+- A row in the usage summary said how many tokens were reported and not how
+  many were estimated, so a row could sit visibly below a provider's own figure
+  with nothing on screen explaining the difference.
+
+  The figure has always been the accounting total minus the part that came from
+  a conservative upper bound rather than from what the provider said. The tile
+  above the table says so whenever there is a remainder; the rows did not, which
+  is exactly where an operator reconciles against an upstream console. A gap of
+  a few per cent between the two reads as lost data when it is a column
+  definition.
+
+  Each row now carries the same note the tile does, and only when there is
+  something to note — a row with nothing estimated stays quiet rather than
+  showing a zero that reads as a qualification.
+
+- An upstream that answered "your allowance is spent" was routed as though it
+  had answered "you are going too fast".
+
+  Six of the nine upstreams Halro speaks to put both on HTTP 429 and separate
+  them only by the code in the body — Kimi's own troubleshooting page says it
+  outright: *"429 is not a single cause. Check the `error.type` in the response
+  first."* Halro read the status and stopped, so every one of them was
+  classified `rate_limited`, which probes again after a second and doubles to a
+  minute. An exhausted balance does not clear on that timescale; Anthropic
+  documents its spend-cap refusal as carrying no `retry-after` and failing until
+  access resumes.
+
+  The consequences were the ones the admission gate was built to prevent.
+  `subscription_quota_exhausted` was produced by nothing in the tree, so the
+  quota policy — fifteen minutes doubling to six hours, the centrepiece of the
+  route-eligibility design — was unreachable on live traffic, and
+  `HalroProviderQuotaExhausted` watched a series that could never appear.
+
+  Refusals are now read for the code before the status, and on the code half
+  alone: an upstream that names the field it refused arrives as `code:param`,
+  and a table keyed on the whole identifier would miss it. What landed is
+  exactly what each vendor publishes, and no further: OpenAI's
+  `insufficient_quota`, `credit_balance_exhausted` and its two spend-limit
+  codes, Kimi's `exceeded_current_quota_error`, Anthropic's `402 billing_error`,
+  BigModel's `1113` and DeepSeek's `402`, with the two that need to know who
+  said them gated on the provider type — a bare number means nothing without its
+  vendor. MiniMax's
+  `1008` and `2056` are classified in its adapter, because they arrive as
+  business codes inside a body the gateway's classifier never sees; `2056` was
+  previously read as an ambiguous 5xx, which is to say as a call that might have
+  been billed.
+
+  **Two documented cases are deliberately not detected**, and both wait for a
+  real response rather than a cleverer guess. Anthropic's monthly spend cap
+  arrives as `429 rate_limit_error` — the same status and the same type as an
+  ordinary rate limit — distinguishable only by a missing `retry-after` header;
+  reading an indefinite condition out of an absent header would turn a transient
+  limit into a suspension a human has to clear. Gemini's daily quota is the same
+  shape one level down: its adapter surfaces `error.status`, which for a 429 is
+  the RPC name `RESOURCE_EXHAUSTED` for both the daily quota and the per-minute
+  limit, so the distinction lives somewhere the adapter does not read. An entry
+  for a spelling no Gemini path produces would be unreachable code that reads as
+  coverage, which is the failure being fixed here.
+
+  The window lengths and whether a quota is metered per credential or per model
+  still wait on real refusals; the design takes the conservative side of both.
+
+### Security
+
+- Built with Go 1.26.9 (from 1.26.6), for standard-library fixes in `net/http`
+  and `crypto/tls`.
 
 ## [0.8.5] - 2026-09-20
 
@@ -2403,6 +2468,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.9.0]: https://github.com/akz142857/Halro/compare/v0.8.5...v0.9.0
 [0.8.5]: https://github.com/akz142857/Halro/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/akz142857/Halro/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/akz142857/Halro/compare/v0.8.2...v0.8.3
