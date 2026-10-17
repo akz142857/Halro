@@ -230,7 +230,7 @@ jobs:
       - run: npm run build
         working-directory: web
       - run: git diff --exit-code -- internal/webui/dist
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: admin-dist
           path: internal/webui/dist
@@ -291,7 +291,7 @@ jobs:
             --mtime="@${SOURCE_DATE_EPOCH}" -C release -cf - \
             "halro-${GOOS}-${GOARCH}" | gzip -n >"release/halro-${GOOS}-${GOARCH}.tar.gz"
           rm -r "${package_dir}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: halro-${{ matrix.goos }}-${{ matrix.goarch }}
           path: release/halro-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
@@ -383,7 +383,7 @@ jobs:
           ignore-unfixed: true
           severity: HIGH,CRITICAL
           scanners: vuln,secret,misconfig
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: halro-container
           path: |
@@ -433,7 +433,7 @@ jobs:
           halro_deb="release/halro_${package_version}_amd64.deb"
           deadman_deb="release/halro-deadman_${package_version}_amd64.deb"
           tools/release/test_deb.sh "${halro_deb}" "${deadman_deb}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: halro-debian
           path: release/*.deb
@@ -523,12 +523,12 @@ jobs:
           cosign sign-blob --yes \
             --bundle evidence/release-run-evidence.json.sigstore.json \
             evidence/release-run-evidence.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-assets
           path: release
           retention-days: 90
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-run-evidence-${{ github.run_id }}-${{ github.run_attempt }}${{ needs.prepare.outputs.evidence_suffix }}
           path: evidence
