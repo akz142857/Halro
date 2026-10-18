@@ -1365,6 +1365,7 @@ func (r *Runtime) warnAboutReachableWorkbench() {
 func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 	r.warnAboutReachableWorkbench()
 	r.warnAboutMissingAnchorSink()
+	r.warnAboutUnsealedLedger(r.ledger.ActiveBytes())
 	// Certificates are loaded before any listener binds. A keypair that cannot
 	// be read is a refusal to start, not a listener that comes up in the clear.
 	if err := r.openTLSMaterial(); err != nil {

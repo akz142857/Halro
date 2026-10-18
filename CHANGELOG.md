@@ -76,6 +76,14 @@ semantic versioning.
 
 ### Changed
 
+- Ledger sealing is now on by default, rolling the active WAL at 256 MiB
+  (`ledger.seal.enabled: true`, `ledger.seal.max_active_bytes: 268435456`).
+  Opening the Ledger reads the whole active file, so its size is what a start
+  costs; sealing keeps it to seconds. **An upgraded install usually does not
+  get this default:** the v0.8.5 example config wrote `enabled: false` and
+  `max_active_bytes: 8589934592` explicitly, and `halro config migrate` keeps
+  values an operator wrote. Set both keys by hand. `halro start` now warns once
+  at startup when sealing is off and the active WAL is already past 256 MiB.
 - Usage history moved out of memory into an on-disk index,
   `data/history/history.db`. Every settled attempt and finished request is kept
   there, written in batches off the request path with a per-row HMAC, and
