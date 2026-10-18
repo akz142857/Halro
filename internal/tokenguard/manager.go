@@ -222,7 +222,21 @@ type Lease struct {
 	policyRev    uint64
 	bucketStart  int64
 	admittedCost int64
+	sample       admittedSample
 	once         sync.Once
+}
+
+// admittedSample is what one admission added to its subject, kept so Retract
+// can take it back: the bucket counters it raised, and the violation state as
+// it stood before and after.
+type admittedSample struct {
+	tokens            int64
+	baselineEligible  bool
+	statusBefore      Status
+	violationsBefore  int64
+	lastViolationPrev time.Time
+	violationsAfter   int64
+	lastViolationSet  time.Time
 }
 
 func (l *Lease) Release() {
@@ -235,6 +249,49 @@ func (l *Lease) Release() {
 			l.current.inFlight--
 		}
 		l.current.mu.Unlock()
+	})
+}
+
+// Retract releases the lease and takes back what its admission counted, for a
+// request that was refused before it was recorded anywhere and will be tried
+// again by Halro itself — a deferred request returned to its queue. Release
+// alone would leave the sample in the window, so every return to the queue
+// would count the same submission once more and a strict policy would block a
+// key for traffic it never sent.
+//
+// The violation this admission may have raised is undone only while it is
+// still the latest one; once another admission has moved the state on, that
+// admission's view stands. Events already emitted are not recalled: they
+// reported what was observed at the time.
+func (l *Lease) Retract() {
+	if l == nil || l.current == nil {
+		return
+	}
+	l.once.Do(func() {
+		current := l.current
+		current.mu.Lock()
+		defer current.mu.Unlock()
+		if current.inFlight > 0 {
+			current.inFlight--
+		}
+		if value := current.buckets[l.bucketStart]; value != nil {
+			value.requests = max(0, value.requests-1)
+			value.tokens = max(0, value.tokens-l.sample.tokens)
+			value.cost = max(0, value.cost-l.admittedCost)
+			if l.sample.baselineEligible {
+				value.baselineRequests = max(0, value.baselineRequests-1)
+				value.baselineTokens = max(0, value.baselineTokens-l.sample.tokens)
+				value.baselineCost = max(0, value.baselineCost-l.admittedCost)
+			}
+		}
+		recorded := !l.sample.lastViolationSet.Equal(l.sample.lastViolationPrev)
+		if recorded && current.violations == l.sample.violationsAfter && current.lastViolation.Equal(l.sample.lastViolationSet) {
+			current.violations = l.sample.violationsBefore
+			current.lastViolation = l.sample.lastViolationPrev
+			if current.status == StatusSuspicious {
+				current.status = l.sample.statusBefore
+			}
+		}
 	})
 }
 
@@ -369,6 +426,10 @@ func (m *Manager) admit(input Input, holdConcurrency bool) (Decision, *Lease) {
 		current.blockedUntil = time.Time{}
 		m.emit(current, policy, input, "token_guard_recovered", "info", "block_expired")
 	}
+	before := admittedSample{
+		tokens: input.EstimatedTokens, statusBefore: current.status,
+		violationsBefore: current.violations, lastViolationPrev: current.lastViolation,
+	}
 	stats := aggregate(current, input.Now.Add(-time.Minute))
 	reason := violationReason(policy, input, stats)
 	if reason != "" {
@@ -412,22 +473,25 @@ func (m *Manager) admit(input Input, holdConcurrency bool) (Decision, *Lease) {
 		if holdConcurrency {
 			current.inFlight++
 		}
-		return Decision{Allowed: true, Status: StatusSuspicious, Reason: ewmaReason}, leaseFor(current, policy, input, holdConcurrency)
+		return Decision{Allowed: true, Status: StatusSuspicious, Reason: ewmaReason}, leaseFor(current, policy, input, holdConcurrency, before)
 	}
-	recordAccepted(current, input, reason == "" && (current.baseline.FrozenUntil.IsZero() || !input.Now.Before(current.baseline.FrozenUntil)))
+	before.baselineEligible = reason == "" && (current.baseline.FrozenUntil.IsZero() || !input.Now.Before(current.baseline.FrozenUntil))
+	recordAccepted(current, input, before.baselineEligible)
 	if holdConcurrency {
 		current.inFlight++
 	}
-	return Decision{Allowed: true, Status: current.status, Reason: reason}, leaseFor(current, policy, input, holdConcurrency)
+	return Decision{Allowed: true, Status: current.status, Reason: reason}, leaseFor(current, policy, input, holdConcurrency, before)
 }
 
-func leaseFor(current *subject, policy domain.TokenGuardPolicy, input Input, held bool) *Lease {
+func leaseFor(current *subject, policy domain.TokenGuardPolicy, input Input, held bool, sample admittedSample) *Lease {
 	if !held {
 		return nil
 	}
+	sample.violationsAfter, sample.lastViolationSet = current.violations, current.lastViolation
 	return &Lease{
 		current: current, policyID: policy.ID, policyRev: policy.Revision,
 		bucketStart: input.Now.Truncate(10 * time.Second).Unix(), admittedCost: input.EstimatedCostMicrosUSD,
+		sample: sample,
 	}
 }
 

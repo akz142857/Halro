@@ -17,6 +17,8 @@ import (
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/requestmeta"
 	"github.com/akz142857/Halro/internal/vault"
+
+	"github.com/akz142857/Halro/internal/tokenguard"
 )
 
 type deferredFixture struct {
@@ -524,6 +526,75 @@ func TestAccountingAtItsMemoryLimitReturnsTheRequestToTheQueue(t *testing.T) {
 	if final := f.record(t, submitted.ID); final.Status != domain.DeferredCompleted {
 		t.Fatalf("the requeued request did not run once the limit cleared: %#v", final)
 	}
+}
+
+// A deferred request that goes back to its queue is retried by Halro, not by
+// its caller, so each return must not count the submission against Token Guard
+// again. Under a strict policy two such counts were enough to fail the request
+// with token_guard_blocked — before it ever reached an upstream — and to block
+// the key for everything else it sent.
+func TestARequeuedDeferredRequestIsNotCountedAgainstTokenGuard(t *testing.T) {
+	guarded := func(t *testing.T, shape func(*domain.Project)) deferredFixture {
+		f := newDeferredFixtureWith(t, func(project *domain.Project) {
+			project.TokenGuardPolicyID = "guard_strict"
+			if shape != nil {
+				shape(project)
+			}
+		})
+		guard, err := tokenguard.New([]domain.TokenGuardPolicy{{
+			ID: "guard_strict", Name: "strict", Enabled: true, Action: "temporary_block",
+			TokensPerMinute: 1, MinimumSamples: 2, ViolationsBeforeBlock: 2,
+			BlockTTL: time.Minute, Cooldown: 30 * time.Second,
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.service.tokenGuard = guard
+		return f
+	}
+	finish := func(t *testing.T, f deferredFixture, id string) {
+		t.Helper()
+		f.runOnce(t)
+		final := f.record(t, id)
+		if final.Status != domain.DeferredCompleted {
+			t.Fatalf("the request did not complete once the limit cleared: status=%q code=%q", final.Status, final.ErrorCode)
+		}
+		if f.adapter.calls != 1 {
+			t.Fatalf("upstream calls=%d, want exactly the one that completed", f.adapter.calls)
+		}
+	}
+	t.Run("concurrency ceiling", func(t *testing.T) {
+		f := guarded(t, func(project *domain.Project) { project.MaxConcurrency = 1 })
+		submitted := f.submit(t, "")
+		held, err := f.service.limiter.AcquireExecutionSlot(f.project, 1, f.service.now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 3; i++ {
+			if !f.service.runDeferredResponse(context.Background(), f.record(t, submitted.ID)) {
+				t.Fatalf("dequeue %d was not returned to the queue: %#v", i+1, f.record(t, submitted.ID))
+			}
+		}
+		held.Release()
+		finish(t, f, submitted.ID)
+	})
+	t.Run("accounting memory limit", func(t *testing.T) {
+		f := guarded(t, nil)
+		submitted := f.submit(t, "")
+		unlimited := f.service.accounting
+		limited, err := budget.NewWithOptions(f.log, f.state, mustResolver(t, "UTC"), budget.Options{MaxHotStateBytes: f.state.HotStateBytes(0)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.service.accounting = limited
+		for i := 0; i < 3; i++ {
+			if !f.service.runDeferredResponse(context.Background(), f.record(t, submitted.ID)) {
+				t.Fatalf("dequeue %d was not returned to the queue: %#v", i+1, f.record(t, submitted.ID))
+			}
+		}
+		f.service.accounting = unlimited
+		finish(t, f, submitted.ID)
+	})
 }
 
 // A caller who cancelled is owed "cancelled". A caller whose request happened to

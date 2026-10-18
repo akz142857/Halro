@@ -137,6 +137,17 @@ semantic versioning.
 
 ### Fixed
 
+- A deferred (background) Response returned to its queue was counted against
+  Token Guard again every time it came back out. Token Guard is checked before
+  the Project limiter and the accounting state, and a refusal by either only
+  released its concurrency slot, so the request's tokens stayed in the window.
+  Under a strict `temporary_block` policy two returns were enough to fail the
+  request with `token_guard_blocked` — although it had never reached an upstream
+  — and to block the key for everything else it sent. A deferred request
+  refused before the Ledger records it now takes its Token Guard admission back,
+  including any violation that admission raised; synchronous requests are
+  counted as before, because their caller decides whether to retry.
+
 - The idempotency index bucket was the only durable bucket missing from
   `requiredBuckets()`, so the check that runs after every migration — "metadata
   schema N is missing bucket X" — did not cover it.
