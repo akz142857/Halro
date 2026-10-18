@@ -349,8 +349,8 @@ ledger:
     compress: true
   # @title.zh-CN 账务热状态内存上限（字节）
   # @title.en-US Accounting hot-state memory limit in bytes
-  # @description.zh-CN 内存中账务状态（在途请求、打开的 WorkUnit 和 Run、余额）按条目数估算的大小上限。超过后新请求、新 WorkUnit、新 Run 返回 503 accounting_capacity_exhausted，已接收的工作照常结算，进程不会因此耗尽内存。默认 128 MiB，约 4 万个请求同时在途；允许 16 MiB～4 GiB。
-  # @description.en-US Size, estimated from its entries, that the accounting state held in memory — requests in flight, open Work Units and Runs, balances — may reach. Past it, new requests, Work Units and Runs are refused with 503 accounting_capacity_exhausted while admitted work still settles, so the process stops taking work rather than running out of memory. Default 128 MiB, about 40,000 requests in flight; 16 MiB to 4 GiB.
+  # @description.zh-CN 内存中账务状态（在途请求、打开的 WorkUnit 和 Run、余额）按条目数估算的大小上限。超过后新请求、新 WorkUnit、新 Run 返回 503 accounting_capacity_exhausted，已接收的工作照常结算，进程不会因此耗尽内存。默认 128 MiB，约 4 万个请求同时在途；允许 16 MiB～4 GiB。这是状态的上限，不是进程的：写快照时堆会短暂达到状态大小的约 6 倍，按这个倍数设容器内存上限。
+  # @description.en-US Size, estimated from its entries, that the accounting state held in memory — requests in flight, open Work Units and Runs, balances — may reach. Past it, new requests, Work Units and Runs are refused with 503 accounting_capacity_exhausted while admitted work still settles, so the process stops taking work rather than running out of memory. Default 128 MiB, about 40,000 requests in flight; 16 MiB to 4 GiB. This bounds the state, not the process: while a snapshot is written the heap briefly reaches about six times the state, so size a container memory limit against that multiple.
   max_hot_state_bytes: 134217728
 
 gateway:

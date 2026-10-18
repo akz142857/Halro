@@ -195,6 +195,8 @@ ledger:
   # accounting_capacity_exhausted until admitted work settles, so the process
   # stops taking work rather than running out of memory. 128 MiB is about
   # 40,000 requests in flight; raise it for many projects with Run Governance.
+  # It bounds the state, not the process: writing a snapshot briefly takes the
+  # heap to about six times the state, so size a memory limit for that.
   max_hot_state_bytes: 134217728
 
 gateway:

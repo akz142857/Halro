@@ -562,10 +562,15 @@ bounds the Parquet archive on disk and nothing else:
 Usage history therefore no longer sizes the container. Memory for usage is the
 requests in flight plus one pending batch (at most 2000 rows or 250 ms of
 traffic); the index itself lives on disk and in the page cache, which the
-kernel can reclaim under pressure. The accounting Ledger's own replayed state
-still grows with history until the Ledger snapshot lands
-(`docs/todo/memory-bounded-redesign.zh-CN.md`, phase P2); size the container
-against `docs/verification/memory-bounded-baseline.zh-CN.md` until then.
+kernel can reclaim under pressure. The accounting Ledger's state no longer
+grows with history either: it holds only work that is still open, is bounded by
+`ledger.max_hot_state_bytes` (below), and a start resumes it from a snapshot
+rather than replaying the whole Ledger.
+
+What does grow with history is disk. `history.db` costs about as much as the
+Ledger itself — roughly 5.75 KB per request, measured — and nothing expires its
+rows: `usage.retention_days` bounds the Parquet archive only. Plan disk for the
+Ledger and `history.db` together, not for the Ledger alone.
 
 A start resumes the index from its stored position and replays only the Ledger
 after it, off the start path: readiness does not wait for it. The first start
@@ -653,6 +658,13 @@ takes about 40,000 requests in flight at once. Many projects running Run
 Governance near their per-project caps are the case that can reach it, and
 raising the limit costs memory one for one. `HalroLedgerHotStateHigh` warns at
 80 percent and `HalroLedgerHotStateRejecting` fires on the first refusal.
+
+**The limit bounds the state, not the process.** The state snapshot written on
+the maintenance tick copies and encodes the whole state, so for the length of a
+snapshot the heap reaches about six times the state's size — measured at 6.2×
+with the state at its limit. Size a container memory limit against that
+multiple, not against `max_hot_state_bytes` itself: at the default, plan for
+roughly 800 MiB of heap at the moment of a snapshot on top of everything else.
 
 #### Deferred responses: answers held for later collection
 
