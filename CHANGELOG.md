@@ -84,7 +84,10 @@ semantic versioning.
   heap is about 1.3 GB smaller and a cold start no longer reloads the usage
   window. The first start after upgrading builds the index from the Ledger in
   the background; readiness does not wait for it. `halro.db` migrates to schema
-  41, which drops the old usage checkpoint and daily rollup tables.
+  41, which drops the old usage checkpoint and daily rollup tables. A write to
+  the index that fails stops it applying new records until the write succeeds
+  again, then replays the gap from the Ledger; while it fails, memory does not
+  grow with traffic.
 - `usage.console_window_days` and Settings → Instance now set only the default
   range of the attempt log and the failed-request list. Shortening it discards
   nothing, so it no longer asks for confirmation, and it is no longer bounded by

@@ -102,10 +102,19 @@ func (c *Collector) Run(ctx context.Context) {
 }
 
 // flush writes the pending batch. A failure leaves the batch in the aggregate
-// for the next attempt, so it is counted rather than lost.
+// and puts the collector into the same state as a dropped record: lagging, so
+// live records stop being applied and the maintenance tick's CatchUp writes the
+// batch and replays the gap from the Ledger once the write succeeds again.
+//
+// Retrying with live records still being applied was the alternative, and it
+// is unbounded: every failed write hands its batch back, so at any arrival rate
+// slower than a failing write the batch grew with every request for as long as
+// the failure lasted — about 1.2 KB of heap per request, until the process ran
+// out of memory. Only arrivals fast enough to overflow the queue stopped it.
 func (c *Collector) flush() {
 	if err := c.aggregate.Flush(); err != nil {
 		c.flushFail.Add(1)
+		c.lagging.Store(true)
 	}
 }
 
@@ -130,6 +139,15 @@ func (c *Collector) CatchUp(ctx context.Context) error {
 	}
 	c.applyMu.Lock()
 	defer c.applyMu.Unlock()
+	// A batch a failed write handed back goes first. Replaying the Ledger on
+	// top of it would apply more records only to hand them back too, so while
+	// the write still fails nothing more is applied and the collector stays
+	// lagging.
+	if err := c.aggregate.Flush(); err != nil {
+		c.flushFail.Add(1)
+		c.lagging.Store(true)
+		return err
+	}
 	for {
 		baseline := c.dropped.Load()
 		c.drainLocked()
@@ -140,9 +158,14 @@ func (c *Collector) CatchUp(ctx context.Context) error {
 			return err
 		}
 		c.drainLocked()
-		c.lagging.Store(false)
 		if c.dropped.Load() == baseline {
-			return c.aggregate.Flush()
+			if err := c.aggregate.Flush(); err != nil {
+				c.flushFail.Add(1)
+				c.lagging.Store(true)
+				return err
+			}
+			c.lagging.Store(false)
+			return nil
 		}
 		c.lagging.Store(true)
 	}

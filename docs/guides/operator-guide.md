@@ -579,8 +579,17 @@ Six metrics say how the index is keeping up: `halro_usage_history_pending_record
 far the index reaches; compare it with the Ledger's), and the write-cost counters
 `halro_usage_history_commits_total`, `halro_usage_history_commit_seconds_total`
 and `halro_usage_history_page_writes_total`, with
-`halro_usage_history_flush_failures_total` counting batches that had to be
-retried.
+`halro_usage_history_flush_failures_total` counting batches that failed to
+write.
+
+A failed write does not leave the index applying new records on top of a batch
+it cannot store. It stops, the way it does when its queue overflows —
+`halro_usage_analytics_lagging` reads 1 — and the maintenance tick writes the
+held batch and replays the gap from the Ledger once the write succeeds again,
+so a transient fault (a full disk that is cleared) recovers by itself. A stored
+row that fails authentication keeps every write failing: the console's usage
+stays at the moment it started and the counter keeps rising until the index is
+rebuilt offline with `halro usage rebuild-summary`.
 
 #### Keeping the ledger from being one file that only grows
 
