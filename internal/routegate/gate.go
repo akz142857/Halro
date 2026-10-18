@@ -414,9 +414,47 @@ func (l *Lease) Done(observation *Observation, now time.Time) bool {
 		}
 		l.gate.recordProbeOutcome(l.claimed, "still_failing")
 		l.gate.releaseClaims(l.claimed)
+		l.gate.observeClaimed(l.claimed, l.target, *observation, now)
 		suspended = l.gate.observeReporting(l.target, *observation, now)
 	})
 	return suspended
+}
+
+// observeClaimed records a failed half-open probe against every suspended
+// scope it was let through, under the policy that scope was suspended with.
+//
+// observeReporting alone records the failure against the scope its reason
+// names, which need not be the one that was probed. A deployment suspended by
+// the active prober and then probed by a request that failed to connect had
+// the failure counted against the provider instead, so the deployment's own
+// suspension was never touched again: its window did not double, its end and
+// its evidence stayed at the first failure, and the next request was let
+// through as soon as the slot came back — a suspension shown as having ended
+// long ago, still refusing traffic, probing the upstream without backing off.
+// The scope observeReporting is about to record is skipped here so it is not
+// counted twice. Each scope keeps the reason it was suspended for — that is
+// what the suspension is about — while its evidence takes the status, code and
+// time of the failure just seen.
+func (g *Gate) observeClaimed(claimed []Scope, target provider.Target, observation Observation, now time.Time) {
+	if len(claimed) == 0 {
+		return
+	}
+	reported, _, reportable := g.scopeAndPolicy(observation, target)
+	defer g.flush()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, scope := range claimed {
+		if reportable && scope == reported {
+			continue
+		}
+		state := g.scopes[scope]
+		if state == nil || !state.suspended() || state.indefinite {
+			continue
+		}
+		seen := observation
+		seen.Reason = state.evidence.Reason
+		g.observeLocked(scope, state.policy, seen, now, target.CredentialRevision)
+	}
 }
 
 // Abandon releases the claim without letting the attempt speak for anything.

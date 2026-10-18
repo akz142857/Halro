@@ -453,7 +453,11 @@ Also expect:
   Credential refusals do not expire on a clock — a dead key does not heal — and
   clear when the operator replaces the secret, so fixing it is the whole of the
   fix. Everything else uses a doubling window that honours the upstream's own
-  `Retry-After` where it gave one.
+  `Retry-After` where it gave one. A probe that fails doubles the window of
+  every suspension it was let through — including a deployment the active
+  prober took out, whose probe request fails for a reason recorded against its
+  provider — so a suspension's end and evidence move with each failure and the
+  probing backs off, rather than showing an end long past while still refusing.
 
   This replaces the circuit breaker and the registry's probe-health map, which
   were two answers to one question, keyed differently and unable to see each
