@@ -13,7 +13,10 @@ semantic versioning.
   503 `accounting_capacity_exhausted` and a `Retry-After` while admitted work
   settles, instead of the process growing until it runs out of memory. The
   estimate, the limit and refusals are exported as metrics, with
-  `HalroLedgerHotStateHigh` and `HalroLedgerHotStateRejecting` alerts.
+  `HalroLedgerHotStateHigh` and `HalroLedgerHotStateRejecting` alerts. A
+  deferred (background) Response refused this way goes back to the queue, like
+  one refused at the Project's concurrency or rate limit, rather than failing:
+  it was refused before the Ledger recorded it, so nothing was sent or billed.
 
 - `halro start` can serve Go profiles on a loopback-only, opt-in listener
   (`HALRO_PPROF_LISTEN=127.0.0.1:6060`) so memory growth can be attributed in

@@ -485,6 +485,47 @@ func TestALimitAtDequeueReturnsTheRequestToTheQueue(t *testing.T) {
 	}
 }
 
+// The accounting state at its memory limit is the same kind of refusal as a
+// Project's concurrency ceiling: it clears as admitted work settles, and it is
+// returned before RequestAccepted reaches the Ledger, so putting the record
+// back leaves no trace of an attempt that did not happen.
+func TestAccountingAtItsMemoryLimitReturnsTheRequestToTheQueue(t *testing.T) {
+	f := newDeferredFixture(t)
+	submitted := f.submit(t, "")
+	calls := f.adapter.calls
+
+	unlimited := f.service.accounting
+	limited, err := budget.NewWithOptions(f.log, f.state, mustResolver(t, "UTC"), budget.Options{MaxHotStateBytes: f.state.HotStateBytes(0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.service.accounting = limited
+	record := f.record(t, submitted.ID)
+	if requeued := f.service.runDeferredResponse(context.Background(), record); !requeued {
+		t.Fatal("a refusal at the accounting memory limit did not report itself as a requeue")
+	}
+	blocked := f.record(t, submitted.ID)
+	if blocked.Status != domain.DeferredQueued {
+		t.Fatalf("the request was not returned to the queue: status=%q code=%q", blocked.Status, blocked.ErrorCode)
+	}
+	if blocked.InputObjectPath == "" {
+		t.Fatal("the stored request was erased for a request that was never sent")
+	}
+	if f.adapter.calls != calls {
+		t.Fatal("a request refused admission reached an upstream anyway")
+	}
+	if stats := limited.HotStateStats(); stats.RequestRejections != 1 {
+		t.Fatalf("the refusal was not the hot-state limit: %#v", stats)
+	}
+
+	// Once the state has room again, the same record runs to completion.
+	f.service.accounting = unlimited
+	f.runOnce(t)
+	if final := f.record(t, submitted.ID); final.Status != domain.DeferredCompleted {
+		t.Fatalf("the requeued request did not run once the limit cleared: %#v", final)
+	}
+}
+
 // A caller who cancelled is owed "cancelled". A caller whose request happened to
 // be running when the process began shutting down cancelled nothing, and both
 // arrive at the worker as one cancelled context.

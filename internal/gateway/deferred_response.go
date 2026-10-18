@@ -664,10 +664,13 @@ func (s *Service) runDeferredResponse(ctx context.Context, record domain.Provide
 // not clear until the accounting day does, which is longer than the record
 // lives, so retrying it until the TTL would only delay the same answer.
 //
-// The three codes here are the Project's own limiters, and they are the ones
-// that can be requeued because of *where* they are refused: they are checked
-// before beginRequestRun, so nothing has been written to the Ledger and putting
-// the record back leaves no trace of the attempt that did not happen.
+// The codes here can be requeued because of *where* they are refused. The
+// Project's own three limiters are checked before beginRequestRun, and the
+// accounting state's memory limit is refused inside it but before
+// RequestAccepted is appended (budget's admitRequest), so in every case nothing
+// has been written to the Ledger and putting the record back leaves no trace of
+// the attempt that did not happen. The memory limit clears as admitted work
+// settles, which is the kind of pressure the queue exists to absorb.
 //
 // Deployment and provider concurrency are the same kind of limit — time clears
 // both — and are deliberately not here. They are refused inside startAttempt,
@@ -684,7 +687,8 @@ func deferredAdmissionRefusal(err error) bool {
 		return false
 	}
 	switch failure.Code {
-	case "concurrency_limit_exceeded", "token_rate_limit_exceeded", "rate_limit_exceeded":
+	case "concurrency_limit_exceeded", "token_rate_limit_exceeded", "rate_limit_exceeded",
+		"accounting_capacity_exhausted":
 		return true
 	}
 	return false
