@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 
+	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/usage"
 )
 
@@ -30,6 +31,24 @@ import (
 // Removing one safely needs a durable record of what was removed and of the
 // balances it carried, and there is not one. Compression is the lever that
 // exists today; it takes the archive to roughly a fifth.
+
+// warnAboutUnsealedLedger tells the operator of an upgraded install that the
+// sealing default never reached them. Migration keeps values an operator wrote
+// down, and the v0.8.5 example wrote `enabled: false` explicitly, so a config
+// copied from it still has sealing off — and every start still reads the whole
+// active WAL, which is the cost sealing exists to bound. Past the default
+// threshold that cost is already being paid; below it, nothing is said.
+func (r *Runtime) warnAboutUnsealedLedger(activeBytes int64) {
+	if r.config.Ledger.Seal.Enabled || activeBytes <= config.DefaultLedgerSealMaxActiveBytes {
+		return
+	}
+	r.logger.Warn(
+		"ledger sealing is off and the active WAL is past the default seal threshold; "+
+			"every start reads the whole active file, so start time keeps growing with history",
+		"active_bytes", activeBytes, "default_threshold_bytes", config.DefaultLedgerSealMaxActiveBytes,
+		"remedy", "set ledger.seal.enabled: true (and ledger.seal.max_active_bytes: 268435456)",
+	)
+}
 
 // sealLedgerGeneration rolls the active WAL once it passes the configured size.
 func (r *Runtime) sealLedgerGeneration() {
