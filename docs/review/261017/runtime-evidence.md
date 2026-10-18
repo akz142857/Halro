@@ -12,7 +12,7 @@
 | E02 | 回滚围栏 + 用升级前备份回到 v0.8.5 | **PASS** |
 | E03 | 崩溃恢复（Linux 容器，SIGKILL） | **PASS**（11 轮） |
 | E04 | 磁盘异常 | **PASS**（磁盘满失败关闭、无损坏）；只读与慢盘 BLOCKED；E04c 复现 V-001 |
-| E05 | 4 小时内存长跑 | 见 E05 节 |
+| E05 | 4 小时内存长跑 | **PASS**（堆不随历史增长、无时间类泄漏）；第 60 分钟后负载形态因 V-010 改变 |
 | E06 | 热状态上限触发 | **PASS**（拒绝、收尾、恢复、校验；告警只有规则证据）；实测 V-003 快照峰值 104.4 MiB |
 | E07 | 有规模数据的备份/恢复 | **PASS** |
 | E08 | Linux 上的全量测试 | **PASS**（CI） |
@@ -79,6 +79,40 @@ v0.8.5 停机后自检：`ledger verify` 515,580 帧 `ChainVerified: true`；`us
 没有任何一次出现数据损坏：每次腾出空间并重启后，校验全部通过。只读文件系统与慢盘需要特权容器与块设备节流，本轮 **BLOCKED**。
 
 **E04c 一行用量历史损坏（V-001 的真实二进制复现）**：在普通 volume 上，先写入当前小时，停机后用一次性工具翻转 `history.db` hourly 桶最后一行的首字节，再以 16 线程持续请求 120 s：`flush_failures_total` 与 `row_auth_failures_total` 每 10 s 涨约 450，`pending_records` 始终为 0；日志 `usage history catch-up failed`、`usage parquet export skipped; history write failed`；重启后同样失败。翻转最早一行（E04b）则毫无影响。详见 V-001。
+
+## E05 · 内存长跑（Linux 容器，4 h 05 m）
+
+E01 升级后目录的拷贝；封存开（`ledger.seal.enabled=true`，256 MiB），热状态上限为默认 128 MiB，`HALRO_PPROF_LISTEN` 开。负载：32 线程约 142 req/s 的普通请求 + 8 个治理 Key 各每 4 s 一个完整周期（Work Unit → Run → 4 个请求 → 关 Run → Outcome → 关 Work Unit）。每 5 分钟采指标、`/debug/runtime`、VmRSS 与 `heap?gc=1` profile（52 个）。2026-10-18 15:07–19:18 +08。主机上 owner 的开发实例 `halro start` 与两个容器照常运行。
+
+**负载形态在第 60 分钟改变**：每小时一次的主动探测打到不可解析的测试 Provider，deployment 被挂起，此后约 97% 的普通请求在路由层返回 503 `all_candidates_suspended`（V-010）。Ledger 与历史的增长因此降到前一小时的约 1/7。owner 决定保留本轮，不重跑。
+
+| 量 | 值 |
+| --- | --- |
+| 普通请求 | 586,784 个 502（到达上游失败）+ 1,593,280 个 503（V-010） |
+| 治理周期 | 29,383 个，Work Unit/Run/Outcome/两次关闭全部 201；周期内请求 48,172 个 502 + 69,360 个 503 |
+| Ledger | 头序号 518,416 → 5,026,771（+450 万条），封存多代并压缩 |
+| 数据目录 | 1,567 → 9,463 MiB（前 60 分钟约 1.75 MB/s，之后约 0.25 MB/s） |
+| 热状态估算 | 全程 12.0–12.4 MiB，拒绝 0 |
+| goroutine | 每次回落到 22（峰值 94，出现在第一小时的封存/导出时刻） |
+| `usage_history` 写失败 | 0 |
+
+**堆**（`HeapAlloc`，含未回收垃圾；与 GC 后的存活堆 `heap?gc=1` 分开看）：
+
+| 时段 | HeapAlloc 中位数 / 最大 | GC 后存活堆的底 | RSS 中位数 / 最大 |
+| --- | --- | --- | --- |
+| 第 1 小时（Ledger 52 万 → 330 万条） | 46 / 113 MiB | 26–36 MiB | 203 / 396 MiB |
+| 第 2 小时 | 58 / 179 MiB | 31–36 MiB | 165 / 309 MiB |
+| 第 3 小时 | 60 / 197 MiB | 32–35 MiB | 169 / 345 MiB |
+| 第 4 小时 | 74 / 187 MiB | 36–39 MiB | 191 / 304 MiB |
+| 结束 | 38 MiB | 35.4 MiB | 109 MiB |
+
+- 每小时 :07 的峰值来自每小时一次的 Parquet 导出（`usage.(*Exporter).Export` → `writeParquetAtomic`，zstd 与 parquet-go 缓冲）。导出按 `LastSequence` 增量进行，一次只持有一个 `exportChunkRows = 50000` 行的块（`internal/usage/parquet.go:212`），与历史长度无关；三次峰值时的存活堆为 86 → 65 → 88 MB，没有趋势，`HeapAlloc` 峰值的升高（112 → 178 → 196 MiB）是 GC 时机。
+- 结束时对第 1 小时末（`heap-011`）的存活堆差分：**合计 −2.8 MB**。唯一的正项是 bbolt freelist（`freelist.(*array).Allocate` +4.6 MB），随 `history.db` 的空闲页增长；量很小，但本轮没有证明它有上界，记为观察项。
+- 第 1 小时 Ledger 增长 280 万条时堆没有跟随。作为对照，P0 基线下旧实现约 4.4 KB 堆/请求（`docs/verification/memory-bounded-baseline.zh-CN.md`），同等请求量约 2 GB。
+
+**收尾**：停机 exit 0；`ledger verify`、`usage verify`、`audit verify` exit 0，`doctor` healthy。重启 10 s 就绪，`from_snapshot=true`、`head_sequence=5026771`，重启后 `HeapAlloc` 30 MiB、热状态 12.0 MiB；同一时刻 RSS 为 516 MiB——远大于堆，推测是 bbolt 对多 GB 数据文件的 mmap 页计入 RSS，本轮**没有单独测量**。
+
+结论 **PASS**：堆不随历史增长（第 1 小时满负载下得到验证），4 小时内没有时间类泄漏；限制是后 3 小时的写入负载只有前 1 小时的约 1/7（V-010），以及 bbolt freelist 的上界与重启后 RSS 的构成未测。
 
 ## E06 · 热状态上限触发（Linux 容器）
 
