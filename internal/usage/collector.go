@@ -44,6 +44,11 @@ type Collector struct {
 	aggregate *Aggregate
 	replayer  Replayer
 	queue     chan ledger.Record
+	// ready wakes Run when Observe has queued something. Run does not take
+	// records off the queue itself: it drains it under applyMu, as CatchUp
+	// does, so a record is never held outside the lock where a concurrent
+	// drain could apply the records behind it first.
+	ready     chan struct{}
 	applyMu   sync.Mutex
 	lagging   atomic.Bool
 	dropped   atomic.Uint64
@@ -62,7 +67,10 @@ func NewCollector(aggregate *Aggregate, replayer Replayer, capacity int) (*Colle
 	if aggregate == nil || replayer == nil || capacity < 1 {
 		return nil, errors.New("aggregate, replayer, and positive queue capacity are required")
 	}
-	collector := &Collector{aggregate: aggregate, replayer: replayer, queue: make(chan ledger.Record, capacity), replayChunk: replayChunkRecords}
+	collector := &Collector{
+		aggregate: aggregate, replayer: replayer, queue: make(chan ledger.Record, capacity),
+		ready: make(chan struct{}, 1), replayChunk: replayChunkRecords,
+	}
 	collector.lagging.Store(true)
 	return collector, nil
 }
@@ -74,6 +82,10 @@ func (c *Collector) Observe(record ledger.Record) {
 		c.dropped.Add(1)
 		c.lagging.Store(true)
 	}
+	select {
+	case c.ready <- struct{}{}:
+	default:
+	}
 }
 
 func (c *Collector) Run(ctx context.Context) {
@@ -81,14 +93,23 @@ func (c *Collector) Run(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		select {
-		case record := <-c.queue:
+		case <-c.ready:
+			// Taking a record off the queue and then waiting for applyMu let
+			// CatchUp, holding the lock, drain the records queued behind it
+			// first. The held record then arrived behind the watermark, was
+			// refused as out of order and was lost — replay resumes from the
+			// watermark — and the index silently lost a request every time.
 			c.applyMu.Lock()
-			if !c.lagging.Load() {
-				if err := c.aggregate.Apply(record); err != nil {
-					c.lagging.Store(true)
+			more := c.drainUpToLocked(historyFlushRecords)
+			c.applyMu.Unlock()
+			if more {
+				// Bounded so a sustained stream cannot hold applyMu, or grow
+				// the batch, indefinitely; the rest is taken on the next turn.
+				select {
+				case c.ready <- struct{}{}:
+				default:
 				}
 			}
-			c.applyMu.Unlock()
 			if c.aggregate.PendingRecords() >= historyFlushRecords {
 				c.flush()
 			}
@@ -213,7 +234,13 @@ func (c *Collector) replayToHead(ctx context.Context) error {
 }
 
 func (c *Collector) drainLocked() {
-	for {
+	c.drainUpToLocked(0)
+}
+
+// drainUpToLocked applies queued records in order, at most limit of them when
+// limit is positive, and reports whether the queue still held more.
+func (c *Collector) drainUpToLocked(limit int) bool {
+	for taken := 0; limit <= 0 || taken < limit; taken++ {
 		select {
 		case record := <-c.queue:
 			if !c.lagging.Load() {
@@ -222,9 +249,10 @@ func (c *Collector) drainLocked() {
 				}
 			}
 		default:
-			return
+			return false
 		}
 	}
+	return len(c.queue) > 0
 }
 
 func (c *Collector) Stats() CollectorStats {

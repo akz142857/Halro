@@ -363,7 +363,11 @@ Also expect:
   41, which drops the old usage checkpoint and daily rollup tables. A write to
   the index that fails stops it applying new records until the write succeeds
   again, then replays the gap from the Ledger; while it fails, memory does not
-  grow with traffic.
+  grow with traffic. A catch-up that ran while live records were arriving — on
+  the maintenance tick, or behind an Admin usage read — could make the index
+  silently skip a record the collector had already taken off its queue, so the
+  usage history came out a few requests short of the Ledger and `halro usage
+  verify` failed; records are now only ever applied in order under one lock.
 - `usage.console_window_days` and Settings → Instance now set only the default
   range of the attempt log and the failed-request list. Shortening it discards
   nothing, so it no longer asks for confirmation, and it is no longer bounded by
