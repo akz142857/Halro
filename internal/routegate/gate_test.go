@@ -514,3 +514,46 @@ func TestAReloadLeavesAvailabilitySuspensionsAlone(t *testing.T) {
 		t.Fatal("a reload cleared a deployment that is still failing")
 	}
 }
+
+// A deployment the active prober suspended, probed by a request that fails to
+// connect, has to stay suspended on a clock that moves: the probe that failed
+// doubles the window it served. The failure is reported against the provider
+// scope, which is not the one that was probed, so before this the deployment's
+// suspension never moved again — its end stayed thirty seconds after the first
+// probe while it went on refusing traffic, and a request was let through to the
+// upstream every time the half-open slot came back.
+func TestAFailedHalfOpenProbeMovesTheSuspensionItProbed(t *testing.T) {
+	gate := New(Config{})
+	target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 1)
+	gate.ObserveProbe("dep_1", DeploymentProbe{ObservedAt: base, ErrorClass: "connect"}, base)
+
+	probeAt := base.Add(31 * time.Second)
+	lease, err := gate.Admit(target, probeAt)
+	if err != nil {
+		t.Fatalf("the window had ended but no probe was let through: %v", err)
+	}
+	lease.Done(&Observation{Class: provider.ErrorConnect}, probeAt)
+
+	var deployment *SuspensionSnapshot
+	for _, s := range gate.Snapshot(probeAt) {
+		if s.Scope == (Scope{Kind: ScopeDeployment, Key: "dep_1"}) {
+			s := s
+			deployment = &s
+		}
+	}
+	if deployment == nil {
+		t.Fatal("the deployment suspension disappeared after a failed probe")
+	}
+	if want := probeAt.Add(60 * time.Second); !deployment.Until.Equal(want) {
+		t.Fatalf("suspension ends %s, want %s: a failed probe did not double the window", deployment.Until, want)
+	}
+	if !deployment.Evidence.ObservedAt.Equal(probeAt) {
+		t.Fatalf("evidence observed %s, want the failed probe at %s", deployment.Evidence.ObservedAt, probeAt)
+	}
+	if _, err := gate.Admit(target, probeAt.Add(time.Second)); !errors.Is(err, ErrSuspended) {
+		t.Fatalf("a request was let through one second after a failed probe: %v", err)
+	}
+	if _, err := gate.Admit(target, probeAt.Add(61*time.Second)); err != nil {
+		t.Fatalf("no probe was let through once the doubled window ended: %v", err)
+	}
+}
