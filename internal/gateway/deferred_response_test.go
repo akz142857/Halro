@@ -17,6 +17,8 @@ import (
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/requestmeta"
 	"github.com/akz142857/Halro/internal/vault"
+
+	"github.com/akz142857/Halro/internal/tokenguard"
 )
 
 type deferredFixture struct {
@@ -483,6 +485,144 @@ func TestALimitAtDequeueReturnsTheRequestToTheQueue(t *testing.T) {
 	if final := f.record(t, submitted.ID); final.Status != domain.DeferredCompleted {
 		t.Fatalf("the requeued request did not run once the ceiling cleared: %#v", final)
 	}
+}
+
+// The accounting state at its memory limit is the same kind of refusal as a
+// Project's concurrency ceiling: it clears as admitted work settles, and it is
+// returned before RequestAccepted reaches the Ledger, so putting the record
+// back leaves no trace of an attempt that did not happen.
+func TestAccountingAtItsMemoryLimitReturnsTheRequestToTheQueue(t *testing.T) {
+	f := newDeferredFixture(t)
+	submitted := f.submit(t, "")
+	calls := f.adapter.calls
+
+	unlimited := f.service.accounting
+	limited, err := budget.NewWithOptions(f.log, f.state, mustResolver(t, "UTC"), budget.Options{MaxHotStateBytes: f.state.HotStateBytes(0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.service.accounting = limited
+	record := f.record(t, submitted.ID)
+	if requeued := f.service.runDeferredResponse(context.Background(), record); !requeued {
+		t.Fatal("a refusal at the accounting memory limit did not report itself as a requeue")
+	}
+	blocked := f.record(t, submitted.ID)
+	if blocked.Status != domain.DeferredQueued {
+		t.Fatalf("the request was not returned to the queue: status=%q code=%q", blocked.Status, blocked.ErrorCode)
+	}
+	if blocked.InputObjectPath == "" {
+		t.Fatal("the stored request was erased for a request that was never sent")
+	}
+	if f.adapter.calls != calls {
+		t.Fatal("a request refused admission reached an upstream anyway")
+	}
+	if stats := limited.HotStateStats(); stats.RequestRejections != 1 {
+		t.Fatalf("the refusal was not the hot-state limit: %#v", stats)
+	}
+
+	// Once the state has room again, the same record runs to completion.
+	f.service.accounting = unlimited
+	f.runOnce(t)
+	if final := f.record(t, submitted.ID); final.Status != domain.DeferredCompleted {
+		t.Fatalf("the requeued request did not run once the limit cleared: %#v", final)
+	}
+}
+
+// A deferred request that goes back to its queue is retried by Halro, not by
+// its caller, so each return must not count the submission against Token Guard
+// again. Under a strict policy two such counts were enough to fail the request
+// with token_guard_blocked — before it ever reached an upstream — and to block
+// the key for everything else it sent.
+func TestARequeuedDeferredRequestIsNotCountedAgainstTokenGuard(t *testing.T) {
+	guarded := func(t *testing.T, shape func(*domain.Project)) deferredFixture {
+		f := newDeferredFixtureWith(t, func(project *domain.Project) {
+			project.TokenGuardPolicyID = "guard_strict"
+			if shape != nil {
+				shape(project)
+			}
+		})
+		guard, err := tokenguard.New([]domain.TokenGuardPolicy{{
+			ID: "guard_strict", Name: "strict", Enabled: true, Action: "temporary_block",
+			TokensPerMinute: 1, MinimumSamples: 2, ViolationsBeforeBlock: 2,
+			BlockTTL: time.Minute, Cooldown: 30 * time.Second,
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.service.tokenGuard = guard
+		return f
+	}
+	finish := func(t *testing.T, f deferredFixture, id string) {
+		t.Helper()
+		f.runOnce(t)
+		final := f.record(t, id)
+		if final.Status != domain.DeferredCompleted {
+			t.Fatalf("the request did not complete once the limit cleared: status=%q code=%q", final.Status, final.ErrorCode)
+		}
+		if f.adapter.calls != 1 {
+			t.Fatalf("upstream calls=%d, want exactly the one that completed", f.adapter.calls)
+		}
+	}
+	t.Run("concurrency ceiling", func(t *testing.T) {
+		f := guarded(t, func(project *domain.Project) { project.MaxConcurrency = 1 })
+		submitted := f.submit(t, "")
+		held, err := f.service.limiter.AcquireExecutionSlot(f.project, 1, f.service.now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 3; i++ {
+			if !f.service.runDeferredResponse(context.Background(), f.record(t, submitted.ID)) {
+				t.Fatalf("dequeue %d was not returned to the queue: %#v", i+1, f.record(t, submitted.ID))
+			}
+		}
+		held.Release()
+		finish(t, f, submitted.ID)
+	})
+	t.Run("accounting memory limit", func(t *testing.T) {
+		f := guarded(t, nil)
+		submitted := f.submit(t, "")
+		unlimited := f.service.accounting
+		limited, err := budget.NewWithOptions(f.log, f.state, mustResolver(t, "UTC"), budget.Options{MaxHotStateBytes: f.state.HotStateBytes(0)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.service.accounting = limited
+		for i := 0; i < 3; i++ {
+			if !f.service.runDeferredResponse(context.Background(), f.record(t, submitted.ID)) {
+				t.Fatalf("dequeue %d was not returned to the queue: %#v", i+1, f.record(t, submitted.ID))
+			}
+		}
+		f.service.accounting = unlimited
+		finish(t, f, submitted.ID)
+	})
+}
+
+// The execution slot a deferred dequeue takes charges the Project's TPM. A
+// dequeue refused before the Ledger sent nothing, so going back to the queue
+// must refund it; otherwise each return spends the shared per-minute allowance
+// again and starves queued and synchronous work after the limit clears.
+func TestARequeuedDeferredRequestRefundsTheProjectTPM(t *testing.T) {
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	const tpm = 1_000_000
+	f := newDeferredFixtureAt(t, func() time.Time { return now }, func(project *domain.Project) { project.TPM = tpm })
+	submitted := f.submit(t, "")
+	limited, err := budget.NewWithOptions(f.log, f.state, mustResolver(t, "UTC"), budget.Options{MaxHotStateBytes: f.state.HotStateBytes(0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.service.accounting = limited
+	for i := 0; i < 3; i++ {
+		if !f.service.runDeferredResponse(context.Background(), f.record(t, submitted.ID)) {
+			t.Fatalf("dequeue %d was not returned to the queue", i+1)
+		}
+	}
+	// The clock has not moved, so nothing has refilled: the whole allowance is
+	// there only if every refused dequeue gave its charge back.
+	full, err := f.service.limiter.AcquireExecutionSlot(f.project, tpm, now)
+	if err != nil {
+		t.Fatalf("requeued dequeues kept their TPM charge: %v", err)
+	}
+	full.Release()
 }
 
 // A caller who cancelled is owed "cancelled". A caller whose request happened to

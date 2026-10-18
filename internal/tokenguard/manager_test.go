@@ -568,3 +568,137 @@ func TestAMissingPolicyRefusesInsteadOfAdmittingUnconditionally(t *testing.T) {
 		t.Fatalf("no-policy project was refused: %#v", decision)
 	}
 }
+
+// Retract takes back what an admission counted, for a request Halro will try
+// again itself. Release does not: the same two violating admissions that block
+// a key when released leave it merely suspicious when the first is retracted.
+func TestRetractTakesBackTheAdmissionReleaseKeeps(t *testing.T) {
+	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	violating := Input{PolicyID: "guard_1", ProjectID: "project_1", KeyID: "key_1", EstimatedTokens: 101}
+	run := func(retract bool) Decision {
+		manager, err := New([]domain.TokenGuardPolicy{testPolicy()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 3; i++ {
+			input := violating
+			input.Now = now.Add(time.Duration(i) * time.Second)
+			decision, lease := manager.Acquire(input)
+			if !decision.Allowed {
+				return decision
+			}
+			if retract {
+				lease.Retract()
+			} else {
+				lease.Release()
+			}
+		}
+		input := violating
+		input.Now = now.Add(5 * time.Second)
+		decision, lease := manager.Acquire(input)
+		lease.Release()
+		return decision
+	}
+	if released := run(false); released.Allowed || released.Status != StatusTemporarilyBlocked {
+		t.Fatalf("released admissions should still count toward a block: %#v", released)
+	}
+	if retracted := run(true); !retracted.Allowed || retracted.Status != StatusSuspicious {
+		t.Fatalf("retracted admissions were still counted: %#v", retracted)
+	}
+}
+
+// A retraction undoes the window sample but not a violation another admission
+// has since built on: once the state has moved on, that admission's view stands.
+func TestRetractLeavesALaterViolationInPlace(t *testing.T) {
+	manager, err := New([]domain.TokenGuardPolicy{testPolicy()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	input := Input{PolicyID: "guard_1", ProjectID: "project_1", KeyID: "key_1", EstimatedTokens: 101, Now: now}
+	first, firstLease := manager.Acquire(input)
+	if !first.Allowed {
+		t.Fatalf("first=%#v", first)
+	}
+	// A second, unrelated small request is admitted while the first is held.
+	small := input
+	small.EstimatedTokens, small.Now = 1, now.Add(time.Second)
+	_, smallLease := manager.Acquire(small)
+	smallLease.Release()
+	// A third violating request is admitted before the first is retracted.
+	input.Now = now.Add(2 * time.Second)
+	second, secondLease := manager.Acquire(input)
+	if second.Allowed {
+		t.Fatalf("two violations with two samples should block: %#v", second)
+	}
+	secondLease.Release()
+	firstLease.Retract()
+	input.Now = now.Add(3 * time.Second)
+	if decision, _ := manager.Acquire(input); decision.Allowed {
+		t.Fatalf("the retraction undid a block another admission caused: %#v", decision)
+	}
+}
+
+// The violation a retracted admission raised is taken back too. With three
+// violations needed to block, two retracted retries followed by two real
+// violating requests must leave the key where those two alone would: suspicious,
+// not blocked.
+func TestRetractTakesBackTheViolationItRaised(t *testing.T) {
+	policy := testPolicy()
+	policy.ViolationsBeforeBlock = 3
+	manager, err := New([]domain.TokenGuardPolicy{policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	input := Input{PolicyID: "guard_1", ProjectID: "project_1", KeyID: "key_1", EstimatedTokens: 101}
+	for i := 0; i < 2; i++ {
+		input.Now = now.Add(time.Duration(i) * time.Second)
+		decision, lease := manager.Acquire(input)
+		if !decision.Allowed {
+			t.Fatalf("retry %d=%#v", i, decision)
+		}
+		lease.Retract()
+	}
+	for i := 0; i < 2; i++ {
+		input.Now = now.Add(time.Duration(5+i) * time.Second)
+		decision, lease := manager.Acquire(input)
+		if !decision.Allowed || decision.Status != StatusSuspicious {
+			t.Fatalf("real request %d=%#v, want admitted as suspicious", i, decision)
+		}
+		lease.Release()
+	}
+}
+
+// Two admissions of the same key that overlap — both violating, both retracted
+// later, the first one first — must each take back only their own violation.
+// Restoring a snapshot instead let the second put back the first one's, so a
+// violation outlived both admissions and the next retries blocked the key.
+func TestOverlappingRetractionsEachTakeBackTheirOwnViolation(t *testing.T) {
+	policy := testPolicy()
+	policy.ViolationsBeforeBlock = 3
+	manager, err := New([]domain.TokenGuardPolicy{policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	input := Input{PolicyID: "guard_1", ProjectID: "project_1", KeyID: "key_1", EstimatedTokens: 101, Now: now}
+	first, a := manager.Acquire(input)
+	input.Now = now.Add(time.Second)
+	second, b := manager.Acquire(input)
+	if !first.Allowed || !second.Allowed {
+		t.Fatalf("first=%#v second=%#v", first, second)
+	}
+	a.Retract()
+	b.Retract()
+	// With both withdrawn, two real violating requests are the first and the
+	// second violation: suspicious, not blocked.
+	for i := 0; i < 2; i++ {
+		input.Now = now.Add(time.Duration(5+i) * time.Second)
+		decision, lease := manager.Acquire(input)
+		if !decision.Allowed || decision.Status != StatusSuspicious {
+			t.Fatalf("real request %d=%#v: a withdrawn violation was still counted", i, decision)
+		}
+		lease.Release()
+	}
+}

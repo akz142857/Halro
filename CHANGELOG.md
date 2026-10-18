@@ -13,7 +13,12 @@ semantic versioning.
   503 `accounting_capacity_exhausted` and a `Retry-After` while admitted work
   settles, instead of the process growing until it runs out of memory. The
   estimate, the limit and refusals are exported as metrics, with
-  `HalroLedgerHotStateHigh` and `HalroLedgerHotStateRejecting` alerts.
+  `HalroLedgerHotStateHigh` and `HalroLedgerHotStateRejecting` alerts. A
+  deferred (background) Response refused this way goes back to the queue, like
+  one refused at the Project's concurrency or rate limit, rather than failing:
+  it was refused before the Ledger recorded it, so nothing was sent or billed,
+  and the Project TPM its dequeue charged is refunded rather than spent again
+  on every return.
 
 - `halro start` can serve Go profiles on a loopback-only, opt-in listener
   (`HALRO_PPROF_LISTEN=127.0.0.1:6060`) so memory growth can be attributed in
@@ -141,6 +146,18 @@ semantic versioning.
   no longer has to survive in Go to be answerable.
 
 ### Fixed
+
+- A deferred (background) Response returned to its queue was counted against
+  Token Guard again every time it came back out. Token Guard is checked before
+  the Project limiter and the accounting state, and a refusal by either only
+  released its concurrency slot, so the request's tokens stayed in the window.
+  Under a strict `temporary_block` policy two returns were enough to fail the
+  request with `token_guard_blocked` — although it had never reached an upstream
+  — and to block the key for everything else it sent. A deferred request
+  refused before the Ledger records it now takes its Token Guard admission back,
+  including the violation that admission raised (only its own, so overlapping
+  retries cannot leave one behind); synchronous requests are
+  counted as before, because their caller decides whether to retry.
 
 - The idempotency index bucket was the only durable bucket missing from
   `requiredBuckets()`, so the check that runs after every migration — "metadata
