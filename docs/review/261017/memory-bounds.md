@@ -11,7 +11,7 @@
 | 已准入未结束请求集合 | `budget.openRequests` | 在途请求数；计入热状态估算 | `internal/budget/hot_state.go`；7 个请求入口均 `defer run.close()` | 有界 |
 | map 槽位 | Go map 删除后不归还槽位 | 降到峰值 1/4 以下重建 | `internal/ledger/hot_state.go` `shrinkMaps`（#424） | 有界 |
 | 状态快照的瞬时副本 | `marshalSnapshotWithQueue` | 约 6.3× 状态实际堆（实测 60.4 MiB 状态 → 峰值 380.7 MiB） | V-003 | 有界但远大于配置值 |
-| 用量历史待写批次 | `usage.Aggregate` `batchAttempts`/`batchSummaries`/hourly/rollup/pending | 正常：2,000 条或 250 ms 写一次。写入持续失败时，Collector 吞吐塌缩、队列（`usage.analytics_queue_capacity`）满后置 lagging 停止应用，增长止于约一个队列的记录 | V-001（Collector 层测试：容量 8192 时 `applied` 停在 2,382） | 有界；但历史停更（V-001） |
+| 用量历史待写批次 | `usage.Aggregate` `batchAttempts`/`batchSummaries`/hourly/rollup/pending | 正常：2,000 条或 250 ms 写一次。**写入持续失败时无上界**：失败批次被交还，到达慢于失败提交时队列不满、不置 lagging，批次随流量线性增长（约 1.24 KB 堆/请求）；只有到达快于失败提交时才止于约一个队列 | V-001（按节奏到达的复现，2026-10-18） | **无界**（V-001，P1） |
 | 用量 rollup 维度 | `usage` rollup | 每维度键数封顶 | `TestUsageRollupBoundsKeysPerDimension` | 有界 |
 | 在途请求的用量摘要 | `usage` pending/started | 在途请求数 | `internal/usage/history.go` | 有界 |
 | Collector 队列 | `usage.Collector.queue` | channel 容量（`usage.wal_queue_capacity`）；满则丢弃并标记 lagging，之后从 Ledger 补 | `internal/usage/collector.go:70-77` | 有界 |
@@ -35,4 +35,4 @@
 
 ## 结论
 
-所有随流量或历史增长的内存结构都有不随历史增长的上界。初稿把用量历史写入失败时的待写批次判为无界，对抗复核（Collector 运行时的自限）推翻了这一点，见 `adversarial-verdicts.md`。热状态上限按估算生效，但快照时的进程堆约为配置值的 6 倍（V-003）。
+除下述例外，所有随流量或历史增长的内存结构都有不随历史增长的上界。**例外是用量历史写入持续失败时的待写批次（V-001，P1）**：对抗复核一度以"Collector 运行时自限"推翻无界，但那只在高吞吐下成立，按节奏到达时线性增长，见 `adversarial-verdicts.md` 末节。热状态上限按估算生效，但快照时的进程堆约为配置值的 6 倍（V-003）。

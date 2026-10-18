@@ -1,9 +1,9 @@
-# V-001 — P2：一行用量历史损坏会让 `history.db` 与 Parquet 导出永久停更，重启不恢复、无告警、指标显示正常
+# V-001 — P1：一行用量历史损坏会让 `history.db` 与 Parquet 导出永久停更，重启不恢复、无告警、指标显示正常
 
 - 基线：冻结 `main` `2e749db1`
 - 段/功能：D 段 / M01（#407）；交叉点 X13、X18
 - 分类：【问题】，真实二进制复现（E04c）
-- 级别变更：初稿为 P1（"待写批次无界增长"），对抗复核推翻了"无界"，降为 P2，过程见 `../adversarial-verdicts.md`
+- 级别变更：初稿为 P1（"待写批次无界增长"），对抗复核一度推翻"无界"降为 P2；#427 的评审意见指出那次复核只测了高吞吐，**按节奏到达的复现证实无界增长，恢复为 P1**（2026-10-18），见 `../adversarial-verdicts.md`
 
 ## 现象
 
@@ -46,3 +46,19 @@ WARN usage parquet export skipped; history write failed
 
 - 提交因认证失败而失败时，丢弃内存增量、标记 lagging，并在后台从 Ledger 重建 `history.db`（与"cannot be trusted 即重建"的说明对齐），或至少在启动时对当前小时/当天的行做一次认证；
 - `pending_records` 计入在途批次；为 `flush_failures_total`、`row_auth_failures_total` 的增长加告警，runbook 写明 `halro usage rebuild-summary`（与 V-004 一并处理）。
+
+## 恢复为 P1 的证据（2026-10-18）
+
+**按节奏到达**（冻结 SHA 的 scratch worktree，一次性测试）：运行中的 Collector 追赶完成、非 lagging，损坏最新 hourly 行后以 50 请求/秒（100 条记录/秒）持续 `Observe`：
+
+```
+t= 1s pending=100  flush_failures=4  lagging=false dropped=0 queue=0
+t= 6s pending=600  flush_failures=25 lagging=false dropped=0 queue=0
+t=12s pending=1200 flush_failures=50 lagging=false dropped=0 queue=0
+```
+
+每次失败的提交都把批次交还（`Aggregate.Flush`），`Collector.flush` 只计数（`internal/usage/collector.go:106-110`），队列从不满、`lagging` 从不置位，待写批次随到达线性增长，没有上界。此前的"止于一个队列"只在到达快于失败提交时成立。
+
+**每请求堆成本**：失败提交下每 2 万请求测一次 GC 后的 `HeapAlloc`：10 万请求增长 117.7 MiB，**约 1.24 KB/请求，线性**。按 50 请求/秒约每天 5 GB，2 GiB 的容器一天内会 OOM。热状态上限不覆盖它（用量聚合不计入热状态估算）。
+
+建议的修复因此是发布前必须做的：提交失败（尤其是认证失败）时不得把批次留在内存里无限累积——丢弃内存增量并置 lagging，由后台从 Ledger 重建 `history.db`。

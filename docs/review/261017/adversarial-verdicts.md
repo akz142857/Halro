@@ -4,7 +4,7 @@
 
 | Finding | 初稿 | 推翻尝试 | 结论 |
 | --- | --- | --- | --- |
-| V-001 | P1："用量历史写入持续失败时，内存中的待写批次无上限增长" | 见下 | **核心主张被推翻，降为 P2**；剩余缺陷（历史与 Parquet 永久停更、重启不恢复、无告警、指标误导）成立 |
+| V-001 | P1："用量历史写入持续失败时，内存中的待写批次无上限增长" | 见下 | ~~核心主张被推翻，降为 P2~~ → **推翻不成立，恢复为 P1**（2026-10-18，见末节） |
 | V-002 | P2：延迟层对热状态拒绝不放回队列 | 查找延迟层/资源面是否另有热状态预检：`internal/gateway/deferred*.go`、`inference_resources*.go` 中无任何 `HotState`/`accounting_capacity_exhausted` 引用；拒绝确实在 `appendApply` 之前（`internal/budget/manager.go:893`）。第二次独立复核（2026-10-18）：`deferredAdmissionRefusal` 的注释把可放回的条件写成"在写 Ledger 之前拒绝"，`ErrHotStateFull` 由 `admitRequest` 在 `RequestAccepted` 追加前返回（`manager.go:893-905`），映射在 `service.go:447`——条件满足而码不在列表 | **维持 P2** |
 | V-003 | P2：快照瞬时堆约 6× | 质疑点：一次性测试的 `HeapAlloc` 含未回收垃圾，真实进程可能因 GC 并发而峰值更低。用 E06 在真实二进制、热状态贴近上限时以 200 ms 采样 `/debug/runtime` 的 `HeapAlloc` 复核 | **维持 P2**（见下） |
 | V-005 | P2：doctor 升级前报不健康 + 不检查新文件 | 查 v0.8.5 的 `OpenReadOnly` 与历次 CHANGELOG | **维持 P2，现象一改写**（见下） |
@@ -29,3 +29,10 @@
 
 **现象二（新文件不在任何离线检查中）成立**：`doctor.go` 中含 `add("` 的行数在 v0.8.5 与冻结 SHA 上相同（均为 76）；它认识封存代（v0.8.5 前已有），但不读 `history.db`、`archive.db`、`state.snap`。级别维持 P2。
 
+## 更正：V-001 的推翻不成立（2026-10-18）
+
+评审 PR #427 的自动评审指出：推翻尝试二只在**到达快于失败提交**时成立——那时队列被灌满、`Observe` 丢弃并置 lagging；到达慢于失败提交时，`Collector.flush` 只计数、`Aggregate.Flush` 交还批次，队列永远不满，`lagging` 永远不置位。
+
+执行确认（冻结 SHA 的 scratch worktree，一次性测试）：50 请求/秒按节奏到达，12 秒内待写批次 100 → 1,200 条线性增长，`lagging=false`、`dropped=0`、`queue=0`；每请求约 1.24 KB 堆（10 万请求 117.7 MiB）。初稿的线性增长不是"手工 `Flush` 绕过自限"的假象，而是普通流量下的真实行为；推翻尝试二用的高吞吐负载恰好是唯一会自限的情形。
+
+教训：反驳一个"无界"主张时，必须覆盖让它最容易成立的负载形态，而不只是测试中最方便构造的那一个。V-001 恢复为 P1。
