@@ -669,3 +669,36 @@ func TestRetractTakesBackTheViolationItRaised(t *testing.T) {
 		lease.Release()
 	}
 }
+
+// Two admissions of the same key that overlap — both violating, both retracted
+// later, the first one first — must each take back only their own violation.
+// Restoring a snapshot instead let the second put back the first one's, so a
+// violation outlived both admissions and the next retries blocked the key.
+func TestOverlappingRetractionsEachTakeBackTheirOwnViolation(t *testing.T) {
+	policy := testPolicy()
+	policy.ViolationsBeforeBlock = 3
+	manager, err := New([]domain.TokenGuardPolicy{policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	input := Input{PolicyID: "guard_1", ProjectID: "project_1", KeyID: "key_1", EstimatedTokens: 101, Now: now}
+	first, a := manager.Acquire(input)
+	input.Now = now.Add(time.Second)
+	second, b := manager.Acquire(input)
+	if !first.Allowed || !second.Allowed {
+		t.Fatalf("first=%#v second=%#v", first, second)
+	}
+	a.Retract()
+	b.Retract()
+	// With both withdrawn, two real violating requests are the first and the
+	// second violation: suspicious, not blocked.
+	for i := 0; i < 2; i++ {
+		input.Now = now.Add(time.Duration(5+i) * time.Second)
+		decision, lease := manager.Acquire(input)
+		if !decision.Allowed || decision.Status != StatusSuspicious {
+			t.Fatalf("real request %d=%#v: a withdrawn violation was still counted", i, decision)
+		}
+		lease.Release()
+	}
+}

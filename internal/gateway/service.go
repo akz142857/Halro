@@ -408,8 +408,9 @@ func (s *Service) beginRequestRun(
 	// A refusal below this point happens before the Ledger records anything.
 	// A synchronous caller decides for itself whether to retry, so its
 	// admission stays counted. A deferred request goes back to its queue and
-	// Halro retries it, so the admission is taken back: otherwise each return
-	// to the queue would count the same submission against Token Guard again.
+	// Halro retries it, so what its admission charged is taken back — the
+	// Token Guard sample and, further down, the Project TPM — otherwise each
+	// return to the queue would charge the same submission again.
 	releaseTokenGuard := tokenGuardLease.Release
 	if admission == admitExecutionOnly {
 		releaseTokenGuard = tokenGuardLease.Retract
@@ -425,11 +426,20 @@ func (s *Service) beginRequestRun(
 		releaseTokenGuard()
 		return nil, s.mapLimitError(err)
 	}
+	releasePolicy := policyLease.Release
+	if admission == admitExecutionOnly {
+		releasePolicy = func() {
+			// Reconciling to zero refunds the TPM the slot charged; nothing
+			// was sent.
+			_ = policyLease.Reconcile(0, s.now())
+			policyLease.Release()
+		}
+	}
 	requestID, supplied := requestmeta.RequestID(ctx)
 	if !supplied {
 		requestID, err = id.New("req")
 		if err != nil {
-			policyLease.Release()
+			releasePolicy()
 			releaseTokenGuard()
 			return nil, gatewayError("internal_error", "unable to create request ID", 500, err)
 		}
@@ -445,7 +455,7 @@ func (s *Service) beginRequestRun(
 		)
 	}
 	if err != nil {
-		policyLease.Release()
+		releasePolicy()
 		releaseTokenGuard()
 		if errors.Is(err, budget.ErrRunNotFound) {
 			return nil, gatewayError("run_not_found", "run was not found", 404, err)

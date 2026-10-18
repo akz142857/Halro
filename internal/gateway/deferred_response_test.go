@@ -597,6 +597,34 @@ func TestARequeuedDeferredRequestIsNotCountedAgainstTokenGuard(t *testing.T) {
 	})
 }
 
+// The execution slot a deferred dequeue takes charges the Project's TPM. A
+// dequeue refused before the Ledger sent nothing, so going back to the queue
+// must refund it; otherwise each return spends the shared per-minute allowance
+// again and starves queued and synchronous work after the limit clears.
+func TestARequeuedDeferredRequestRefundsTheProjectTPM(t *testing.T) {
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	const tpm = 1_000_000
+	f := newDeferredFixtureAt(t, func() time.Time { return now }, func(project *domain.Project) { project.TPM = tpm })
+	submitted := f.submit(t, "")
+	limited, err := budget.NewWithOptions(f.log, f.state, mustResolver(t, "UTC"), budget.Options{MaxHotStateBytes: f.state.HotStateBytes(0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.service.accounting = limited
+	for i := 0; i < 3; i++ {
+		if !f.service.runDeferredResponse(context.Background(), f.record(t, submitted.ID)) {
+			t.Fatalf("dequeue %d was not returned to the queue", i+1)
+		}
+	}
+	// The clock has not moved, so nothing has refilled: the whole allowance is
+	// there only if every refused dequeue gave its charge back.
+	full, err := f.service.limiter.AcquireExecutionSlot(f.project, tpm, now)
+	if err != nil {
+		t.Fatalf("requeued dequeues kept their TPM charge: %v", err)
+	}
+	full.Release()
+}
+
 // A caller who cancelled is owed "cancelled". A caller whose request happened to
 // be running when the process began shutting down cancelled nothing, and both
 // arrive at the worker as one cancelled context.
