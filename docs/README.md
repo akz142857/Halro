@@ -113,6 +113,7 @@ ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/rel
 | --- | --- | --- |
 | [里程碑专业评审计划](review/milestone-professional-review-plan.zh-CN.md) | 常设程序与模板 | 待具体里程碑实例化后执行 |
 | [Provider 到 Project API 全链路](review/260811/provider-to-project-api-chain.zh-CN.md) | 管理面配置链与数据面调用链 | 7 条 finding 与 3 项子项全部关闭，无未尽项 |
+| [v0.8.5..`main` 发布前全面评审](review/261017/review-report.md) | `v0.8.5`..`2e749db1`：HA 回退、内存有界重设计 P0–P3、热状态上限 | NO-GO：无 P0/P1，V-001–V-010（8 个 P2、2 个 P3），5 项发布前整改，进度见 [`progress.md`](review/261017/progress.md) |
 
 ## 可观测性 · [`observability/`](observability/)
 
