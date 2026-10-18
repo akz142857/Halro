@@ -13,7 +13,7 @@
 | E03 | 崩溃恢复（Linux 容器，SIGKILL） | **PASS**（11 轮） |
 | E04 | 磁盘异常 | **PASS**（磁盘满失败关闭、无损坏）；只读与慢盘 BLOCKED；E04c 复现 V-001 |
 | E05 | 4 小时内存长跑 | 见 E05 节 |
-| E06 | 热状态上限触发 | 见 E06 节 |
+| E06 | 热状态上限触发 | **PASS**（拒绝、收尾、恢复、校验；告警只有规则证据）；实测 V-003 快照峰值 104.4 MiB |
 | E07 | 有规模数据的备份/恢复 | **PASS** |
 | E08 | Linux 上的全量测试 | **PASS**（CI） |
 | E09 | 真实 Provider smoke | **BLOCKED**：owner 未授权计费 |
@@ -79,6 +79,22 @@ v0.8.5 停机后自检：`ledger verify` 515,580 帧 `ChainVerified: true`；`us
 没有任何一次出现数据损坏：每次腾出空间并重启后，校验全部通过。只读文件系统与慢盘需要特权容器与块设备节流，本轮 **BLOCKED**。
 
 **E04c 一行用量历史损坏（V-001 的真实二进制复现）**：在普通 volume 上，先写入当前小时，停机后用一次性工具翻转 `history.db` hourly 桶最后一行的首字节，再以 16 线程持续请求 120 s：`flush_failures_total` 与 `row_auth_failures_total` 每 10 s 涨约 450，`pending_records` 始终为 0；日志 `usage history catch-up failed`、`usage parquet export skipped; history write failed`；重启后同样失败。翻转最早一行（E04b）则毫无影响。详见 V-001。
+
+## E06 · 热状态上限触发（Linux 容器）
+
+E01 升级后目录的拷贝，`ledger.max_hot_state_bytes=16777216`（配置允许的最小值），基线估算 12,630,944 B。8 个治理 Key 各开 Work Unit，在其下反复创建并关闭 Run，满 32 个 Run（`domain.MaxRunsPerWorkUnit`）换一个新 Work Unit、旧的保持打开，遇 `governance_rate_limited` 按 Retry-After 退避。
+
+| 阶段 | 结果 |
+| --- | --- |
+| 压到上限（418 s） | 96 个 Work Unit、3,026 个 Run 创建并关闭全部 201；估算到 16,777,984 B 后 Run 创建返回 **503 `accounting_capacity_exhausted`**（6 次，`rejections_total{operation="run"}=6`） |
+| 上限处的新网关请求 | **503**，`Retry-After: 5`，`accounting_capacity_exhausted`（`operation="request"` +1） |
+| 上限处的结算/关闭 | 已准入的 Run 关闭与 96 个 Work Unit 关闭全部 201——拒绝只落在新准入上，不阻断收尾 |
+| 上限附近的快照（70 s、200 ms 采样） | HeapAlloc 最低 26.8 MiB、**峰值 104.4 MiB**，快照 15,048,719 B，失败 0——即 V-003 在真实二进制上的实测（约 6.2 倍） |
+| 释放（关闭 Work Unit 后 8 s） | 估算回落到 12,827,776 B；100 个新请求全部到达上游（502，即不可解析的 Provider），不再 503 |
+| 停机后 | `ledger verify` exit 0，`doctor` healthy |
+| 告警 | 容器内没有 Prometheus，未实际触发；`alert-rules.yml:116`（估算/上限 > 0.8）与 `:123`（10 分钟内拒绝 > 0）按实测值都会成立，规则有 promtool 单元测试 |
+
+结论 **PASS**（告警只有规则与单元测试证据）。前两次运行无效、日志保留：第一次驱动只用一个 Work Unit，32 个 Run 后全部 429，估算只到 12.98 MB（`e06-run1-runcap.log`）；第二次把治理写限流（每 Key 120/min、每 Project 1,000/min）当成停止条件，6.5 s 即停（`e06-run2-ratelimit.log`）。两者都是驱动缺陷，不是产品问题。
 
 ## E07 · 有规模数据的备份/恢复（候选版本）
 
