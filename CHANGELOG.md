@@ -545,8 +545,10 @@ Also expect:
   selected, so neither waiting nor commit order counts. The first selection
   after a start, which has nothing in memory to compare with, still checks the
   persisted high-water mark, so a clock rolled back while Halro was down is
-  still caught. A Deployment already quarantined this way stays quarantined
-  until an operator clears it.
+  still caught. This does not release a Deployment already quarantined this
+  way: no Admin action or command lifts a `wall_clock_*` quarantine yet (the
+  restore-confirm action lifts only `restored_*` ones), so such a Deployment
+  stays blocked until it is replaced.
 
 - A deferred (background) Response returned to its queue was counted against
   Token Guard again every time it came back out. Token Guard is checked before

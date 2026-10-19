@@ -501,6 +501,8 @@ captured, not the clamped time, which was never read beside that observation.
 The floor stays: it still covers the selections that commit before the first
 anchor exists.
 
-A deployment quarantined by the old check stays quarantined; clearing it remains
-an operator action.
+A deployment quarantined by the old check stays quarantined, and no path lifts
+it: restore confirmation lifts only `restored_*` reasons, and nothing lifts a
+`wall_clock_*` one. That gap predates this amendment and is recorded as 261017
+V-014; a lift action is a separate decision.
 
