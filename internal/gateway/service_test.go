@@ -68,7 +68,7 @@ func (s *fakePricePinStore) LockDeploymentPricingShared(string) func() {
 	return s.mu.Unlock
 }
 
-func (s *fakePricePinStore) PrepareDeploymentPricePin(_ context.Context, deploymentID, attemptID string, selectedAt time.Time, _, _ time.Duration) (domain.DeploymentPriceVersion, domain.PriceSnapshot, domain.PricePinIntent, error) {
+func (s *fakePricePinStore) PrepareDeploymentPricePin(_ context.Context, deploymentID, attemptID string, selectedAt, _ time.Time, _, _ time.Duration) (domain.DeploymentPriceVersion, domain.PriceSnapshot, domain.PricePinIntent, error) {
 	s.prepares.Add(1)
 	price, err := staticPriceSelector{price: s.price}.SelectDeploymentPriceVersion(context.Background(), deploymentID, selectedAt)
 	if err != nil {

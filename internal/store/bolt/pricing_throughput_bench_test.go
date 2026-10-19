@@ -99,7 +99,7 @@ func BenchmarkDeploymentPricePinCeiling(b *testing.B) {
 				defer unlock()
 				selectedAt := time.Now().UTC()
 				_, _, intent, err := store.PrepareDeploymentPricePin(
-					ctx, "dep_bench", attemptID, selectedAt,
+					ctx, "dep_bench", attemptID, selectedAt, time.Now(),
 					2*time.Second, 30*time.Second,
 				)
 				if err != nil {

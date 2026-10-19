@@ -462,3 +462,47 @@ Still open — neither is possible on this host:
   bottleneck, per `docs/verification/standalone-capacity-baseline.md`. The load
   matrix must include a multi-project-per-deployment shape; a single-project run
   cannot observe this amendment's effect at all (see "Out of scope").
+
+## Amendment 2026-10-19: clock jumps are judged by drift, not by commit order
+
+The floor chosen above rested on a premise: the span between capturing
+`pricing_selected_at` and committing its pin stays below
+`MinPricingClockRollbackTolerance`. It does not. The 261017 review's 8-hour soak
+(E05b, Linux container, fake upstream, ~150 req/s) ran clean for seven hours,
+then, with throughput already halving under disk pressure (a 21 GB usage history
+and Ledger compaction on the same volume), one selection committed more than 2 s
+after a newer one. The deployment was quarantined `wall_clock_rollback` at
+23:33:00 — read from the soak's `halro.db` — every request after it failed 503
+`accounting_unavailable`, and readiness stayed down after a restart. The span
+includes waiting for `db.Batch`, so it is bounded by metadata write latency, and
+nothing bounds that. The forward check had the mirror-image defect: its
+observation was read inside the transaction, so a stall longer than the forward
+tolerance read as a jump. Both reproduce deterministically
+(`TestDeploymentPricePinReorderedCommitIsNotARollback`,
+`TestDeploymentPricePinWriteStallIsNotAForwardJump`).
+
+A clock jump is the wall clock moving apart from the monotonic clock, so that is
+what is now measured. `Service.startAttempt` captures `time.Now()` beside
+`pricing_selected_at` (`UTC()` strips the monotonic reading) and passes both to
+`PrepareDeploymentPricePin`. Against the in-memory anchor,
+`drift = (selectedAt − anchor.SelectedAt) − (observedAt − anchor.ObservedAt)`;
+a forward jump is `drift > forward_tolerance`, a rollback is
+`drift < −rollback_tolerance`. Both readings of a pair are taken together, so
+time spent waiting and the order commits land in cancel out.
+
+This is not the alternative rejected above. That one dropped the durable
+comparison and left a restart with no detector. Here the durable high-water
+comparison still decides whenever there is no anchor — the first selections after
+a start — so a clock rolled back while the process was down is still caught
+(`TestDeploymentPricePinQuarantinesRollbackAcrossRestart`). With an anchor, a
+selection behind the mark that shows no drift is a reordering and clamps to the
+mark, as one within the tolerance always did. The anchor keeps the pair as
+captured, not the clamped time, which was never read beside that observation.
+The floor stays: it still covers the selections that commit before the first
+anchor exists.
+
+A deployment quarantined by the old check stays quarantined, and no path lifts
+it: restore confirmation lifts only `restored_*` reasons, and nothing lifts a
+`wall_clock_*` one. That gap predates this amendment and is recorded as 261017
+V-014; a lift action is a separate decision.
+

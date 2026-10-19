@@ -20,7 +20,7 @@ func pinnedAttempt(t *testing.T, store *Store, attemptID string, sequence uint64
 	t.Helper()
 	ctx := context.Background()
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
-	_, snapshot, _, err := store.PrepareDeploymentPricePin(ctx, "dep_hot", attemptID, now, time.Second, 30*time.Second)
+	_, snapshot, _, err := store.PrepareDeploymentPricePin(ctx, "dep_hot", attemptID, now, time.Now(), time.Second, 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

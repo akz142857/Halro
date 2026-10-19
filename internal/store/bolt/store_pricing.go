@@ -745,13 +745,18 @@ func (s *Store) confirmRestoredPricing(ctx context.Context, deploymentID string,
 	})
 }
 
-func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, attemptID string, selectedAt time.Time, rollbackTolerance, forwardTolerance time.Duration) (domain.DeploymentPriceVersion, domain.PriceSnapshot, domain.PricePinIntent, error) {
+// PrepareDeploymentPricePin selects the price in effect at selectedAt and
+// records a prepared pin for the attempt. observedAt is a time.Now() reading,
+// with its monotonic clock, taken at the same instant the caller read
+// selectedAt: the pair is what clock-jump detection compares, so it must be
+// captured together, before the call waits for anything.
+func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, attemptID string, selectedAt, observedAt time.Time, rollbackTolerance, forwardTolerance time.Duration) (domain.DeploymentPriceVersion, domain.PriceSnapshot, domain.PricePinIntent, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, err
 	}
 	selectedAt = selectedAt.UTC()
-	if deploymentID == "" || attemptID == "" || selectedAt.IsZero() || rollbackTolerance < 0 || forwardTolerance <= 0 {
-		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, errors.New("deployment, attempt, UTC selection time, and valid clock tolerances are required")
+	if deploymentID == "" || attemptID == "" || selectedAt.IsZero() || observedAt.IsZero() || rollbackTolerance < 0 || forwardTolerance <= 0 {
+		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, errors.New("deployment, attempt, UTC selection time, its observation, and valid clock tolerances are required")
 	}
 	state := s.deploymentPricingState(deploymentID)
 	requestedAt := selectedAt
@@ -759,7 +764,6 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 	var snapshot domain.PriceSnapshot
 	var intent domain.PricePinIntent
 	var quarantined bool
-	var observedAt time.Time
 	// outcome carries the expected non-fault results — quarantined, no effective
 	// price, a conflicting pin — instead of returning them as transaction errors.
 	// Under db.Batch an error aborts the whole shared transaction, evicts this
@@ -777,18 +781,23 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 		// branch than the previous run did.
 		price, snapshot, intent, quarantined, outcome = domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, false, nil
 		selectedAt = requestedAt
-		// The clock anchor is read per run for the same reason, so a retry can
-		// never decide a forward jump from an observation older than the
-		// transaction that ends up committing.
-		observedAt = time.Now()
+		// The clock anchor is read per run for the same reason.
+		//
+		// A clock jump is the wall clock moving apart from the monotonic one,
+		// so it is judged by drift: how far the wall reading moved since the
+		// anchor, minus how far the monotonic reading moved. Both pairs were
+		// captured at selection, so neither the time a selection waits for this
+		// transaction nor the order concurrent selections commit in can show up
+		// as drift. Judging by commit-time readings or by commit order instead
+		// quarantined a deployment for a metadata write slowdown (261017 V-013:
+		// a selection that committed 2 s after a newer one was taken for a
+		// wall-clock rollback, and every request after it failed).
 		previousObservation, hasObservation := state.clockAnchor()
-		forwardJump := false
+		forwardJump, rollbackDrift := false, false
 		if hasObservation {
-			elapsed := observedAt.Sub(previousObservation.ObservedAt)
-			if elapsed < 0 {
-				elapsed = 0
-			}
-			forwardJump = selectedAt.After(previousObservation.SelectedAt.Add(elapsed).Add(forwardTolerance))
+			drift := selectedAt.Sub(previousObservation.SelectedAt) - observedAt.Sub(previousObservation.ObservedAt)
+			forwardJump = drift > forwardTolerance
+			rollbackDrift = drift < -rollbackTolerance
 		}
 		highWaterBucket := tx.Bucket(bucketDeploymentPricingHighWater)
 		var highWater domain.DeploymentPricingHighWater
@@ -818,8 +827,13 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 				return nil
 			}
 			if selectedAt.Before(highWater.LatestSelectedAt) {
+				// With an anchor, drift has already decided whether the clock
+				// went back; a selection behind the high-water mark is then one
+				// that committed after a newer one, and selects at the mark. With
+				// none — the first selection since this process started — the
+				// durable mark is the only witness of a rollback across a restart.
 				rollback := highWater.LatestSelectedAt.Sub(selectedAt)
-				if rollback > rollbackTolerance {
+				if rollbackDrift || (!hasObservation && rollback > rollbackTolerance) {
 					highWater.Quarantined = true
 					highWater.QuarantineReason = "wall_clock_rollback"
 					highWater.Revision++
@@ -915,7 +929,9 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 	if outcome != nil {
 		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, outcome
 	}
-	state.mergeClockAnchor(pricingClockObservation{SelectedAt: selectedAt, ObservedAt: observedAt})
+	// The anchor keeps the pair as captured: selectedAt may have been raised to
+	// the high-water mark, and that value was never read beside observedAt.
+	state.mergeClockAnchor(pricingClockObservation{SelectedAt: requestedAt, ObservedAt: observedAt})
 	return price, snapshot, intent, nil
 }
 

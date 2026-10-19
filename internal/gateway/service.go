@@ -154,7 +154,7 @@ type PriceSelector interface {
 type PricePinStore interface {
 	PriceSelector
 	LockDeploymentPricingShared(string) func()
-	PrepareDeploymentPricePin(context.Context, string, string, time.Time, time.Duration, time.Duration) (domain.DeploymentPriceVersion, domain.PriceSnapshot, domain.PricePinIntent, error)
+	PrepareDeploymentPricePin(context.Context, string, string, time.Time, time.Time, time.Duration, time.Duration) (domain.DeploymentPriceVersion, domain.PriceSnapshot, domain.PricePinIntent, error)
 	CommitDeploymentPricePin(context.Context, string, string, uint64, time.Time) (domain.PricePinIntent, error)
 	DeletePreparedDeploymentPricePin(context.Context, string) error
 }
@@ -656,11 +656,14 @@ func (s *Service) startAttempt(
 		pricingUnlock = pinStore.LockDeploymentPricingShared(target.DeploymentID)
 		forcedAttemptID, err = id.New("att")
 		if err == nil {
-			pricingSelectedAt := s.now().UTC()
+			// The monotonic reading beside the wall one is what lets the store
+			// tell a clock jump from this selection waiting its turn; UTC()
+			// strips it, so it is read separately and at the same instant.
+			pricingSelectedAt, pricingObservedAt := s.now().UTC(), time.Now()
 			var price domain.DeploymentPriceVersion
 			var captured domain.PriceSnapshot
 			var intent domain.PricePinIntent
-			price, captured, intent, err = pinStore.PrepareDeploymentPricePin(ctx, target.DeploymentID, forcedAttemptID, pricingSelectedAt, s.pricingClockRollbackTolerance, s.pricingClockForwardTolerance)
+			price, captured, intent, err = pinStore.PrepareDeploymentPricePin(ctx, target.DeploymentID, forcedAttemptID, pricingSelectedAt, pricingObservedAt, s.pricingClockRollbackTolerance, s.pricingClockForwardTolerance)
 			if err == nil {
 				reservation, leaseMode, snapshot, pricedTarget, err = accountingTermsFromSnapshot(price, captured, target, inputTokens, outputTokens)
 				pinIntent = &intent
