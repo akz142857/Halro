@@ -1,0 +1,32 @@
+{
+  "date_utc": "2026-10-19T06:51:00Z",
+  "go": "go version go1.26.9 darwin/arm64",
+  "host": "Apple M4",
+  "cpu_count": "10",
+  "memory_bytes": "25769803776",
+  "os": "27.2",
+  "baseline_commit": "28ea173b8ccfa2a8043a767c4c4d2782018a4d1c (v0.8.5, from git archive)",
+  "candidate_commit": "2a54dab26b54442a17897a3da1d4dba493b63770",
+  "candidate_dirty": false,
+  "toolchain_note": "GOTOOLCHAIN=go1.26.9 for both sides; v0.8.5 declares go 1.26.6",
+  "gomaxprocs": 4,
+  "cgo_enabled": 1,
+  "samples": 6,
+  "component_benchtime": "1s",
+  "request_lifecycle_benchtime": "100x",
+  "packages": {
+    "provider": "^BenchmarkRegistryResolveCandidates$",
+    "redaction": "^Benchmark(StandardRedaction|RollingRedaction)$",
+    "tokenguard": "^Benchmark(Admit|AcquireReleaseContended)$",
+    "limiter": "^BenchmarkProjectAdmission(Contended)?$",
+    "ledger": "^BenchmarkReplayLargeWAL$",
+    "budget": "^BenchmarkRequestLifecycle$",
+    "store/bolt": "^BenchmarkDeploymentPricePinCeiling$"
+  },
+  "benchstat": "golang.org/x/perf/cmd/benchstat v0.0.0-20261009192801-be2c69fb417e",
+  "method": "Same host and toolchain; one test binary per package compiled before sampling; packages run serially; v0.8.5 then candidate in each of six rounds; no race detector and no provider calls. An idle Halro dev instance and two unrelated owner containers were running on the host.",
+  "raw_sha256": {
+    "v0.8.5.txt": "d757d9fa95f611a90e5980eee49a2f916bfe399dfc2593befa5cb70956deded6",
+    "candidate.txt": "566bd34708992b497c2ada016f74f697d032b12103ea10c1cc01e65873dd8de6"
+  }
+}
