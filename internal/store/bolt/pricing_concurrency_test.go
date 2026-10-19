@@ -133,7 +133,9 @@ func TestScheduledCancellationIsNotStarvedBySelections(t *testing.T) {
 // this process, not by the clock, and must never quarantine the deployment — at
 // any tolerance the configuration permits, including the smallest.
 func TestOutOfOrderSelectionsDoNotQuarantine(t *testing.T) {
-	base := time.Now().UTC()
+	// A scripted capture order needs a scripted pair: each selection time and
+	// the monotonic reading taken beside it move together.
+	base, observed := time.Now().UTC(), time.Now()
 	store := newPricedStore(t, "dep_reorder", base.Add(-time.Hour))
 	ctx := context.Background()
 	tolerance := config.MinPricingClockRollbackTolerance
@@ -141,10 +143,10 @@ func TestOutOfOrderSelectionsDoNotQuarantine(t *testing.T) {
 	// Explicitly inverted: the second call presents an older selection time than
 	// the first, by less than the floor. This is what reordering looks like from
 	// inside the store.
-	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_reorder", "att_late", base, tolerance, 30*time.Second); err != nil {
+	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_reorder", "att_late", base, observed, tolerance, 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_reorder", "att_early", base.Add(-tolerance+10*time.Millisecond), tolerance, 30*time.Second); err != nil {
+	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_reorder", "att_early", base.Add(-tolerance+10*time.Millisecond), observed.Add(-tolerance+10*time.Millisecond), tolerance, 30*time.Second); err != nil {
 		t.Fatalf("a reordered selection within the tolerance was rejected: %v", err)
 	}
 	if quarantined, reason, err := store.DeploymentPricingQuarantine(ctx, "dep_reorder"); err != nil || quarantined {
@@ -152,7 +154,7 @@ func TestOutOfOrderSelectionsDoNotQuarantine(t *testing.T) {
 	}
 
 	// A rollback materially past the tolerance is still a rollback.
-	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_reorder", "att_rolled_back", base.Add(-tolerance-time.Second), tolerance, 30*time.Second); !errors.Is(err, ErrPricingQuarantined) {
+	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_reorder", "att_rolled_back", base.Add(-tolerance-time.Second), time.Now(), tolerance, 30*time.Second); !errors.Is(err, ErrPricingQuarantined) {
 		t.Fatalf("a material rollback was not quarantined: err=%v", err)
 	}
 }
@@ -161,7 +163,9 @@ func TestOutOfOrderSelectionsDoNotQuarantine(t *testing.T) {
 // every worker draws its own selection time from a window narrower than the
 // tolerance and they race, which is exactly the shape production traffic has.
 func TestConcurrentSelectionsOnOneDeploymentDoNotQuarantine(t *testing.T) {
-	base := time.Now().UTC()
+	// A scripted capture order needs a scripted pair: each selection time and
+	// the monotonic reading taken beside it move together.
+	base, observed := time.Now().UTC(), time.Now()
 	store := newPricedStore(t, "dep_race", base.Add(-time.Hour))
 	ctx := context.Background()
 	tolerance := config.MinPricingClockRollbackTolerance
@@ -175,8 +179,8 @@ func TestConcurrentSelectionsOnOneDeploymentDoNotQuarantine(t *testing.T) {
 			unlock := store.LockDeploymentPricingShared("dep_race")
 			defer unlock()
 			// Spread within the tolerance, deliberately not in worker order.
-			selectedAt := base.Add(-time.Duration(worker%8) * 50 * time.Millisecond)
-			_, _, intent, err := store.PrepareDeploymentPricePin(ctx, "dep_race", fmt.Sprintf("att_race_%d", worker), selectedAt, tolerance, 30*time.Second)
+			offset := -time.Duration(worker%8) * 50 * time.Millisecond
+			_, _, intent, err := store.PrepareDeploymentPricePin(ctx, "dep_race", fmt.Sprintf("att_race_%d", worker), base.Add(offset), observed.Add(offset), tolerance, 30*time.Second)
 			if err != nil {
 				failures <- fmt.Errorf("worker %d: %w", worker, err)
 				return
@@ -243,15 +247,17 @@ func TestClockAnchorDoesNotRegress(t *testing.T) {
 // mark either, since that is what stops a restarted process from selecting off an
 // older price timeline.
 func TestDurableHighWaterDoesNotRegressOnOutOfOrderSelections(t *testing.T) {
-	base := time.Now().UTC()
+	// A scripted capture order needs a scripted pair: each selection time and
+	// the monotonic reading taken beside it move together.
+	base, observed := time.Now().UTC(), time.Now()
 	store := newPricedStore(t, "dep_high_water", base.Add(-time.Hour))
 	ctx := context.Background()
 	tolerance := config.MinPricingClockRollbackTolerance
 
-	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_high_water", "att_hw_late", base, tolerance, 30*time.Second); err != nil {
+	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_high_water", "att_hw_late", base, observed, tolerance, 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	_, _, intent, err := store.PrepareDeploymentPricePin(ctx, "dep_high_water", "att_hw_early", base.Add(-500*time.Millisecond), tolerance, 30*time.Second)
+	_, _, intent, err := store.PrepareDeploymentPricePin(ctx, "dep_high_water", "att_hw_early", base.Add(-500*time.Millisecond), observed.Add(-500*time.Millisecond), tolerance, 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +309,7 @@ func TestPricePinPreparationSurvivesBatchSiblingFailures(t *testing.T) {
 			unlock := store.LockDeploymentPricingShared("dep_batch")
 			defer unlock()
 			attemptID := fmt.Sprintf("att_batch_%d", worker)
-			_, snapshot, intent, err := store.PrepareDeploymentPricePin(ctx, "dep_batch", attemptID, base, tolerance, 30*time.Second)
+			_, snapshot, intent, err := store.PrepareDeploymentPricePin(ctx, "dep_batch", attemptID, base, time.Now(), tolerance, 30*time.Second)
 			if err != nil {
 				failures <- fmt.Errorf("worker %d: %w", worker, err)
 				return
@@ -364,7 +370,7 @@ func TestMetadataWriteStatsCountCoalescing(t *testing.T) {
 			unlock := store.LockDeploymentPricingShared("dep_stats")
 			defer unlock()
 			attemptID := fmt.Sprintf("att_stats_%d", worker)
-			_, _, intent, err := store.PrepareDeploymentPricePin(ctx, "dep_stats", attemptID, base, tolerance, 30*time.Second)
+			_, _, intent, err := store.PrepareDeploymentPricePin(ctx, "dep_stats", attemptID, base, time.Now(), tolerance, 30*time.Second)
 			if err != nil {
 				t.Error(err)
 				return

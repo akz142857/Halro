@@ -296,7 +296,7 @@ func TestDeploymentPricePinPersistsHighWaterAndCommitsLedgerSequence(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	selected, snapshot, pin, err := store.PrepareDeploymentPricePin(ctx, "dep_pin", "att_pin", now, 2*time.Second, 30*time.Second)
+	selected, snapshot, pin, err := store.PrepareDeploymentPricePin(ctx, "dep_pin", "att_pin", now, time.Now(), 2*time.Second, 30*time.Second)
 	if err != nil || selected.ID != price.ID || pin.State != domain.PricePinPrepared {
 		t.Fatalf("selected=%#v pin=%#v err=%v", selected, pin, err)
 	}
@@ -314,10 +314,10 @@ func TestDeploymentPricePinPersistsHighWaterAndCommitsLedgerSequence(t *testing.
 	}); err != nil || !highWater.LatestSelectedAt.Equal(now) || !highWater.LatestObservedEffectiveFrom.Equal(price.EffectiveFrom) {
 		t.Fatalf("high-water=%#v err=%v", highWater, err)
 	}
-	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_pin", "att_rollback", now.Add(-3*time.Second), 2*time.Second, 30*time.Second); !errors.Is(err, ErrPricingQuarantined) {
+	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_pin", "att_rollback", now.Add(-3*time.Second), time.Now(), 2*time.Second, 30*time.Second); !errors.Is(err, ErrPricingQuarantined) {
 		t.Fatalf("rollback error=%v", err)
 	}
-	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_pin", "att_after_quarantine", now.Add(time.Second), 2*time.Second, 30*time.Second); !errors.Is(err, ErrPricingQuarantined) {
+	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_pin", "att_after_quarantine", now.Add(time.Second), time.Now(), 2*time.Second, 30*time.Second); !errors.Is(err, ErrPricingQuarantined) {
 		t.Fatalf("quarantine was not persistent: %v", err)
 	}
 	if err := store.PricingReadiness(ctx); !errors.Is(err, ErrPricingQuarantined) {
@@ -340,10 +340,10 @@ func TestDeploymentPricePinQuarantinesUnexplainedForwardJump(t *testing.T) {
 	if _, err := store.CreateDeploymentPriceVersion(ctx, newStoredPrice("price_forward_2", "dep_forward", now.Add(time.Minute))); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_forward", "att_forward_1", now, 2*time.Second, 30*time.Second); err != nil {
+	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_forward", "att_forward_1", now, time.Now(), 2*time.Second, 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_forward", "att_forward_2", now.Add(2*time.Minute), 2*time.Second, 30*time.Second); !errors.Is(err, ErrPricingQuarantined) {
+	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_forward", "att_forward_2", now.Add(2*time.Minute), time.Now(), 2*time.Second, 30*time.Second); !errors.Is(err, ErrPricingQuarantined) {
 		t.Fatalf("forward jump error=%v", err)
 	}
 	var highWater domain.DeploymentPricingHighWater
@@ -367,7 +367,7 @@ func TestScheduledPriceCancellationIsBlockedByDurablePin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_cancel_pin", "att_cancel_pin", now.Add(2*time.Hour), time.Second, 30*time.Second); err != nil {
+	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_cancel_pin", "att_cancel_pin", now.Add(2*time.Hour), time.Now(), time.Second, 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.CancelDeploymentPriceVersion(ctx, "dep_cancel_pin", scheduled.ID, "admin", now, scheduled.Revision); !errors.Is(err, domain.ErrPriceVersionUnavailable) {
@@ -393,11 +393,11 @@ func TestPreparedPricePinRecoveryUsesLedgerSnapshotOrDeletesOrphan(t *testing.T)
 	if _, err := store.CreateDeploymentPriceVersion(ctx, newStoredPrice("price_recover_pin", "dep_recover_pin", now.Add(-time.Hour))); err != nil {
 		t.Fatal(err)
 	}
-	_, snapshot, durablePin, err := store.PrepareDeploymentPricePin(ctx, "dep_recover_pin", "att_durable", now, time.Second, 30*time.Second)
+	_, snapshot, durablePin, err := store.PrepareDeploymentPricePin(ctx, "dep_recover_pin", "att_durable", now, time.Now(), time.Second, 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_recover_pin", "att_orphan", now, time.Second, 30*time.Second); err != nil {
+	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_recover_pin", "att_orphan", now, time.Now(), time.Second, 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	state := ledger.NewState()
@@ -442,7 +442,7 @@ func TestRestoreIncoherentPricingHighWaterIsPersistentlyQuarantined(t *testing.T
 	if _, err := store.CreateDeploymentPriceVersion(ctx, newStoredPrice("price_restore", "dep_restore", now.Add(-time.Hour))); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_restore", "att_restore", now, time.Second, 30*time.Second); err != nil {
+	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_restore", "att_restore", now, time.Now(), time.Second, 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.DeletePreparedDeploymentPricePin(ctx, "att_restore"); err != nil {
@@ -491,7 +491,7 @@ func TestRestoreQuarantinesNewlyDueScheduledPriceUntilAuditedConfirmation(t *tes
 	if err := store.PricingReadiness(ctx); !errors.Is(err, ErrPricingQuarantined) {
 		t.Fatalf("pricing readiness error=%v", err)
 	}
-	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_restore_scheduled", "att_blocked", backupAt.Add(2*time.Hour), time.Second, 30*time.Second); !errors.Is(err, ErrPricingQuarantined) {
+	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, "dep_restore_scheduled", "att_blocked", backupAt.Add(2*time.Hour), time.Now(), time.Second, 30*time.Second); !errors.Is(err, ErrPricingQuarantined) {
 		t.Fatalf("prepare while quarantined error=%v", err)
 	}
 	intent := domain.PricingAuditIntent{
@@ -593,7 +593,7 @@ func TestScheduledPricePinReDerivesThroughTheBackupValidator(t *testing.T) {
 	if _, err := store.CreateDeploymentPriceVersion(ctx, price); err != nil {
 		t.Fatal(err)
 	}
-	_, snapshot, pin, err := store.PrepareDeploymentPricePin(ctx, "dep_schedule", "att_schedule", now, 2*time.Second, 30*time.Second)
+	_, snapshot, pin, err := store.PrepareDeploymentPricePin(ctx, "dep_schedule", "att_schedule", now, time.Now(), 2*time.Second, 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -624,7 +624,7 @@ func TestScheduledPricePinReDerivesThroughTheBackupValidator(t *testing.T) {
 		t.Fatal(err)
 	}
 	offPeak := time.Date(2026, 8, 4, 4, 30, 0, 0, time.UTC) // 12:30 Shanghai
-	_, later, _, err := store.PrepareDeploymentPricePin(ctx, "dep_schedule_off", "att_off_peak", offPeak, 2*time.Second, 30*time.Second)
+	_, later, _, err := store.PrepareDeploymentPricePin(ctx, "dep_schedule_off", "att_off_peak", offPeak, time.Now(), 2*time.Second, 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -531,6 +531,23 @@ Also expect:
 
 ### Fixed
 
+- A slow metadata write could quarantine a Deployment's pricing for good, and
+  with it every request to that Deployment. Pricing detected a wall-clock
+  rollback by comparing each selection's time with the newest one already
+  committed, so a selection that waited for its write longer than
+  `pricing_clock_rollback_tolerance` (2 s) while a newer one committed was taken
+  for a clock that had gone back; a forward jump was judged with a clock reading
+  taken inside the write, so a stall longer than the forward tolerance (30 s)
+  looked like one. An 8-hour soak hit the first after 7 hours under disk
+  pressure: every request from then on failed with 503 `accounting_unavailable`,
+  and readiness stayed down after a restart. A clock jump is now judged by the
+  wall clock drifting from the monotonic one, both read when the price is
+  selected, so neither waiting nor commit order counts. The first selection
+  after a start, which has nothing in memory to compare with, still checks the
+  persisted high-water mark, so a clock rolled back while Halro was down is
+  still caught. A Deployment already quarantined this way stays quarantined
+  until an operator clears it.
+
 - A deferred (background) Response returned to its queue was counted against
   Token Guard again every time it came back out. Token Guard is checked before
   the Project limiter and the accounting state, and a refusal by either only
