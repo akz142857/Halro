@@ -13,6 +13,8 @@
 | E03 | 崩溃恢复（Linux 容器，SIGKILL） | **PASS**（11 轮） |
 | E04 | 磁盘异常 | **PASS**（磁盘满失败关闭、无损坏）；只读与慢盘 BLOCKED；E04c 复现 V-001 |
 | E05 | 4 小时内存长跑 | **PASS**（堆不随历史增长、无时间类泄漏）；第 60 分钟后负载形态因 V-010 改变 |
+| E05b | 8 小时内存长跑（假上游，全部到达 Ledger） | **FAIL**：第 7 小时起全部 503，计价被误判时钟回退而永久隔离（V-013）；前 7 小时的内存数据有效 |
+| E05d | V-013 修复后在 E05b 终态目录上续跑 2 小时 | **PASS**：0 个 503、隔离始终为 0；四项校验通过；重启 RSS 的构成已测 |
 | E06 | 热状态上限触发 | **PASS**（拒绝、收尾、恢复、校验；告警只有规则证据）；实测 V-003 快照峰值 104.4 MiB |
 | E07 | 有规模数据的备份/恢复 | **PASS** |
 | E08 | Linux 上的全量测试 | **PASS**（CI） |
@@ -113,6 +115,56 @@ E01 升级后目录的拷贝；封存开（`ledger.seal.enabled=true`，256 MiB�
 **收尾**：停机 exit 0；`ledger verify`、`usage verify`、`audit verify` exit 0，`doctor` healthy。重启 10 s 就绪，`from_snapshot=true`、`head_sequence=5026771`，重启后 `HeapAlloc` 30 MiB、热状态 12.0 MiB；同一时刻 RSS 为 516 MiB——远大于堆，推测是 bbolt 对多 GB 数据文件的 mmap 页计入 RSS，本轮**没有单独测量**。
 
 结论 **PASS**：堆不随历史增长（第 1 小时满负载下得到验证），4 小时内没有时间类泄漏；限制是后 3 小时的写入负载只有前 1 小时的约 1/7（V-010），以及 bbolt freelist 的上界与重启后 RSS 的构成未测。
+
+## E05b · 8 小时内存长跑（Linux 容器，假上游）
+
+E05 的负载形态被 V-010 改变，且 Provider 不可达、请求不写满 Ledger，所以重做：E01 升级后目录的拷贝，Provider 经 Admin API 切到同一 Docker 网络内的假上游 `https://fake-upstream:8443`（自签 CA，`security.allow_private_provider_endpoints=true`），每个请求都 200 并结算到 Ledger。二进制为 `main` + V-010 + V-012 修复（`356fe514`）。负载与 E05 相同（32 线程约 150 req/s 普通请求 + 8 个治理 Key 的完整周期），每 5 分钟采指标、`/proc` 的 RssAnon/RssFile 与 `heap?gc=1`。2026-10-19 00:31–08:36 +08，主机除 owner 的两个容器外空闲。
+
+**结果：FAIL（V-013）**。前 7 小时全部正常；23:33:00Z（第 7 小时 01 分）起每个请求都返回 503 `accounting_unavailable`，直到结束。
+
+| 量 | 值 |
+| --- | --- |
+| 普通请求 | 3,712,079 个 200、3 个 502（假上游）、**562,134 个 503** |
+| 治理 | 58,089 个周期全部 201；周期内请求 201,900 个 200、1 个 502、**30,455 个 503** |
+| Ledger | 头序号 518,666 → 21,506,115（+2,099 万条），93 个文件 |
+| 数据目录 | 47,301 MiB；`history.db` 21.7 GB，`halro.db` 2.9 GB |
+| 热状态估算 | 全程 12.0–12.4 MiB，拒绝 0；`usage_history` 写失败 0 |
+
+故障前几分钟吞吐已从约 8.9k 降到 4.5k 请求/分钟，第 7 代 Ledger 段压缩在首个失败前 6 s 完成。长跑后的 `halro.db` 里唯一 deployment 的高水位为 `quarantined: true, quarantine_reason: wall_clock_rollback, latest_selected_at: 23:33:00.944Z`；`pmset` 显示主机这段时间没有睡眠或唤醒。机制与确定性复现见 `findings/V-013`。收尾：`ledger/usage/audit verify` exit 0；`doctor` exit 1（计价隔离）；重启后 `/health/ready` 一直不通过（脚本等满 1200 s；当时日志里的"ready after 1242 s"是放弃时间，脚本已改正）。
+
+**内存（前 7 小时有效）**：
+
+| 小时 | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| GC 后存活堆（MB） | 25 | 40 | 51 | 56 | 64 | 64 | 91 | 89 |
+| 整点 RssAnon 低点（MiB） | 47 | 86 | 122 | 126 | 148 | 158 | 231 | 265 |
+
+第 1 小时末（`heap-011`）对第 7 小时末（`heap-083`）的存活堆差分 +44 MB，几乎全部在 bbolt `freelist.(*array).Allocate`（调用路径 `usage.(*HistoryStore).commit`），即 `history.db` 的空闲页表随文件增长；Halro 自身状态没有增长。RssFile 随每小时导出起落，低点降到约 90 MiB，没有趋势。
+
+## E05d · V-013 修复后续跑（Linux 容器，2 小时）
+
+在 E05b 的终态目录上继续（已处于磁盘压力下），二进制为 #434 的 `ca074457`。启动前在 Halro 停机时用一次性离线工具解除 E05b 留下的隔离——产品内没有解除途径（V-014）——改写前后的记录在日志里（revision 4016864 → 4016865）。负载与 E05b 相同，2026-10-19 11:17–13:18 +08。
+
+| 量 | 值 |
+| --- | --- |
+| 普通请求 | 1,062,500 个 200、3 个 502（假上游）、**0 个 503** |
+| 治理 | 14,392 个周期全部 201；周期内请求 57,568 个 200 |
+| 计价隔离 | 26 次采样全部 `halro_pricing_quarantined_deployments 0` |
+| Ledger | 头序号 21,506,115 → 27,164,038；数据目录 47,301 → 60,366 MiB |
+| GC 后存活堆 | 31–62 MB；第 1 次对第 23 次采样差分 +17 MB，其中 bbolt freelist 0.5 → 9.7 MB |
+
+收尾：停机 exit 0；`ledger/usage/audit verify` exit 0，`doctor` healthy（只有 `source_rate_limit` 为 warn）；重启 42 s 就绪，`from_snapshot=true`。
+
+**重启后 RSS 的构成**（E05 的 516 MiB、E05d 的 2.0 GiB 都只记了 VmRSS）：另做一次重启，18 s 就绪后读 `/proc/<pid>/status`：
+
+| 就绪后 | VmRSS | RssAnon | RssFile |
+| --- | --- | --- | --- |
+| 0 s | 3,118 MiB | 58 MiB | 3,060 MiB |
+| 30 s | 85 MiB | 65 MiB | 20 MiB |
+| 60 s | 106 MiB | 97 MiB | 9 MiB |
+| 120 s | 70 MiB | 65 MiB | 5 MiB |
+
+重启后的大 RSS 是启动时触及的 bbolt mmap 文件页，可回收，30 s 内即被内核收回；进程自身的匿名内存约 60–100 MiB。
 
 ## E06 · 热状态上限触发（Linux 容器）
 
