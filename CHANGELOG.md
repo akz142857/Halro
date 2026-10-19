@@ -6,6 +6,8 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-19
+
 ### Upgrading from v0.8.5
 
 Re-initialisation is not required, but the upgrade is one-way and asks three
@@ -2529,6 +2531,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.9.0]: https://github.com/akz142857/Halro/compare/v0.8.5...v0.9.0
 [0.8.5]: https://github.com/akz142857/Halro/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/akz142857/Halro/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/akz142857/Halro/compare/v0.8.2...v0.8.3

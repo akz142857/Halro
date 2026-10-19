@@ -2,10 +2,41 @@
 
 Release comparisons use the previous tag and the candidate on the **same host
 and toolchain**, with identical benchmark fixtures. The current paired evidence
-is in [2026-09-06 v0.7.0](performance/2026-09-06-v0.7.0/README.md), including
-raw samples, exact source hashes, method and benchstat output.
+is in [2026-10-19 v0.9.0](performance/2026-10-19-v0.9.0/README.md), including
+raw samples, source revisions, method and benchstat output.
 
-## Current comparison, 2026-09-06
+## Current comparison, 2026-10-19
+
+Apple M4 / macOS 27.2 / Go 1.26.9 on both sides / `GOMAXPROCS=4`. Six samples
+per version, serial package execution, baseline then candidate in each round.
+Baseline: v0.8.5 (`28ea173`); candidate: `main` at `2a54dab2`, which the v0.9.0
+release preparation is based on.
+
+| Benchmark | v0.8.5 median | Candidate median | benchstat time comparison |
+|---|---:|---:|---|
+| Route candidate resolution, 8 targets | 4.599 µs | 4.554 µs | no significant difference, p=0.240 |
+| Strict response redaction | 70.44 µs | 70.18 µs | no significant difference, p=0.699 |
+| Bounded streaming redaction | 15.47 µs | 15.50 µs | no significant difference, p=0.732 |
+| Token Guard admit, fixed | 159.8 ns | 162.4 ns | +1.56%, p=0.015 |
+| Token Guard admit, EWMA | 173.0 ns | 174.4 ns | +0.84%, p=0.039 |
+| Token Guard acquire/release, contended | 339.9 ns | 342.6 ns | no significant difference, p=0.084 |
+| Project admission/reconcile/release, unlimited | 99.83 ns | 100.40 ns | no significant difference, p=0.093 |
+| Project admission/reconcile/release, limited | 129.4 ns | 130.2 ns | no significant difference, p=0.121 |
+| Project admission/reconcile/release, contended | 280.4 ns | 280.0 ns | no significant difference, p=0.511 |
+| Open and replay 100,000 WAL records | 519.8 ms | 519.0 ms | no significant difference, p=0.589 |
+| Deployment price pin, 1/8/64 workers (geomean) | 3.677 ms | 3.663 ms | no significant difference at any worker count |
+| Request lifecycle, 9 combinations (geomean) | 5.423 ms | 5.334 ms | eight `~`; projects=8/workers=1 −4.06%, p=0.026 |
+
+Request-lifecycle allocations fall 2.9–3.6% in every combination (geomean
+168.7 → 163.1); route resolution keeps 41 allocations at 16.59 KiB (+1.72%).
+The contended Token Guard acquire/release carries 160 B instead of 128 B per
+operation, the 32-byte admitted sample each lease now keeps for retraction
+(#428); its three allocations are unchanged.
+
+A 2026-10-17 comparison against the earlier candidate `8394fd3` was made for
+the closed release preparation (#426) and never merged; this one supersedes it.
+
+## Previous comparison, 2026-09-06
 
 Apple M4 / macOS 26.7 / 24 GiB / Go 1.26.6 / `GOMAXPROCS=4`.
 Six samples per version, serial package execution, baseline then candidate in
