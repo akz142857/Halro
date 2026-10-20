@@ -6,13 +6,23 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-20
+
+### Upgrading from v0.9.0
+
+No configuration migration or data-directory re-initialisation is required.
+This patch changes how the history files are held open, not their on-disk
+format. Take a backup before upgrading. Upgrades from v0.8.5 or earlier still
+need the steps in the v0.9.0 release notes below.
+
 ### Fixed
 
-- The process heap no longer grows with every write to
-  `data/history/history.db` and `data/history/archive.db` for as long as the
-  process runs. bbolt's freelist keeps an in-memory entry for each page it
-  hands out again until that page is freed a second time, which in files that
-  mostly grow is rarely; v0.9.0 shipped this as a known issue (about 44 MB over
+- Halro periodically reclaims the bbolt freelist memory accumulated by writes
+  to `data/history/history.db` and `data/history/archive.db`, when those files
+  can be reopened between transactions. bbolt's freelist keeps an in-memory
+  entry for each page it hands out again until that page is freed a second
+  time, which in files that mostly grow is rarely; v0.9.0 shipped this as a
+  known issue (about 44 MB over
   seven hours of a 150 request/s soak, given back only by a restart). Both files
   are now closed and opened again on the hourly maintenance tick, skipped while
   a read or a write is running. A reopen that fails leaves the file closed — the
@@ -2546,6 +2556,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.9.1]: https://github.com/akz142857/Halro/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/akz142857/Halro/compare/v0.8.5...v0.9.0
 [0.8.5]: https://github.com/akz142857/Halro/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/akz142857/Halro/compare/v0.8.3...v0.8.4

@@ -141,7 +141,7 @@ E05 的负载形态被 V-010 改变，且 Provider 不可达、请求不写满 L
 
 第 1 小时末（`heap-011`）对第 7 小时末（`heap-083`）的存活堆差分 +44 MB，几乎全部在 bbolt `freelist.(*array).Allocate`（调用路径 `usage.(*HistoryStore).commit`），即 `history.db` 的空闲页表随文件增长；Halro 自身状态没有增长。
 
-> 后续（2026-10-20）：代码与确定性测试确认，增长的是 bbolt freelist 里的 `allocs` map——每复用一页空闲页登记一条，只有该页再次被释放才删除；只追加为主的文件很少再释放，于是随进程启动以来的写入量增长，重启即归零，并不是空闲页表本身随文件增长。修复是每小时重开 `history.db` 与 `archive.db`（`internal/boltreopen`，见 CHANGELOG [Unreleased]）。RssFile 随每小时导出起落，低点降到约 90 MiB，没有趋势。
+> 后续（2026-10-20）：代码与确定性测试确认，增长的是 bbolt freelist 里的 `allocs` map——每复用一页空闲页登记一条，只有该页再次被释放才删除；只追加为主的文件很少再释放，于是随进程启动以来的写入量增长，重启即归零，并不是空闲页表本身随文件增长。修复是每小时重开 `history.db` 与 `archive.db`（`internal/boltreopen`，见 CHANGELOG [0.9.1]）。RssFile 随每小时导出起落，低点降到约 90 MiB，没有趋势。
 
 ## E05d · V-013 修复后续跑（Linux 容器，2 小时）
 
