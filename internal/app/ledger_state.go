@@ -40,6 +40,10 @@ type accountingStateRuntime struct {
 	reconciliation usageReconciliation
 	// archive holds the Work Units that have left the state (§13).
 	archive *archive.Store
+	// reopenFailed records, for history.db and archive.db, that the last
+	// reopen failed and left the file closed. Owned by the usage maintenance
+	// goroutine.
+	reopenFailed struct{ history, archive bool }
 }
 
 // ledgerStateSnapshots is the snapshot writer's key and what it last wrote,

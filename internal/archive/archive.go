@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/akz142857/Halro/internal/boltreopen"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
 	bbolt "go.etcd.io/bbolt"
@@ -57,7 +58,7 @@ var (
 
 // Store is archive.db.
 type Store struct {
-	db  *bbolt.DB
+	db  *boltreopen.DB
 	key []byte
 }
 
@@ -67,7 +68,7 @@ func Open(path string, key []byte) (store *Store, reset bool, err error) {
 	if len(key) != 32 {
 		return nil, false, errors.New("archive key must be 32 bytes")
 	}
-	db, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: time.Second})
+	db, err := boltreopen.Open(path, bbolt.Options{Timeout: time.Second})
 	if err != nil {
 		return nil, false, fmt.Errorf("open archive: %w", err)
 	}
@@ -450,4 +451,11 @@ func (s *Store) VisitArchivedRuns(projectID, after string, visit func(domain.Run
 			return visit(run)
 		})
 	})
+}
+
+// Reopen closes archive.db and opens it again, giving back the memory bbolt's
+// freelist accumulates with every write (see boltreopen). It reports false,
+// having done nothing, while a read or a write is running.
+func (s *Store) Reopen() (bool, error) {
+	return s.db.Reopen()
 }

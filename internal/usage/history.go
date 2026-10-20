@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/akz142857/Halro/internal/boltreopen"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
 	bbolt "go.etcd.io/bbolt"
@@ -123,7 +124,7 @@ func (b *historyBatch) records() int {
 
 // HistoryStore is history.db.
 type HistoryStore struct {
-	db  *bbolt.DB
+	db  *boltreopen.DB
 	key []byte
 	// commits and commitNanos time the batch transactions, fsync included,
 	// so a write that grows with the file shows up as a rising average.
@@ -173,7 +174,7 @@ func OpenHistory(path string, key []byte) (store *HistoryStore, rebuilt bool, er
 	if len(key) != 32 {
 		return nil, false, errors.New("usage history key must be 32 bytes")
 	}
-	db, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: time.Second})
+	db, err := boltreopen.Open(path, bbolt.Options{Timeout: time.Second})
 	if err != nil {
 		return nil, false, fmt.Errorf("open usage history: %w", err)
 	}
@@ -577,4 +578,11 @@ func (s *HistoryStore) applyRollupDelta(bucket *bbolt.Bucket, rollup map[string]
 		}
 	}
 	return nil
+}
+
+// Reopen closes history.db and opens it again, giving back the memory bbolt's
+// freelist accumulates with every write (see boltreopen). It reports false,
+// having done nothing, while a read or a batch is running.
+func (s *HistoryStore) Reopen() (bool, error) {
+	return s.db.Reopen()
 }

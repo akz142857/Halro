@@ -1198,6 +1198,7 @@ func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 	for {
 		select {
 		case <-checkpointTicker.C:
+			r.reopenHistoryFiles(true)
 			r.catchUpUsageHistory()
 			r.advanceLedgerChainCheckpoint()
 			r.saveTokenGuardCheckpoint()
@@ -1226,6 +1227,7 @@ func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 			// for no reason. The roll itself is bounded by size alone and is
 			// checked every few seconds beside the state snapshot.
 			r.compactLedgerSegments()
+			r.reopenHistoryFiles(false)
 		case <-ctx.Done():
 			r.saveTokenGuardCheckpoint()
 			r.exportUsageParquet()
@@ -1246,6 +1248,38 @@ func (r *Runtime) saveTokenGuardCheckpoint() {
 	}
 	if err := r.store.PutTokenGuardCheckpoint(payload); err != nil {
 		r.logger.Warn("Token Guard checkpoint save failed", "error", err)
+	}
+}
+
+// reopenHistoryFiles closes history.db and archive.db and opens them again,
+// giving back what bbolt's freelist accumulates with every write; on the hourly
+// tick this bounds it by an hour of writes instead of the uptime. A file busy
+// with a read is left for the next tick. One that fails to reopen stays closed
+// — its writes fail, and the collector and the snapshot retry them from the
+// Ledger — and failedOnly, on the minute tick, tries it again.
+func (r *Runtime) reopenHistoryFiles(failedOnly bool) {
+	files := []struct {
+		name   string
+		failed *bool
+		reopen func() (bool, error)
+	}{
+		{"usage history", &r.accountingState.reopenFailed.history, r.usage.History().Reopen},
+		{"archive", &r.accountingState.reopenFailed.archive, r.accountingState.archive.Reopen},
+	}
+	for _, file := range files {
+		if failedOnly && !*file.failed {
+			continue
+		}
+		reopened, err := file.reopen()
+		if err != nil {
+			*file.failed = true
+			r.logger.Error("bolt file reopen failed; it stays closed until a reopen succeeds", "file", file.name, "error", err)
+			continue
+		}
+		if reopened && *file.failed {
+			*file.failed = false
+			r.logger.Info("bolt file reopened after a failed reopen", "file", file.name)
+		}
 	}
 }
 
