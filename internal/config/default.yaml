@@ -39,9 +39,9 @@ tls:
   # without SNI; every other entry is selected by the names its certificate
   # declares, so Gateway and Admin may use different hostnames.
   # Replace the file with the paths and remove this empty list:
-  #   certificates:
-  #     - cert_file: /etc/halro/tls/fullchain.pem
-  #       key_file: /etc/halro/tls/privkey.pem
+  # certificates:
+  #   - cert_file: /etc/halro/tls/fullchain.pem
+  #     key_file: /etc/halro/tls/privkey.pem
   certificates: []
 
 storage:

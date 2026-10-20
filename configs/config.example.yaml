@@ -61,6 +61,22 @@ tls:
   # @description.zh-CN 每项一对证书链与私钥文件。第一项用于没有 SNI 的连接；其余各项按证书声明的名字选择，因此 Gateway 与 Admin 可以使用不同域名。
   # @description.en-US One certificate chain and private key per entry. The first entry answers connections that arrive without SNI; every other entry is selected by the names its certificate declares, so Gateway and Admin may use different hostnames.
   certificates: []
+  # An entry, for when enabled is true. At most 16 entries are accepted. SIGHUP
+  # re-reads the files in place (a renewed certificate needs no restart); a
+  # changed path or list still needs one.
+  # certificates:
+  #     # @title.zh-CN 证书链文件
+  #     # @title.en-US Certificate chain file
+  #     # @description.zh-CN PEM 格式的证书链，叶子证书在前。
+  #     # @description.en-US PEM certificate chain, leaf certificate first.
+  #   - cert_file: "/etc/halro/tls/gateway.crt"
+  #     # @title.zh-CN 私钥文件
+  #     # @title.en-US Private key file
+  #     # @description.zh-CN 与该证书配对的 PEM 私钥。
+  #     # @description.en-US PEM private key paired with this certificate.
+  #     key_file: "/etc/halro/tls/gateway.key"
+  #   - cert_file: "/etc/halro/tls/admin.crt"
+  #     key_file: "/etc/halro/tls/admin.key"
 
 storage:
   # @title.zh-CN 数据目录

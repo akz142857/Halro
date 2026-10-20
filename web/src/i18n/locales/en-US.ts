@@ -973,67 +973,77 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
       latencyApproximate: "P95 is read off a histogram and reports the bucket it falls in; samples above 120s are reported only as \"> 120s\".",
     },
   },
-  // Halro's own numbers put next to each other. The rule titles are questions
-  // rather than mechanism names: an operator arrives asking "was that my own
-  // timeout?", not asking about attempt_response_header_timeout. The
-  // consequences repeat what the server sends so the console can speak the
-  // operator's language while the CLI keeps printing English to a terminal that
-  // has no translation to look up.
-  //
-  // One constraint on that repetition: a rule may word its sentence per sub-case
-  // and per number, and there is one key here per rule and status — so a
-  // sentence written here has to hold for every sub-case that status covers.
-  // Anything that varies (which alias, how many candidates, which deadline) is
-  // already in the evidence beside it and does not belong in the sentence.
+  // Findings are written in the operator's words: the title is the question
+  // asked after a bad afternoon, the sentence quotes the numbers (taken from the
+  // same finding's evidence), parameters carry readable names, and the config
+  // key stays beside each one so config.yaml can be searched. The server's
+  // arithmetic closes the row, for checking.
   advisor: {
     title: "Findings",
-    description: "What this instance's own numbers say about each other. Read-only: a finding states, you decide.",
+    description: "Checks timeouts, retries, fallback routes and upstream refusals against this instance's current configuration and state. Read-only: nothing here changes a setting.",
     summaryClear: "Nothing to report",
     summaryWarnings: "{{count}} to look at",
     summaryUnknown: "{{count}} not checked",
     unavailable: "Findings could not be read. The rest of this page is unaffected.",
     statuses: { ok: "Fine", warn: "Look at this", unknown: "Not checked" },
+    evidenceLabel: "Parameters checked",
+    comparisonLabel: "Arithmetic",
+    duration: { hours: "{{count}} h", minutes: "{{count}} min", seconds: "{{count}} s" },
     rules: {
-      attempt_header_timeout_reachable: "Can the attempt deadline ever fire?",
-      retry_fits_route_budget: "Does the retry fit in the request budget?",
-      attempt_budget_reaches_fanout: "Does every configured fallback get called?",
-      suspended_scopes: "What is being held out of routing?",
-      unclassified_refusals: "Are refusals being understood?",
+      attempt_header_timeout_reachable: "Can the per-call timeout ever fire?",
+      retry_fits_route_budget: "Is there time for the retries against one upstream?",
+      attempt_budget_reaches_fanout: "Does every fallback route get a turn?",
+      suspended_scopes: "Is any upstream paused?",
+      unclassified_refusals: "Is every upstream refusal understood?",
     },
     consequences: {
       attempt_header_timeout_reachable: {
-        ok: "A hanging attempt is cut by its own deadline, leaving the rest of the request budget for another candidate.",
-        warn: "The per-attempt deadline can never fire: the request budget cuts first, so one hanging upstream spends the whole request and no other candidate is reached.",
+        ok: "Yes. A call that has not started answering within {{header}} is abandoned; the whole request may take {{route}}, so the time left goes to the next fallback.",
+        warn: "No. The per-call timeout ({{header}}) is not shorter than the whole-request timeout ({{route}}), so the request always times out first: one hanging upstream spends the whole request and no fallback gets a turn. Set the per-call timeout below the whole-request timeout.",
       },
       retry_fits_route_budget: {
-        ok: "The retries configured against one target fit inside the request budget.",
-        warn: "The retries configured against one target cannot all fit in the request budget; the last of them is cut by the request deadline rather than answered.",
+        ok: "Yes. Attempts per upstream: {{perTarget}}. Even if every one waits the full {{header}}, together they stay within the request's {{route}}.",
+        warn: "No. Attempts per upstream: {{perTarget}}. If every one waits the full {{header}}, together they exceed the request's {{route}}, so the last retry is cut off by the request timeout and never answers.",
       },
       attempt_budget_reaches_fanout: {
-        ok: "The attempt budget reaches every candidate behind the widest alias.",
-        warn: "There are more candidates behind one alias than the attempt budget reaches. The ones past it are configured, enabled and never called.",
-        unknown: "The route table was not available, so the attempt budget has nothing to be compared against.",
+        ok: "Yes. At most {{total}} attempts per request and {{perTarget}} per upstream reach {{reachable}} fallbacks; the alias with the most, \"{{model}}\", has {{widest}}, so all of them get a turn.",
+        okSingle: "Yes. Every model alias has a single route so far, so none can be left out.",
+        warn: "Not all. Alias \"{{model}}\" has {{widest}} fallbacks but the attempt limit reaches only {{reachable}}; the rest are enabled and never called. Raise the per-request attempt limit.",
+        unknown: "The route table could not be read, so this cannot be judged right now.",
       },
       suspended_scopes: {
-        ok: "Every configured candidate is admissible right now.",
-        warn: "These are held out of routing. An indefinite hold ends when the credential is replaced or an operator clears it, not on a clock.",
-        unknown: "Holds live in the running process; this view has no process to ask.",
+        ok: "No. Every configured fallback can take requests right now.",
+        warn: "Paused right now: {{suspended}}. Routing skips everything paused. An \"indefinite\" pause does not lift on its own — replace the credential or clear it; the others lift when their window ends.",
+        warnUnclassified: "Paused right now: {{suspended}}. Routing skips everything paused. Some pauses carry no reason: those are triggered by consecutive failures, and the failures may be this instance's own per-call timeout ({{header}}) cutting calls off. Check that timeout before the upstream. An \"indefinite\" pause does not lift on its own — replace the credential or clear it.",
+        unknown: "This needs the running process, which this view cannot reach.",
       },
       unclassified_refusals: {
-        ok: "Nothing was refused in a way Halro could not read. The count beside it says how many refusals there were.",
-        warn: "Some refusals carried no reason Halro understood, so they were treated as an upstream having a bad minute. A quota or credential refusal among them is being retried on the wrong clock.",
-        unknown: "Refusal classification lives in the running process; this view has no process to ask.",
+        ok: "Yes. Upstream refusals since start: {{observed}}. Each was handled by its recognized reason (rate limit, quota, credential).",
+        okNone: "No upstream has refused a request since this process started.",
+        warn: "Of {{observed}} upstream refusals, {{unclassified}} had no recognizable reason, so they were treated as a brief upstream blip and retried soon. A quota or credential problem among them is being handled the wrong way.",
+        unknown: "This needs the running process, which this view cannot reach.",
       },
     },
-    terms: {
-      attempts_that_fit_the_request_budget: "attempts that fit the request budget",
-      candidates_the_budget_reaches: "candidates the budget reaches",
-      widest_fan_out: "candidates behind the widest alias",
-      widest_fan_out_public_model: "widest alias",
-      suspended_scopes: "held out of routing",
-      refusals_observed: "refusals seen",
-      refusals_unclassified: "refusals not understood",
+    config: {
+      gateway: {
+        attempt_response_header_timeout: "Per-call timeout",
+        route_total_timeout: "Whole-request timeout",
+        max_total_attempts: "Attempts per request",
+      },
+      retry: { max_attempts_per_target: "Attempts per upstream" },
     },
+    terms: {
+      attempts_that_fit_the_request_budget: "Full-timeout calls that fit in a request",
+      candidates_the_budget_reaches: "Fallbacks the attempts reach",
+      widest_fan_out: "Most fallbacks behind one alias",
+      widest_fan_out_public_model: "Alias with the most fallbacks",
+      suspended_scopes: "Paused",
+      refusals_observed: "Upstream refusals",
+      refusals_unclassified: "Refusals not recognized",
+    },
+    scopeKinds: { deployment: "Deployment", credential: "Credential", provider: "Provider" },
+    unclassifiedStatus: "Unrecognized refusal · HTTP {{status}}",
+    unclassifiedNoStatus: "Unrecognized refusal · no status",
   },
   operations: {
     notifyCreated: "Alert endpoint created", notifyUpdated: "Alert endpoint saved", notifyDeleted: "Alert endpoint deleted", notifyEnabled: "Alert endpoint enabled", notifyDisabled: "Alert endpoint disabled",

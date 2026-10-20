@@ -1860,31 +1860,34 @@ code.usage-request-id { color: var(--color-text-primary); }
    land on top of each other and read as one thick or doubled rule, so the row
    yields to the container. */
 .diagnostic-details dl > div:first-child { border-top: 0; }
-/* Findings. The evidence is the content and the sentence is the annotation, so
-   the comparison sits at code weight beside a status chip and the consequence
-   is one muted line under it. Getting this the other way round — a paragraph
-   with the numbers buried in it — is what the three hand-written `remedy` keys
-   in the log records already did, and is the thing this card replaces. */
+/* Findings. The plain-language conclusion leads at body weight; the parameters
+   it was drawn from sit under it as small labelled tiles, each with its config
+   key as a footnote; the server's arithmetic closes the row in muted mono. The
+   first version led with the arithmetic and config keys, which was checkable
+   and unreadable. */
 .advisor-findings .advisor-caption { margin: 0; padding: var(--space-3) var(--space-4) 0; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.6; }
 .advisor-finding-list { margin: var(--space-3) 0 0; padding: 0; list-style: none; border-top: 1px solid var(--border); }
-.advisor-finding { padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border); }
+.advisor-finding { display: grid; gap: var(--space-3); padding: var(--space-4); border-top: 1px solid var(--border); }
 .advisor-finding:first-child { border-top: 0; }
-.advisor-finding-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-2); }
+.advisor-finding-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
 .advisor-finding-head strong { min-width: 0; font-size: var(--font-size-sm); }
 /* The chip carries the verdict in a word as well as a colour, because a status
    told only in colour is not told to everyone. */
 .advisor-status { flex: 0 0 auto; padding: var(--space-1) var(--space-2); border: 1px solid var(--color-status-neutral-border); border-radius: var(--radius-pill); color: var(--color-status-neutral-text); background: var(--color-status-neutral-surface); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); }
 .advisor-status.ok { border-color: var(--color-status-success-border); color: var(--color-status-success-text); background: var(--color-status-success-surface); }
 .advisor-status.warn { border-color: var(--color-status-warning-border); color: var(--color-status-warning-text); background: var(--color-status-warning-surface); }
-.advisor-comparison { display: block; margin-top: var(--space-2); overflow-x: auto; color: var(--text); font-size: var(--font-size-sm); }
-.advisor-consequence { margin: var(--space-2) 0 0; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.6; }
-/* Evidence reads as pairs, not as a table: the names are long and the values
-   are short, and a two-column grid at this width leaves the numbers stranded on
-   the far side of the card. */
-.advisor-evidence { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin: var(--space-3) 0 0; padding: 0; border-top: 0; }
-.advisor-evidence > div { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; padding: 0; border-top: 0; }
-.advisor-evidence dt { color: var(--muted-2); font-size: var(--font-size-xs); }
-.advisor-evidence dd { margin: 0; color: var(--text); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; }
+.advisor-consequence { margin: 0; color: var(--text); font-size: var(--font-size-sm); line-height: 1.7; }
+.advisor-finding.warn .advisor-consequence { padding-left: var(--space-3); border-left: 3px solid var(--color-status-warning-border); }
+.diagnostic-details .advisor-evidence { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: var(--space-2); margin: 0; padding: 0; border-top: 0; }
+.advisor-evidence > div { display: flex; flex-direction: column; justify-content: flex-start; gap: var(--space-1); min-width: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: color-mix(in srgb, var(--surface) 92%, var(--text) 3%); }
+/* The global dt capitalises its first letter, which turned "gateway.…" into
+   "Gateway.…" — a key nobody could then find in config.yaml. */
+.advisor-evidence dt { color: var(--muted); font-size: var(--font-size-xs); text-transform: none; }
+.advisor-evidence dd { display: flex; flex-direction: column; gap: var(--space-1); margin: 0; overflow-wrap: anywhere; text-align: left; }
+.advisor-value { color: var(--text); font-size: var(--font-size-md); font-weight: var(--font-weight-semibold); font-variant-numeric: tabular-nums; }
+.advisor-config-key { overflow-wrap: anywhere; color: var(--muted-2); font-size: var(--font-size-xs); font-weight: normal; }
+.advisor-comparison { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); margin: 0; color: var(--muted-2); font-size: var(--font-size-xs); }
+.advisor-comparison code { overflow-wrap: anywhere; color: var(--muted); }
 
 /* The write-path card carries three lines of context around its table. They are
    annotation, not content: at body weight they read as paragraphs and bury the
@@ -3343,3 +3346,6 @@ textarea { resize: vertical; }
 .model-catalog-card code {
   overflow-wrap: anywhere;
 }
+/* The catalog card and the effective configuration below it are separate
+   subjects; stacked flush they read as one card with a stray border. */
+.model-catalog-card + .config-overview { margin-top: var(--space-6); }

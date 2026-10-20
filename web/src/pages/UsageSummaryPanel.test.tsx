@@ -20,7 +20,7 @@ function metrics(overrides: Partial<SummaryMetrics> = {}): SummaryMetrics {
 
 function summary(overrides: Partial<UsageSummary> = {}): UsageSummary {
   return {
-    granularity: "month",
+    granularity: "day",
     start: "2026-08-01",
     end: "2026-08-31",
     totals: metrics({ requests: 10, request_errors: 1, attempts: 12, cost_micros_usd: 4_500_000 }),
@@ -208,7 +208,7 @@ describe("UsageSummaryPanel", () => {
     const group = await screen.findByRole("radiogroup", { name: "粒度" });
     const choices = within(group).getAllByRole("radio");
     expect(choices).toHaveLength(3);
-    expect(within(group).getByRole("radio", { name: "按月" })).toBeChecked();
+    expect(within(group).getByRole("radio", { name: "按天" })).toBeChecked();
     expect(screen.queryByRole("tablist", { name: "粒度" })).toBeNull();
   });
 
@@ -216,10 +216,10 @@ describe("UsageSummaryPanel", () => {
     const request = vi.spyOn(api, "usageSummary").mockResolvedValue(summary());
     renderPanel();
 
-    fireEvent.click(await screen.findByRole("radio", { name: "按天" }));
+    fireEvent.click(await screen.findByRole("radio", { name: "按月" }));
     await waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     const query = new URLSearchParams((request.mock.calls[1][0] ?? "").slice(1));
-    expect(query.get("granularity")).toBe("day");
+    expect(query.get("granularity")).toBe("month");
   });
 
   // The tail is folded on the server, so the ranking has to be decided there
@@ -285,7 +285,7 @@ describe("UsageSummaryPanel", () => {
 
     await waitFor(() => expect(request).toHaveBeenCalled());
     const query = new URLSearchParams((request.mock.calls[0][0] ?? "").slice(1));
-    expect(query.get("granularity")).toBe("month");
+    expect(query.get("granularity")).toBe("day");
     expect(query.get("group_by")).toBe("project");
   });
 

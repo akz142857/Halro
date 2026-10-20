@@ -37,7 +37,7 @@ const detailFilters: Record<Exclude<Dimension, "">, string> = {
 
 export function UsageSummaryPanel() {
   const { t } = useTranslation();
-  const [granularity, setGranularity] = useState<Granularity>("month");
+  const [granularity, setGranularity] = useState<Granularity>("day");
   const [dimension, setDimension] = useState<Dimension>("project");
   const [metric, setMetric] = useState<TrendMetric>("cost");
   const [sort, setSort] = useState<SortKey>("cost");
