@@ -65,10 +65,19 @@ type replicationRuntime struct {
 	// must first stop accepting HTTP work and wait for every admitted handler to
 	// finish, otherwise one paused before Provider I/O can run after promotion.
 	plannedStepdownDrain func() error
-	incompatibleSchema   atomic.Uint64
-	incompatibleKey      atomic.Uint64
-	incompatibleSPKI     atomic.Uint64
-	requiredWaits        [2][5]atomic.Uint64
+	// unconfirmedMetadata is installed by Runtime before any goroutine can
+	// write metadata. The only metadata writes that wait for confirmation are
+	// the ones that withdraw authority (metadataOpRequiresConfirmation), and
+	// such a write is already committed to the local store when the wait
+	// fails. The handler that made it answers 503 and returns before it
+	// activates anything, so without this the live snapshots went on
+	// authorizing what the store had revoked until a restart or an unrelated
+	// activation happened to rebuild them.
+	unconfirmedMetadata func()
+	incompatibleSchema  atomic.Uint64
+	incompatibleKey     atomic.Uint64
+	incompatibleSPKI    atomic.Uint64
+	requiredWaits       [2][5]atomic.Uint64
 }
 
 const (
@@ -943,9 +952,18 @@ func (r *replicationRuntime) installMetadataHook(store *boltstore.Store) error {
 	return store.SetMetadataJournalAfterDurable(func(batch metadatajournal.DurableBatch) (uint64, error) {
 		commit, err := r.coordinator.RecordMetadataBatch(batch)
 		return commit.Index, err
-	}, func(ctx context.Context, index uint64) error {
-		return r.waitRequiredConfirmation(ctx, index, requiredMetadata)
-	})
+	}, r.waitMetadataConfirmation)
+}
+
+// waitMetadataConfirmation is the metadata store's confirmation wait. Every
+// failure — unavailable, deadline or a caller that went away — leaves a local
+// commit behind it, so every failure is reported to Runtime.
+func (r *replicationRuntime) waitMetadataConfirmation(ctx context.Context, index uint64) error {
+	err := r.waitRequiredConfirmation(ctx, index, requiredMetadata)
+	if err != nil && r.unconfirmedMetadata != nil {
+		r.unconfirmedMetadata()
+	}
+	return err
 }
 
 func (r *replicationRuntime) replicateProviderObject(ctx context.Context, name string, sealed []byte) error {
