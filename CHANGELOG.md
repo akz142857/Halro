@@ -6,6 +6,21 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- The process heap no longer grows with every write to
+  `data/history/history.db` and `data/history/archive.db` for as long as the
+  process runs. bbolt's freelist keeps an in-memory entry for each page it
+  hands out again until that page is freed a second time, which in files that
+  mostly grow is rarely; v0.9.0 shipped this as a known issue (about 44 MB over
+  seven hours of a 150 request/s soak, given back only by a restart). Both files
+  are now closed and opened again on the hourly maintenance tick, skipped while
+  a read or a write is running. A reopen that fails leaves the file closed — the
+  usage history stops taking records and replays them from the Ledger once a
+  reopen succeeds, retried every minute — and is logged as an error. Bolt write
+  counters exported as `halro_usage_history_page_writes_total` carry across
+  reopens.
+
 ## [0.9.0] - 2026-10-19
 
 ### Upgrading from v0.8.5
