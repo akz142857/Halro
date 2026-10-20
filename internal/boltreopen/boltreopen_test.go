@@ -225,64 +225,86 @@ func TestClosedStaysClosed(t *testing.T) {
 	}
 }
 
-// Run with -race: reads and writes keep going while the file is reopened, and
-// none of them ever sees a closed handle.
+// Run with -race: race reopen attempts against reads and writes, then reopen
+// between batches and keep using the DB. Reopen may skip every attempt while
+// transactions overlap, so success must be checked at a known idle point,
+// not within a wall-clock window that depends on the scheduler.
 func TestReopenUnderConcurrentReadsAndWrites(t *testing.T) {
 	db, _ := openTemp(t)
-	stop := make(chan struct{})
-	var wg sync.WaitGroup
-	errs := make(chan error, 8)
-	for worker := range 4 {
-		wg.Add(1)
+	const rounds, workers, operations = 10, 4, 20
+	for round := range rounds {
+		var wg sync.WaitGroup
+		errs := make(chan error, workers)
+		for worker := range workers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for n := range operations {
+					var err error
+					if worker%2 == 0 {
+						err = db.Update(func(tx *bbolt.Tx) error {
+							b, err := tx.CreateBucketIfNotExists(bucket)
+							if err != nil {
+								return err
+							}
+							key := binary.BigEndian.AppendUint64([]byte{byte(worker)}, uint64(round*operations+n))
+							return b.Put(key, []byte("v"))
+						})
+					} else {
+						err = db.View(func(tx *bbolt.Tx) error {
+							if b := tx.Bucket(bucket); b != nil {
+								b.Stats()
+							}
+							return nil
+						})
+					}
+					if err != nil {
+						errs <- err
+						return
+					}
+				}
+			}()
+		}
+		done := make(chan struct{})
 		go func() {
-			defer wg.Done()
-			for n := uint64(0); ; n++ {
-				select {
-				case <-stop:
-					return
-				default:
-				}
-				var err error
-				if worker%2 == 0 {
-					err = db.Update(func(tx *bbolt.Tx) error {
-						b, err := tx.CreateBucketIfNotExists(bucket)
-						if err != nil {
-							return err
-						}
-						return b.Put(binary.BigEndian.AppendUint64([]byte{byte(worker)}, n), []byte("v"))
-					})
-				} else {
-					err = db.View(func(tx *bbolt.Tx) error {
-						if b := tx.Bucket(bucket); b != nil {
-							b.Stats()
-						}
-						return nil
-					})
-				}
-				if err != nil {
-					errs <- err
-					return
-				}
-			}
+			wg.Wait()
+			close(done)
 		}()
-	}
-	reopens := 0
-	for deadline := time.Now().Add(500 * time.Millisecond); time.Now().Before(deadline); {
-		reopened, err := db.Reopen()
-		if err != nil {
+		var reopenErr error
+	running:
+		for {
+			select {
+			case <-done:
+				break running
+			default:
+			}
+			if _, reopenErr = db.Reopen(); reopenErr != nil {
+				break running
+			}
+			runtime.Gosched()
+		}
+		// Finish every worker before reporting errors or closing the DB.
+		<-done
+		close(errs)
+		if reopenErr != nil {
+			t.Fatal(reopenErr)
+		}
+		for err := range errs {
 			t.Fatal(err)
 		}
-		if reopened {
-			reopens++
+		if reopened, err := db.Reopen(); !reopened || err != nil {
+			t.Fatalf("round %d: idle Reopen = %v, %v; want true, nil", round, reopened, err)
 		}
-	}
-	close(stop)
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		t.Fatal(err)
-	}
-	if reopens == 0 {
-		t.Fatal("no reopen found the file idle in half a second")
+		if err := db.View(func(tx *bbolt.Tx) error {
+			want := (round + 1) * (workers / 2) * operations
+			if b := tx.Bucket(bucket); b == nil {
+				t.Errorf("round %d: rows bucket missing after reopen", round)
+			} else if got := b.Stats().KeyN; got != want {
+				t.Errorf("round %d: rows after reopen = %d, want %d", round, got, want)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
