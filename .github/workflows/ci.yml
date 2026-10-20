@@ -13,6 +13,8 @@ on:
     branches:
       - main
   pull_request:
+  # Allow an operator to run the same checks when a push run is missing.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
