@@ -1,0 +1,18 @@
+{
+  "kind": "isolated_browser_h10_replay",
+  "source_commit": "f2745a149b61443e495deee755ff6ce08925dbfd",
+  "browser": "Google Chrome 153.0.8010.53",
+  "source_sha256": {
+    "cmd/halro-ha-health/ui/index.html": "fd83f9808a5d3caf865345cc4a53c9c72ea8f7824fe90b96c68ae53e8c717596",
+    "cmd/halro-ha-health/ui/app.js": "1553bfb64421f6239af11e2b4857e37545c9005513691a688f98645a7f696d39"
+  },
+  "files_sha256": {
+    "baseline.png": "b240e7a771f104063cf5154cda736bc885d42e6c3161c5352a437cadaa39ac08",
+    "browser-state.json": "60840b31016aa7729c69ea31995200c2fb5ad5360ec27da3385030b831273125",
+    "clock-minus-one-hour.png": "063c8c4b616c91ac6acf6927038ccbf101b5ff1450312d924c1e1635a5afa4ec",
+    "clock-plus-one-hour.png": "eb9817ffdb0ab093f85f5c8761d047b67eda79cd24df3606536bf548dec0130e",
+    "expired.png": "0cfac2276d57c4b50606a65c6b52dde61675aeac9914b87fb27f24fa3301c8bc",
+    "late-response.png": "0cfac2276d57c4b50606a65c6b52dde61675aeac9914b87fb27f24fa3301c8bc"
+  },
+  "scope": "Synthetic two-member local HTTP fixture; Date shifted by one hour for clock cases; one 31-second /api/health response for slow case. No kind candidate, Prometheus, operator proxy, or real member state."
+}

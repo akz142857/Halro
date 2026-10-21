@@ -383,6 +383,12 @@ checks Halro, Prometheus, and Alertmanager readiness, verifies Prometheus
 sample freshness, and sends durable heartbeat and down/up events to an
 independent receiver.
 
+For HA clusters, the release archive also includes `halro-ha-health`, an
+independent read-only health view for cluster, member, replication, and
+client-Service evidence. Its [deployment contract](docs/observability/ha-health-service.md)
+requires per-member collection, a controlled operator entry point, and
+target-environment acceptance before production use.
+
 Validate the repository-provided configuration before deployment:
 
 ```bash

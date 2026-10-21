@@ -1,0 +1,86 @@
+{
+  "source": "http://127.0.0.1:19126/",
+  "baseline": {
+    "at": "2026-09-29T00:08:12.870Z",
+    "state": {
+      "scope": "环境 isolated-browser-fixture · 集群 fixture · Incarnation browser-fixture · 采集 2/2",
+      "updated": "服务端观测：2026/9/29 08:08:10 · 页面更新：2026/9/29 08:08:10",
+      "cards": [
+        "综合状态健康isolated_browser_fixture",
+        "客户端入口健康isolated_browser_fixture",
+        "关键写确认健康isolated_browser_fixture",
+        "安全一致性健康isolated_browser_fixture",
+        "追平节点观察健康isolated_browser_fixture"
+      ],
+      "nodeFresh": [
+        "新鲜",
+        "新鲜"
+      ],
+      "topology": [
+        "halro-0primary · 新鲜到 Replica 的会话见下表",
+        "halro-1replica · 新鲜Primary → 本节点：未知"
+      ]
+    },
+    "screenshot": "baseline.png"
+  },
+  "expired": {
+    "at": "2026-09-29T00:08:43.965Z",
+    "state": {
+      "scope": "集群身份与采集覆盖未知 · 最近一次健康查询已过期",
+      "updated": "最近成功查询：2026/9/29 08:08:10 · 当前状态已过期",
+      "cards": [
+        "综合状态未知当前健康查询超过 30 秒未更新",
+        "客户端入口未知当前健康查询超过 30 秒未更新",
+        "关键写确认未知当前健康查询超过 30 秒未更新",
+        "安全一致性未知当前健康查询超过 30 秒未更新",
+        "追平节点观察未知当前健康查询超过 30 秒未更新"
+      ],
+      "nodeFresh": [
+        "缺失/陈旧",
+        "缺失/陈旧"
+      ],
+      "topology": [
+        "halro-0primary · 缺失/陈旧认证连接：当前未观测",
+        "halro-1replica · 缺失/陈旧认证连接：当前未观测"
+      ]
+    },
+    "screenshot": "expired.png"
+  },
+  "late": {
+    "at": "2026-09-29T00:09:01.027Z",
+    "state": {
+      "scope": "集群身份与采集覆盖未知 · 最近一次健康查询已过期",
+      "updated": "最近成功查询：2026/9/29 08:08:10 · 当前状态已过期",
+      "cards": [
+        "综合状态未知当前健康查询超过 30 秒未更新",
+        "客户端入口未知当前健康查询超过 30 秒未更新",
+        "关键写确认未知当前健康查询超过 30 秒未更新",
+        "安全一致性未知当前健康查询超过 30 秒未更新",
+        "追平节点观察未知当前健康查询超过 30 秒未更新"
+      ],
+      "nodeFresh": [
+        "缺失/陈旧",
+        "缺失/陈旧"
+      ],
+      "topology": [
+        "halro-0primary · 缺失/陈旧认证连接：当前未观测",
+        "halro-1replica · 缺失/陈旧认证连接：当前未观测"
+      ]
+    },
+    "screenshot": "late-response.png"
+  },
+  "health_requests": [
+    {
+      "url": "http://127.0.0.1:19126/api/health",
+      "started_at": "2026-09-29T00:08:10.819Z",
+      "status": 200,
+      "duration_seconds": 0.004
+    },
+    {
+      "url": "http://127.0.0.1:19126/api/health",
+      "started_at": "2026-09-29T00:08:25.822Z",
+      "status": 200,
+      "duration_seconds": 31.015
+    }
+  ]
+}

@@ -1,0 +1,339 @@
+# Local kind fixture matching halro-ha-health-kind.example.yaml. The image tags,
+# node name, cluster identity and Secret names are specific to the 2026-09-28
+# acceptance environment. Review and pin images, certificates, retention,
+# storage, scheduling and network policy before using any part elsewhere.
+# ConfigMaps/Secrets named below must be provisioned separately; this file
+# contains no bearer tokens, private keys or authoritative member state.
+# Prometheus and the health view run as separate Pods. Prometheus serves mTLS
+# behind a Service reachable only by the health-view Pod's network identity;
+# neither Pod mounts the other's member credentials or persistent data.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ha-health-data
+  namespace: halro-monitoring
+spec:
+  storageClassName: standard
+  accessModes: [ReadWriteOncePod]
+  resources:
+    requests: {storage: 1Gi}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ha-prometheus-data
+  namespace: halro-monitoring
+spec:
+  storageClassName: standard
+  accessModes: [ReadWriteOncePod]
+  resources:
+    requests: {storage: 5Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ha-prometheus
+  namespace: halro-monitoring
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/name: prometheus}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: prometheus}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {kubernetes.io/hostname: halro-ha-health-local-control-plane}
+      tolerations:
+        - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+      securityContext:
+        fsGroup: 65534
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: prepare-data
+          image: node:22-alpine
+          imagePullPolicy: Never
+          command: [sh, -c, "chown -R 65534:65534 /prometheus"]
+          securityContext: {runAsUser: 0}
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 64Mi}
+          volumeMounts:
+            - {name: prom-data, mountPath: /prometheus}
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.13.0
+          imagePullPolicy: Never
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=1d
+            - --web.listen-address=0.0.0.0:9090
+            - --web.config.file=/etc/prometheus-web/web.yml
+          ports:
+            - {name: https, containerPort: 9090}
+          readinessProbe:
+            tcpSocket: {port: https}
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: {port: https}
+            periodSeconds: 15
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            - {name: prom-config, mountPath: /etc/prometheus, readOnly: true}
+            - {name: prom-web-config, mountPath: /etc/prometheus-web, readOnly: true}
+            - {name: prom-web-tls, mountPath: /run/prom-web-tls, readOnly: true}
+            - {name: prom-tokens, mountPath: /run/prom-tokens, readOnly: true}
+            - {name: prom-tls, mountPath: /run/prom-tls, readOnly: true}
+            - {name: prom-data, mountPath: /prometheus}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: prom-config
+          configMap: {name: ha-prometheus-config}
+        - name: prom-web-config
+          configMap: {name: ha-prometheus-web-config}
+        - name: prom-web-tls
+          secret: {secretName: ha-prometheus-web-tls, defaultMode: 0440}
+        - name: prom-tokens
+          secret: {secretName: ha-prometheus-tokens, defaultMode: 0440}
+        - name: prom-tls
+          secret: {secretName: ha-prometheus-tls, defaultMode: 0440}
+        - name: prom-data
+          persistentVolumeClaim: {claimName: ha-prometheus-data}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ha-prometheus
+  namespace: halro-monitoring
+spec:
+  selector: {app.kubernetes.io/name: prometheus}
+  ports:
+    - {name: https, port: 9090, targetPort: https}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ha-prometheus-health-ingress
+  namespace: halro-monitoring
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: prometheus}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: halro-ha-health}
+      ports:
+        - {protocol: TCP, port: 9090}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ha-health
+  namespace: halro-monitoring
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/name: halro-ha-health}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: halro-ha-health}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {kubernetes.io/hostname: halro-ha-health-local-control-plane}
+      tolerations:
+        - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
+      securityContext:
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: prepare-data
+          image: node:22-alpine
+          imagePullPolicy: Never
+          command: [sh, -c, "mkdir -p /var/lib/halro-ha-health/private && chown -R 65532:65532 /var/lib/halro-ha-health && chmod 700 /var/lib/halro-ha-health/private"]
+          securityContext: {runAsUser: 0}
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 64Mi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/halro-ha-health}
+        - name: prepare-status-tokens
+          image: node:22-alpine
+          imagePullPolicy: Never
+          command: [sh, -ec]
+          args:
+            - |
+              mkdir -p /run/status-private/private
+              chmod 700 /run/status-private/private
+              for name in halro-0 halro-1 halro-2; do
+                tmp=$(mktemp "/run/status-private/private/.$name.XXXXXX")
+                cp "/run/status-source/$name" "$tmp"
+                chmod 600 "$tmp"
+                mv -f "$tmp" "/run/status-private/private/$name"
+              done
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: status-tokens, mountPath: /run/status-source, readOnly: true}
+            - {name: status-private, mountPath: /run/status-private}
+        - name: prepare-prometheus-client-key
+          image: node:22-alpine
+          imagePullPolicy: Never
+          command: [sh, -ec]
+          args:
+            - |
+              mkdir -p /run/prom-client-private/private
+              chmod 700 /run/prom-client-private/private
+              cp /run/prom-client-source/client.key /run/prom-client-private/private/client.key
+              chmod 600 /run/prom-client-private/private/client.key
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: prom-client, mountPath: /run/prom-client-source, readOnly: true}
+            - {name: prom-client-private, mountPath: /run/prom-client-private}
+      containers:
+        - name: status-token-sync
+          image: node:22-alpine
+          imagePullPolicy: Never
+          command: [sh, -ec]
+          args:
+            - |
+              while :; do
+                for name in halro-0 halro-1 halro-2; do
+                  source="/run/status-source/$name"
+                  target="/run/status-private/private/$name"
+                  if [ ! -r "$source" ]; then
+                    rm -f "$target"
+                    continue
+                  fi
+                  if [ -f "$target" ] && cmp -s "$source" "$target"; then
+                    continue
+                  fi
+                  tmp=$(mktemp "/run/status-private/private/.$name.XXXXXX")
+                  cp "$source" "$tmp"
+                  chmod 600 "$tmp"
+                  mv -f "$tmp" "$target"
+                done
+                sleep 2
+              done
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 64Mi}
+          volumeMounts:
+            - {name: status-tokens, mountPath: /run/status-source, readOnly: true}
+            - {name: status-private, mountPath: /run/status-private}
+        - name: view
+          image: halro-ha-health-view-local:split-prom-20260928
+          imagePullPolicy: Never
+          args:
+            - -listen
+            - 0.0.0.0:9105
+            - -prometheus
+            - https://ha-prometheus.halro-monitoring.svc.cluster.local:9090
+            - -prometheus-ca
+            - /run/prom-client-source/ca.crt
+            - -prometheus-client-cert
+            - /run/prom-client-source/client.crt
+            - -prometheus-client-key
+            - /run/prom-client-private/private/client.key
+            - -environment
+            - kind-local
+            - -cluster
+            - halro-kind-health-local
+            - -members
+            - halro-0,halro-1,halro-2
+            - -tls-cert
+            - /run/health-tls/server.crt
+            - -tls-key
+            - /run/health-tls/server.key
+            - -client-ca
+            - /run/health-tls/ca.crt
+            - -client-url
+            - https://halro.halro.svc.cluster.local:8080/
+            - -probe-ca
+            - /run/health-tls/ca.crt
+            - -member-status-manifest
+            - /etc/halro-health/member-status.json
+            - -event-journal
+            - /var/lib/halro-ha-health/private/event-journal.json
+            - -durable-transition-journal
+            - /var/lib/halro-ha-health/private/durable-transitions.json
+          ports:
+            - {name: https, containerPort: 9105}
+          readinessProbe:
+            tcpSocket: {port: https}
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: {port: https}
+            periodSeconds: 15
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: config, mountPath: /etc/halro-health, readOnly: true}
+            - {name: status-private, mountPath: /run/status-tokens, readOnly: true}
+            - {name: prom-client, mountPath: /run/prom-client-source, readOnly: true}
+            - {name: prom-client-private, mountPath: /run/prom-client-private, readOnly: true}
+            - {name: tls, mountPath: /run/health-tls, readOnly: true}
+            - {name: data, mountPath: /var/lib/halro-ha-health}
+      volumes:
+        - name: config
+          configMap: {name: ha-health-status-config}
+        - name: status-tokens
+          secret: {secretName: ha-health-status-tokens, defaultMode: 0440}
+        - name: status-private
+          emptyDir: {medium: Memory, sizeLimit: 1Mi}
+        - name: tls
+          secret: {secretName: ha-health-tls, defaultMode: 0440}
+        - name: data
+          persistentVolumeClaim: {claimName: ha-health-data}
+        - name: prom-client
+          secret: {secretName: ha-health-prometheus-client, defaultMode: 0440}
+        - name: prom-client-private
+          emptyDir: {medium: Memory, sizeLimit: 1Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ha-health
+  namespace: halro-monitoring
+spec:
+  selector: {app.kubernetes.io/name: halro-ha-health}
+  ports:
+    - {name: https, port: 9105, targetPort: https}

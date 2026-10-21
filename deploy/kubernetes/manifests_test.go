@@ -3,8 +3,10 @@ package kubernetes_test
 import (
 	"bytes"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -90,6 +92,7 @@ func TestHAWorkloadSafetyInvariants(t *testing.T) {
 		"minAvailable: 2",
 		"automountServiceAccountToken: false",
 		"port: 9910",
+		"{name: metrics, port: 9090, targetPort: metrics}",
 	} {
 		if !strings.Contains(ha, required) {
 			t.Fatalf("HA manifest lacks %q", required)
@@ -97,6 +100,71 @@ func TestHAWorkloadSafetyInvariants(t *testing.T) {
 	}
 	if strings.Contains(ha, "pods/patch") || strings.Contains(ha, "halro.io/role=primary") {
 		t.Fatal("HA manifest must use client routing option (a), not Kubernetes role mutation")
+	}
+}
+
+func TestHAObservabilityIngressPolicyIsNarrow(t *testing.T) {
+	var policy struct {
+		Spec struct {
+			PodSelector struct {
+				MatchLabels map[string]string `yaml:"matchLabels"`
+			} `yaml:"podSelector"`
+			PolicyTypes []string `yaml:"policyTypes"`
+			Ingress     []struct {
+				From []struct {
+					NamespaceSelector *struct {
+						MatchLabels map[string]string `yaml:"matchLabels"`
+					} `yaml:"namespaceSelector"`
+					PodSelector *struct {
+						MatchLabels map[string]string `yaml:"matchLabels"`
+					} `yaml:"podSelector"`
+					IPBlock any `yaml:"ipBlock"`
+				} `yaml:"from"`
+				Ports []struct {
+					Protocol string `yaml:"protocol"`
+					Port     int    `yaml:"port"`
+				} `yaml:"ports"`
+			} `yaml:"ingress"`
+			Egress []any `yaml:"egress"`
+		} `yaml:"spec"`
+	}
+	if err := yaml.Unmarshal([]byte(manifestText(t, "halro-ha-observability-ingress.example.yaml")), &policy); err != nil {
+		t.Fatal(err)
+	}
+	if !maps.Equal(policy.Spec.PodSelector.MatchLabels, map[string]string{
+		"app.kubernetes.io/name": "halro", "app.kubernetes.io/component": "ha-member",
+	}) || !slices.Equal(policy.Spec.PolicyTypes, []string{"Ingress"}) || len(policy.Spec.Egress) != 0 ||
+		len(policy.Spec.Ingress) != 2 {
+		t.Fatal("HA observability policy must select only HA members with two reviewed ingress routes")
+	}
+	wantByPort := map[int]map[string]bool{
+		9090: {"prometheus": true, "halro-ha-health": true},
+		8080: {"halro-ha-health": true},
+	}
+	for _, ingress := range policy.Spec.Ingress {
+		if len(ingress.Ports) != 1 || ingress.Ports[0].Protocol != "TCP" {
+			t.Fatal("HA observability policy has a broad or non-TCP port")
+		}
+		port := ingress.Ports[0].Port
+		wantPods, ok := wantByPort[port]
+		if !ok || len(ingress.From) != len(wantPods) {
+			t.Fatal("HA observability policy has an unexpected or repeated ingress port")
+		}
+		for _, from := range ingress.From {
+			if from.NamespaceSelector == nil || from.PodSelector == nil || from.IPBlock != nil ||
+				!maps.Equal(from.NamespaceSelector.MatchLabels, map[string]string{"halro.io/monitoring-access": "allowed"}) ||
+				len(from.PodSelector.MatchLabels) != 1 || !wantPods[from.PodSelector.MatchLabels["app.kubernetes.io/name"]] {
+				t.Fatal("HA observability policy has a broad or unexpected source selector")
+			}
+			delete(wantPods, from.PodSelector.MatchLabels["app.kubernetes.io/name"])
+		}
+		if len(wantPods) != 0 {
+			t.Fatal("HA observability policy repeated a source instead of covering the expected workloads")
+		}
+		delete(wantByPort, port)
+	}
+	if len(wantByPort) != 0 {
+		t.Fatal("HA observability policy is missing an expected ingress route")
 	}
 }
 

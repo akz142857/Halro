@@ -16,7 +16,7 @@ var (
 	// that take the name as their first literal argument. Matching only the
 	// first left every histogram family outside the inventory, which is the same
 	// structural blindness this static pass exists to remove.
-	staticMetricPattern = regexp.MustCompile(`(?:metricHeader|writeLatencyHistogram)\(output,\s*(?:\n\s*)?"([^"]+)"`)
+	staticMetricPattern = regexp.MustCompile(`(?:metricHeader|writeLatencyHistogram|writeReplicationDurationHistogram)\(output,\s*(?:\n\s*)?"([^"]+)"`)
 )
 
 func assertMetricsExpositionContract(t *testing.T, body string) {
@@ -49,7 +49,13 @@ func assertMetricsExpositionContract(t *testing.T, body string) {
 	// sends. On any other family it would be the generic unbounded label this
 	// pass exists to catch, so it is not allowed to spread by precedent.
 	scopedLabels := map[string]map[string]struct{}{
-		"name": {"halro_tls_certificate_expiry_seconds": {}},
+		"name":        {"halro_tls_certificate_expiry_seconds": {}},
+		"cluster_id":  {"halro_cluster_member_info": {}},
+		"node_id":     {"halro_cluster_member_info": {}},
+		"role":        {"halro_cluster_role": {}},
+		"kind":        {"halro_replication_index": {}},
+		"peer":        {"halro_replication_peer_connected": {}},
+		"incarnation": {"halro_cluster_incarnation_info": {}},
 	}
 	scanner := bufio.NewScanner(strings.NewReader(body))
 	for scanner.Scan() {
@@ -119,17 +125,19 @@ func assertMetricsExpositionContract(t *testing.T, body string) {
 	// metrics when anchoring is disabled. Inventory literal metricHeader calls
 	// as well so adding a conditional exporter cannot silently bypass the docs
 	// contract merely because the test fixture does not activate its branch.
-	metricsSource, err := os.ReadFile("metrics.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, match := range staticMetricPattern.FindAllSubmatch(metricsSource, -1) {
-		family := string(match[1])
-		if !strings.HasPrefix(family, "halro_") {
-			continue
+	for _, sourcePath := range []string{"metrics.go", "replication_runtime.go"} {
+		metricsSource, err := os.ReadFile(sourcePath)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if !strings.Contains(string(reference), fmt.Sprintf("`%s`", family)) {
-			t.Fatalf("statically exported metric %s is missing from docs/contracts/metrics-reference.md", family)
+		for _, match := range staticMetricPattern.FindAllSubmatch(metricsSource, -1) {
+			family := string(match[1])
+			if !strings.HasPrefix(family, "halro_") {
+				continue
+			}
+			if !strings.Contains(string(reference), fmt.Sprintf("`%s`", family)) {
+				t.Fatalf("statically exported metric %s from %s is missing from docs/contracts/metrics-reference.md", family, sourcePath)
+			}
 		}
 	}
 }

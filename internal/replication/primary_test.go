@@ -73,6 +73,9 @@ func TestPrimaryCoordinatorAllocatesOrdersQueuesAndConfirms(t *testing.T) {
 	if commit.Index != 1 || !commit.ReplicationAvailable || len(outbound.frames) != 1 {
 		t.Fatalf("commit=%#v queued=%d", commit, len(outbound.frames))
 	}
+	if telemetry := primary.ConfirmationTelemetry(); telemetry.DurableToConfirmed.Count != 0 || !telemetry.LastConfirmedAt.IsZero() {
+		t.Fatalf("unconfirmed frame published confirmation telemetry: %+v", telemetry)
+	}
 	frame, err := UnmarshalFrame(outbound.frames[0])
 	if err != nil {
 		t.Fatal(err)
@@ -93,6 +96,9 @@ func TestPrimaryCoordinatorAllocatesOrdersQueuesAndConfirms(t *testing.T) {
 	}
 	if err := <-waiting; err != nil {
 		t.Fatal(err)
+	}
+	if telemetry := primary.ConfirmationTelemetry(); telemetry.DurableToConfirmed.Count != 1 || telemetry.DurableToConfirmed.Sum < 0 || telemetry.LastConfirmedAt.IsZero() {
+		t.Fatalf("durable confirmation omitted telemetry: %+v", telemetry)
 	}
 	if len(outbound.frames) != 1 || len(outbound.notices) != 1 {
 		t.Fatalf("queued frames=%d notices=%d, want one of each", len(outbound.frames), len(outbound.notices))
@@ -148,6 +154,41 @@ func TestPrimaryCoordinatorKeepsLocalCommitWhenReplicationQueueFails(t *testing.
 	}
 	if primaryRetry := ReplicationRetryAfter(); primaryRetry != time.Second {
 		t.Fatalf("retry-after=%s", primaryRetry)
+	}
+}
+
+func TestPrimaryAvailabilityEventsFollowStateChangesWithoutErrorText(t *testing.T) {
+	outbound := &recordingOutbound{}
+	primary, journal := newTestPrimary(t, outbound)
+	defer journal.Close()
+	if history := primary.AvailabilityTransitions(); history.Current != "replicating" || len(history.Events) != 0 {
+		t.Fatalf("initial phase history=%+v", history)
+	}
+	primary.MarkUnavailable(errors.New("private peer address: secret.internal"))
+	primary.MarkUnavailable(errors.New("same unavailable state"))
+	primary.MarkAvailable()
+	outbound.err = errors.New("peer disconnected")
+	if _, err := primary.RecordDurable(Frame{Kind: KindLeadershipEstablished, Store: StoreNone}); err != nil {
+		t.Fatal(err)
+	}
+	outbound.err = nil
+	if err := primary.RetryPending(); err != nil {
+		t.Fatal(err)
+	}
+	history := primary.AvailabilityTransitions()
+	if history.Current != "replicating" || history.Dropped != 0 || len(history.Events) != 4 {
+		t.Fatalf("availability transitions=%+v", history)
+	}
+	want := []string{"manual_unavailable", "recovered", "frame_queue_failed", "recovered"}
+	for index, event := range history.Events {
+		if event.Sequence != uint64(index+1) || event.Reason != want[index] || event.At.IsZero() ||
+			strings.Contains(event.Reason, "secret.internal") {
+			t.Fatalf("unsafe or missing phase event: %+v", event)
+		}
+	}
+	history.Events[0].Reason = "modified"
+	if primary.AvailabilityTransitions().Events[0].Reason != "manual_unavailable" {
+		t.Fatal("caller mutated coordinator phase history")
 	}
 }
 
@@ -219,6 +260,9 @@ func TestPrimaryCoordinatorPersistsConfirmationBeforePublishingSuccess(t *testin
 	}
 	if confirmed, available, cause := primary.Status(); confirmed != 0 || available || !errors.Is(cause, persistErr) {
 		t.Fatalf("status confirmed=%d available=%t cause=%v", confirmed, available, cause)
+	}
+	if telemetry := primary.ConfirmationTelemetry(); telemetry.DurableToConfirmed.Count != 0 || !telemetry.LastConfirmedAt.IsZero() {
+		t.Fatalf("failed confirmation emitted success telemetry: %+v", telemetry)
 	}
 	if err := primary.WaitConfirmed(context.Background(), 1); !errors.Is(err, ErrReplicationUnavailable) {
 		t.Fatalf("wait after failed state fsync=%v", err)

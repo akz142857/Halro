@@ -1,6 +1,8 @@
 package app
 
 import (
+	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"net/http"
@@ -58,6 +60,26 @@ func TestAdminClusterStatusDistinguishesStandaloneAndLocalHAState(t *testing.T) 
 	}
 	if strings.Contains(response.Body.String(), "private.invalid") || strings.Contains(response.Body.String(), "sha256:") || strings.Contains(response.Body.String(), "ordering_head_mac") {
 		t.Fatalf("status leaked peer connection details: %s", response.Body.String())
+	}
+	var metricBody bytes.Buffer
+	runtime.haWriteResponses[2].Add(1)
+	metricWriter := bufio.NewWriter(&metricBody)
+	runtime.writeReplicationMetrics(metricWriter)
+	if err := metricWriter.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	assertMetricsExpositionContract(t, metricBody.String())
+	if !strings.Contains(metricBody.String(), `halro_cluster_member_info{cluster_id="test-cluster",node_id="halro-0"} 1`) {
+		t.Fatalf("member-reported HA identity missing from metrics: %s", metricBody.String())
+	}
+	if !strings.Contains(metricBody.String(), `halro_ha_client_write_http_responses_total{outcome="not_primary"} 1`) {
+		t.Fatalf("HA write response outcome missing from metrics: %s", metricBody.String())
+	}
+	if !strings.Contains(metricBody.String(), "halro_replication_member_state_version 2") {
+		t.Fatal("version-2 member state format metric is absent")
+	}
+	if strings.Contains(metricBody.String(), "halro_replication_transition_journal_") {
+		t.Fatal("version-2 member exported a version-3 transition journal capacity metric")
 	}
 }
 

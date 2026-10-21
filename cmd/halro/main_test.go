@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/app"
+	"github.com/akz142857/Halro/internal/bearercred"
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/hostsecurity"
 	"github.com/akz142857/Halro/internal/masterkey"
@@ -47,8 +48,8 @@ func TestTopLevelHelpIsDiscoverableAndComplete(t *testing.T) {
 			t.Fatalf("help topic %q is incomplete: %q", descriptor.name, topic)
 		}
 	}
-	if len(seen) != 20 {
-		t.Fatalf("top-level command descriptor count=%d, want 20", len(seen))
+	if len(seen) != 21 {
+		t.Fatalf("top-level command descriptor count=%d, want 21", len(seen))
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for _, arguments := range [][]string{{"--help"}, {"-h"}, {"help"}, {"help", "backup"}} {
@@ -127,6 +128,58 @@ func TestReplicationDoesNotSilentlyStartAsStandalone(t *testing.T) {
 	}
 }
 
+func TestHAStatusCLIRevokesOnlyTheMachineStatusCredential(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.Replication = &config.Replication{
+		ClusterID: "ha", NodeID: "halro-0", Listen: "127.0.0.1:9910",
+		Peers: []config.ReplicationPeer{{Name: "halro-1", Address: "halro-1.internal:9910", SPKISHA256: "sha256:" + strings.Repeat("a", 64)}},
+		TLS:   config.ReplicationTLS{CAFile: "/cluster/ca.crt", CertFile: "/cluster/tls.crt", KeyFile: "/cluster/tls.key"},
+	}
+	cfg.Metrics.CredentialFile = filepath.Join(root, "metrics.json")
+	cfg.Metrics.TLS = config.MetricsTLS{Enabled: true, CertFile: "/metrics/tls.crt", KeyFile: "/metrics/tls.key", ClientCAFile: "/metrics/ca.crt"}
+	cfg.Metrics.HAStatus = config.HAStatusAccess{Enabled: true, CredentialFile: filepath.Join(root, "status.json")}
+	contents, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metrics, err := bearercred.Rotate(cfg.Metrics.CredentialFile, time.Minute, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(metrics.Token)
+	status, err := bearercred.Rotate(cfg.Metrics.HAStatus.CredentialFile, time.Minute, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(status.Token)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := run([]string{"ha-status", "revoke", "--config", path, "--version", "1"}, logger); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"ha-status", "verify-audit", "--config", path}, logger); err != nil {
+		t.Fatal(err)
+	}
+	authorizer, err := bearercred.NewAuthorizer(cfg.Metrics.HAStatus.CredentialFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authorized, err := authorizer.Authorize(string(status.Token), time.Now()); err != nil || authorized {
+		t.Fatalf("revoked HA token authorized=%v error=%v", authorized, err)
+	}
+	metricsAuthorizer, err := bearercred.NewAuthorizer(cfg.Metrics.CredentialFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authorized, err := metricsAuthorizer.Authorize(string(metrics.Token), time.Now()); err != nil || !authorized {
+		t.Fatalf("Metrics credential changed by HA revoke: authorized=%v error=%v", authorized, err)
+	}
+}
+
 func TestReplicationRefusesOfflineMemberStateMutationsUntilRuntimeExists(t *testing.T) {
 	cfg := config.Default()
 	cfg.Storage.DataDir = filepath.Join(t.TempDir(), "standalone")
@@ -137,12 +190,37 @@ func TestReplicationRefusesOfflineMemberStateMutationsUntilRuntimeExists(t *test
 	for _, operation := range []string{
 		"start initialization", "init", "bootstrap", "admin reset-password",
 		"key rotate", "backup create", "backup restore", "route clear-suspension",
-		"key slot status", "route suspensions", "audit verify", "audit verify-anchor",
-		"usage rebuild-summary", "ledger verify", "ledger seal",
+		"key slot status", "usage rebuild-summary", "ledger seal",
 	} {
 		err := rejectReplicationMutation(cfg, operation)
 		if err == nil || !strings.Contains(err.Error(), operation) || !strings.Contains(err.Error(), "outside the replication order") {
 			t.Fatalf("operation %q error=%v", operation, err)
+		}
+	}
+}
+
+// The verify commands and listings append nothing, so a seeded member answers
+// them; a member directory without its state still refuses.
+func TestReadOnlyCommandsRunOnAMember(t *testing.T) {
+	cfg := config.Default()
+	cfg.Storage.DataDir = filepath.Join(t.TempDir(), "member")
+	cfg.Replication = &config.Replication{}
+	operations := []string{"route suspensions", "audit verify", "audit verify-anchor", "ledger verify"}
+	for _, operation := range operations {
+		if err := guardReadOnlyCommand(cfg, operation); err == nil || !strings.Contains(err.Error(), "join or re-seed") {
+			t.Fatalf("%q on an unseeded member error=%v", operation, err)
+		}
+	}
+	cluster := filepath.Join(cfg.Storage.DataDir, "cluster")
+	if err := os.MkdirAll(cluster, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cluster, "state.json"), []byte("seeded"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range operations {
+		if err := guardReadOnlyCommand(cfg, operation); err != nil {
+			t.Fatalf("%q on a seeded member refused: %v", operation, err)
 		}
 	}
 }
@@ -189,11 +267,7 @@ func TestReplicationMutationCommandsRefuseBeforeTouchingTheDataDirectory(t *test
 		{"key", "slot", "status", "--config", path},
 		{"backup", "create", "--config", path, "--output", filepath.Join(root, "backup.hmbk"), "--key-file", filepath.Join(root, "backup.key")},
 		{"route", "clear-suspension", "--config", path, "--scope-id", "route:r1"},
-		{"route", "suspensions", "--config", path},
-		{"audit", "verify", "--config", path},
-		{"audit", "verify-anchor", "--config", path, "--anchors", filepath.Join(root, "anchors.jsonl")},
 		{"usage", "rebuild-summary", "--config", path},
-		{"ledger", "verify", "--config", path},
 		{"ledger", "seal", "--config", path},
 		{"pricing", "migrate", "--config", path, "--apply", "--resolution-file", filepath.Join(root, "resolution.json")},
 	}
@@ -206,6 +280,18 @@ func TestReplicationMutationCommandsRefuseBeforeTouchingTheDataDirectory(t *test
 			t.Fatalf("command %q error=%v", command, err)
 		}
 	}
+	// The read-only commands are admitted on a member, but not on one that has
+	// not been seeded yet.
+	for _, command := range [][]string{
+		{"route", "suspensions", "--config", path},
+		{"audit", "verify", "--config", path},
+		{"audit", "verify-anchor", "--config", path, "--anchors", filepath.Join(root, "anchors.jsonl")},
+		{"ledger", "verify", "--config", path},
+	} {
+		if err := run(command, logger); err == nil || !strings.Contains(err.Error(), "join or re-seed") {
+			t.Fatalf("command %q error=%v", command, err)
+		}
+	}
 	if _, err := os.Stat(cfg.Storage.DataDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("member data directory was touched: %v", err)
 	}
@@ -215,6 +301,31 @@ func TestClusterCommandExistsAndRequiresConfiguration(t *testing.T) {
 	err := run([]string{"cluster", "status"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err == nil || strings.Contains(err.Error(), `unknown command "cluster"`) {
 		t.Fatalf("cluster command error=%v", err)
+	}
+}
+
+func TestTransitionMigrationCLIRequiresExplicitZeroAppliedIndex(t *testing.T) {
+	base := []string{"cluster", "migrate-transitions", "--expect-incarnation", "inc_01", "--expect-role", "primary",
+		"--expect-term", "1", "--expect-promised-term", "1"}
+	for _, tc := range []struct {
+		given []string
+		want  string
+	}{
+		{nil, "--expect-durable-index"},
+		{[]string{"--expect-durable-index", "0"}, "--expect-confirmed-index"},
+		{[]string{"--expect-durable-index", "0", "--expect-confirmed-index", "0"}, "--expect-applied-index"},
+	} {
+		err := run(append(append([]string(nil), base...), tc.given...), slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if err == nil || !strings.Contains(err.Error(), "explicit "+tc.want) {
+			t.Fatalf("omitted zero index %s was accepted: %v", tc.want, err)
+		}
+	}
+}
+
+func TestTransitionSnapshotCLIRejectsPositionalArguments(t *testing.T) {
+	err := run([]string{"cluster", "verify-transition-snapshot", "unexpected"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err == nil || !strings.Contains(err.Error(), "takes no positional arguments") {
+		t.Fatalf("unexpected positional argument accepted: %v", err)
 	}
 }
 

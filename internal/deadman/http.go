@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/akz142857/Halro/internal/hahealth"
 )
 
 func secureClient(tlsConfig TLSConfig, timeout time.Duration) (*http.Client, error) {
@@ -102,6 +104,17 @@ func checkTargetWithClient(ctx context.Context, cfg Config, target TargetConfig,
 	defer cancel()
 	if client == nil {
 		return time.Since(started), "tls_configuration"
+	}
+	if target.Mode == "ha_client_root" {
+		credential, err := token(target.BearerTokenFile)
+		if err != nil {
+			return time.Since(started), "credential"
+		}
+		probe := hahealth.ProbeClientService(checkContext, client, target.URL, cfg.Cluster, credential, 12)
+		if probe.Signal.Level == hahealth.Healthy {
+			return time.Since(started), ""
+		}
+		return time.Since(started), "ha_client_" + probe.Code
 	}
 	response, err := request(checkContext, client, http.MethodGet, target.URL, target.BearerTokenFile, nil)
 	if err != nil {

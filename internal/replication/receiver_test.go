@@ -151,6 +151,9 @@ func TestReplicaReceiverPersistsBeforeAcknowledgingAndDeduplicates(t *testing.T)
 	if err != nil || ack.AppliedIndex != 2 {
 		t.Fatalf("post-apply ack=%#v err=%v", ack, err)
 	}
+	if telemetry := receiver.SinkPersistTelemetry(); telemetry.Count != 2 {
+		t.Fatalf("sink call histogram counted a retransmission: %+v", telemetry)
+	}
 }
 
 func TestReplicaReceiverPersistsEveryExternallyVisibleWatermark(t *testing.T) {

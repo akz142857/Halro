@@ -13,6 +13,69 @@ func publisherTestState(role Role) MemberState {
 	}
 }
 
+func TestStatePublisherLiveEventsFollowDurableRoleTransitions(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	path := filepath.Join(t.TempDir(), "state.json")
+	publisher, err := NewStatePublisher(path, key, publisherTestState(RoleReplica))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publisher.Promote(7, 0, 8); err == nil || len(publisher.LiveTransitions().Events) != 0 {
+		t.Fatal("failed promotion emitted a transition event")
+	}
+	if _, err := publisher.Promise(8); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publisher.Promote(7, 0, 8); err != nil {
+		t.Fatal(err)
+	}
+	history := publisher.LiveTransitions()
+	if history.PublisherStartedAt.IsZero() || history.Dropped != 0 || len(history.Events) != 2 ||
+		history.Events[0].Kind != "promise" || history.Events[0].Sequence != 1 ||
+		history.Events[1].Kind != "promote" || history.Events[1].Sequence != 2 ||
+		history.Events[1].FromRole != RoleReplica || history.Events[1].ToRole != RolePrimary ||
+		history.Events[1].FromTerm != 7 || history.Events[1].ToTerm != 8 || history.Events[1].At.IsZero() {
+		t.Fatalf("wrong live transition evidence: %+v", history)
+	}
+	onDisk, err := ReadState(path, key)
+	if err != nil || onDisk.Role != RolePrimary || onDisk.Term != 8 {
+		t.Fatalf("event preceded durable state: %+v, %v", onDisk, err)
+	}
+	history.Events[0].Kind = "tampered"
+	if publisher.LiveTransitions().Events[0].Kind != "promise" {
+		t.Fatal("caller mutated publisher transition history")
+	}
+	publisher.Close()
+	restarted, err := NewStatePublisher(path, key, onDisk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	if len(restarted.LiveTransitions().Events) != 0 {
+		t.Fatal("process-local transition history falsely survived restart")
+	}
+}
+
+func TestStatePublisherLiveEventRingReportsRetentionLoss(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	publisher, err := NewStatePublisher(filepath.Join(t.TempDir(), "state.json"), key, publisherTestState(RoleReplica))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer publisher.Close()
+	for term := uint64(8); term < 8+maxLiveTransitionEvents+2; term++ {
+		if _, err := publisher.Promise(term); err != nil {
+			t.Fatal(err)
+		}
+	}
+	history := publisher.LiveTransitions()
+	if history.Dropped != 2 || len(history.Events) != maxLiveTransitionEvents ||
+		history.Events[0].Sequence != 3 || history.Events[len(history.Events)-1].Sequence != maxLiveTransitionEvents+2 {
+		t.Fatalf("retention loss was not explicit: dropped=%d count=%d first=%d last=%d",
+			history.Dropped, len(history.Events), history.Events[0].Sequence, history.Events[len(history.Events)-1].Sequence)
+	}
+}
+
 func TestStatePublisherWritesPrimaryAndReplicaProgress(t *testing.T) {
 	key := []byte("0123456789abcdef0123456789abcdef")
 	t.Run("primary", func(t *testing.T) {

@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	StateVersion       = 2
-	MaxMemberStateJSON = 64 << 10
+	StateVersion           = 2
+	TransitionStateVersion = 3
+	MaxMemberStateJSON     = 64 << 10
 )
 
 var stateDomain = []byte("halro:cluster:v1\x00state\x00")
@@ -55,28 +56,49 @@ type MemberState struct {
 	OrderingHeadMAC [sha256.Size]byte
 	Projection      ProjectionState
 	Peers           []StatePeer
+	Transition      TransitionCursor
+}
+
+// TransitionCursor is the authenticated commit point for a future member-local
+// transition journal. A version-2 state must not carry one.
+type TransitionCursor struct {
+	JournalID string
+	Sequence  uint64
+	Digest    [sha256.Size]byte
 }
 
 type memberStateJSON struct {
-	Version         int             `json:"version"`
-	ClusterID       string          `json:"cluster_id"`
-	Incarnation     string          `json:"incarnation"`
-	NodeID          string          `json:"node_id"`
-	Role            Role            `json:"role"`
-	Term            uint64          `json:"term"`
-	PromisedTerm    uint64          `json:"promised_term"`
-	DurableIndex    uint64          `json:"durable_index"`
-	ConfirmedIndex  uint64          `json:"confirmed_index"`
-	AppliedIndex    uint64          `json:"applied_index"`
-	OrderingHeadMAC string          `json:"ordering_head_mac"`
-	Projection      ProjectionState `json:"projection"`
-	Peers           []StatePeer     `json:"peers"`
-	MAC             string          `json:"mac"`
+	Version             int             `json:"version"`
+	ClusterID           string          `json:"cluster_id"`
+	Incarnation         string          `json:"incarnation"`
+	NodeID              string          `json:"node_id"`
+	Role                Role            `json:"role"`
+	Term                uint64          `json:"term"`
+	PromisedTerm        uint64          `json:"promised_term"`
+	DurableIndex        uint64          `json:"durable_index"`
+	ConfirmedIndex      uint64          `json:"confirmed_index"`
+	AppliedIndex        uint64          `json:"applied_index"`
+	OrderingHeadMAC     string          `json:"ordering_head_mac"`
+	Projection          ProjectionState `json:"projection"`
+	Peers               []StatePeer     `json:"peers"`
+	TransitionJournalID string          `json:"transition_journal_id,omitempty"`
+	TransitionSequence  *uint64         `json:"transition_sequence,omitempty"`
+	TransitionDigest    string          `json:"transition_digest,omitempty"`
+	MAC                 string          `json:"mac"`
 }
 
 func (s MemberState) Validate() error {
-	if s.Version != StateVersion {
+	if s.Version != StateVersion && s.Version != TransitionStateVersion {
 		return fmt.Errorf("unsupported member-state version %d", s.Version)
+	}
+	if s.Version == StateVersion && s.Transition != (TransitionCursor{}) {
+		return errors.New("version-2 member state cannot carry a transition cursor")
+	}
+	if s.Version == TransitionStateVersion {
+		if len(s.Transition.JournalID) != 32 || strings.Trim(s.Transition.JournalID, "0123456789abcdef") != "" ||
+			s.Transition.Digest == ([sha256.Size]byte{}) {
+			return errors.New("version-3 member state requires a transition journal identity and digest")
+		}
 	}
 	for name, value := range map[string]string{"cluster_id": s.ClusterID, "incarnation": s.Incarnation, "node_id": s.NodeID} {
 		if len(value) == 0 || len(value) > MaxIdentityBytes {
@@ -156,6 +178,12 @@ func MarshalState(state MemberState, key []byte) ([]byte, error) {
 		OrderingHeadMAC: digestText(state.OrderingHeadMAC), Projection: state.Projection, Peers: state.Peers,
 		MAC: digestText(mac),
 	}
+	if state.Version == TransitionStateVersion {
+		sequence := state.Transition.Sequence
+		payload.TransitionJournalID = state.Transition.JournalID
+		payload.TransitionSequence = &sequence
+		payload.TransitionDigest = digestText(state.Transition.Digest)
+	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("encode member-state JSON: %w", err)
@@ -196,6 +224,18 @@ func UnmarshalState(encoded, key []byte) (MemberState, error) {
 		Role: payload.Role, Term: payload.Term, PromisedTerm: payload.PromisedTerm,
 		DurableIndex: payload.DurableIndex, ConfirmedIndex: payload.ConfirmedIndex, AppliedIndex: payload.AppliedIndex,
 		OrderingHeadMAC: orderingHead, Projection: payload.Projection, Peers: append([]StatePeer(nil), payload.Peers...),
+	}
+	if state.Version == TransitionStateVersion {
+		if payload.TransitionSequence == nil {
+			return MemberState{}, errors.New("version-3 member state is missing transition sequence")
+		}
+		transitionDigest, digestErr := parseDigestText(payload.TransitionDigest)
+		if digestErr != nil {
+			return MemberState{}, fmt.Errorf("transition_digest: %w", digestErr)
+		}
+		state.Transition = TransitionCursor{JournalID: payload.TransitionJournalID, Sequence: *payload.TransitionSequence, Digest: transitionDigest}
+	} else if payload.TransitionJournalID != "" || payload.TransitionSequence != nil || payload.TransitionDigest != "" {
+		return MemberState{}, errors.New("version-2 member state cannot carry transition fields")
 	}
 	if !sort.SliceIsSorted(state.Peers, func(i, j int) bool { return state.Peers[i].Name < state.Peers[j].Name }) {
 		return MemberState{}, errors.New("member-state peers are not in canonical name order")
@@ -258,6 +298,13 @@ func canonicalStateInput(state MemberState) ([]byte, error) {
 				return nil, err
 			}
 		}
+	}
+	if state.Version == TransitionStateVersion {
+		if err := writeString(state.Transition.JournalID); err != nil {
+			return nil, err
+		}
+		writeUint64(state.Transition.Sequence)
+		buffer.Write(state.Transition.Digest[:])
 	}
 	return buffer.Bytes(), nil
 }

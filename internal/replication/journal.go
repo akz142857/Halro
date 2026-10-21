@@ -118,7 +118,7 @@ func OpenExistingOrderingJournal(path string, key []byte, clusterID, incarnation
 		dataOffset: int64(len(encoded)), nextOffset: int64(len(encoded)),
 	}
 	copy(journal.key[:], key)
-	if err := journal.recover(expectedIndex, expectedHead); err != nil {
+	if err := journal.recover(expectedIndex, expectedHead, true); err != nil {
 		return closeOnError(err)
 	}
 	return journal, nil
@@ -213,13 +213,13 @@ func OpenOrderingJournalWithOptions(path string, key []byte, header OrderingHead
 		file: file, durability: durability, header: header, dataOffset: int64(len(headerBytes)), nextOffset: int64(len(headerBytes)),
 	}
 	copy(journal.key[:], key)
-	if err := journal.recover(expectedIndex, expectedHead); err != nil {
+	if err := journal.recover(expectedIndex, expectedHead, true); err != nil {
 		return closeOnError(err)
 	}
 	return journal, nil
 }
 
-func (j *OrderingJournal) recover(expectedIndex uint64, expectedHead [sha256.Size]byte) error {
+func (j *OrderingJournal) recover(expectedIndex uint64, expectedHead [sha256.Size]byte, repairPartial bool) error {
 	if _, err := j.file.Seek(j.nextOffset, io.SeekStart); err != nil {
 		return err
 	}
@@ -232,6 +232,9 @@ func (j *OrderingJournal) recover(expectedIndex uint64, expectedHead [sha256.Siz
 			break
 		}
 		if errors.Is(err, io.ErrUnexpectedEOF) {
+			if !repairPartial {
+				return errors.New("ordering snapshot contains an incomplete trailing record")
+			}
 			if err := j.file.Truncate(start); err != nil {
 				return fmt.Errorf("truncate partial ordering record: %w", err)
 			}

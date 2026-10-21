@@ -103,6 +103,8 @@ type Runtime struct {
 	adminIdentityMu      sync.Mutex
 	metricsTokenHash     [32]byte
 	metricsAuthorizer    *bearercred.Authorizer
+	haStatus             haStatusRuntime
+	haWriteResponses     [len(haWriteResponseOutcomes)]atomic.Uint64
 	metricsScrapes       chan struct{}
 	capabilityMetrics    *capabilityMetrics
 	metricsAuthFailed    atomic.Uint64
@@ -189,7 +191,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 
 func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger, options OpenOptions) (*Runtime, error) {
 	member := cfg.Replication != nil
-	guard := replication.GuardUnavailableRuntime
+	guard := replication.GuardStandaloneAccess
 	if member {
 		guard = replication.RequireMemberRuntime
 	}
@@ -258,6 +260,13 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		}
 	}
 	var anchorAuthorizer *bearercred.Authorizer
+	var haStatusAuthorizer *bearercred.Authorizer
+	if cfg.Metrics.HAStatus.Enabled {
+		haStatusAuthorizer, err = bearercred.NewAuthorizer(cfg.Metrics.HAStatus.CredentialFile)
+		if err != nil {
+			return fail(fmt.Errorf("load HA status credentials: %w", err))
+		}
+	}
 	if cfg.Audit.Anchor.Enabled && cfg.Audit.Anchor.Sink == config.AuditAnchorSinkDeadManPull {
 		// Config validation already requires a credential file here — unlike
 		// metrics, there is no zero-config derived-token fallback, since the
@@ -281,6 +290,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 			secretVault.Close()
 			return fail(fmt.Errorf("open Replica runtime: %w", replicaErr))
 		}
+		runtime.haStatus = haStatusRuntime{authorizer: haStatusAuthorizer, requests: make(chan struct{}, 2)}
 		return runtime, nil
 	}
 	var metadata *boltstore.Store
@@ -923,6 +933,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		replication:         memberReplication,
 		metricsTokenHash:    metricsTokenHash,
 		metricsAuthorizer:   metricsAuthorizer,
+		haStatus:            haStatusRuntime{authorizer: haStatusAuthorizer, requests: make(chan struct{}, 2)},
 		metricsScrapes:      make(chan struct{}, cfg.Metrics.MaxConcurrentScrapes),
 		capabilityMetrics:   newCapabilityMetrics(),
 		instanceID:          instanceID,
@@ -2199,13 +2210,23 @@ func (r *Runtime) gatewayRouter() http.Handler {
 		governance.Post("/halro/v1/runs/{runID}/close", r.closeRun)
 	})
 	router.Get("/", func(writer http.ResponseWriter, _ *http.Request) {
-		writeJSON(writer, http.StatusOK, map[string]any{
+		body := map[string]any{
 			"name":    "halro",
 			"version": buildinfo.Current(),
-		})
+		}
+		if r.replication != nil {
+			body["role"] = string(r.replication.role)
+			if r.replication.publisher != nil {
+				body["cluster_id"] = r.replication.publisher.Snapshot().ClusterID
+			}
+		}
+		writeJSON(writer, http.StatusOK, body)
 	})
 	router.NotFound(r.gateway.NotFound)
 	router.MethodNotAllowed(r.gateway.MethodNotAllowed)
+	if r.replication != nil {
+		return r.trackHAWriteResponses(router)
+	}
 	return router
 }
 
@@ -2395,6 +2416,10 @@ func (r *Runtime) metricsRouter() http.Handler {
 	router := chi.NewRouter()
 	router.Use(r.recoverPanics)
 	router.Get("/health/live", r.live)
+	if r.config.Metrics.HAStatus.Enabled && r.replication != nil {
+		router.Get("/ha/status", r.haMemberStatus)
+		router.Get("/ha/transitions", r.haMemberTransitions)
+	}
 	if r.config.Audit.Anchor.Enabled && r.config.Audit.Anchor.Sink == config.AuditAnchorSinkDeadManPull {
 		router.Get("/audit/anchors", r.adminAuditAnchors)
 	}
