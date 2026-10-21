@@ -1,6 +1,6 @@
 # HA 移植到当前 `main` 的设计
 
-- 状态：草案，待 owner 确认（2026-10-21）
+- 状态：owner 已确认 §7 的四项建议（2026-10-21），按 §5 分阶段实施
 - 依据：[`halro-ha-architecture.zh-CN.md`](halro-ha-architecture.zh-CN.md)（下称"HA 设计"，代码在 `ha` 分支）、
   [`memory-bounded-redesign.zh-CN.md`](memory-bounded-redesign.zh-CN.md)（下称"内存有界设计"，已随 v0.9.0 发布）
 - 范围：把 `ha` 分支上已实现、已在本地三节点演练通过的 HA，搬到 v0.9.2 之后的 `main` 上。
@@ -176,7 +176,7 @@ Standalone，部署契约一个字节都不变"），但 `halro.db` 的写路径
 
 HA 设计 §1.3 的进入条件（kind、Linux、相邻版本、生产演练）仍未满足，移植完成**不等于**可以启用 HA。
 
-## 7. 需要 owner 决定
+## 7. owner 决定（2026-10-21，均按建议）
 
 1. **阶段 0a 是否单独发布。** 单独发布能让 journal 在 Standalone 生产上先跑一段，但它是数据目录格式
    变化，且对不用 HA 的部署没有直接收益。另一种做法是 0a–2 在一个长期分支上做完再一起合入。
