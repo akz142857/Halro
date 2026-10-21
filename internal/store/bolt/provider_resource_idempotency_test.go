@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
-	bbolt "go.etcd.io/bbolt"
 )
 
 func keyedResource(project, provider, deployment string, profile domain.ProviderProfileID, id string, keyHash [32]byte, now time.Time) domain.ProviderResource {
@@ -54,7 +53,7 @@ func TestIdempotencyLookupReportsAbsenceWithoutAnError(t *testing.T) {
 	// The mechanism, not just its result: the lookup is one Get because the
 	// write maintains an entry, and a test that only asked the accessor would
 	// pass just as well against the full-bucket scan this replaced.
-	if err := store.db.View(func(tx *bbolt.Tx) error {
+	if err := store.view(func(tx *Tx) error {
 		entry := tx.Bucket(bucketProviderResourceIdem).Get(providerResourceIdemKey(project.ID, domain.ResourceInferenceCall, keyHash))
 		if string(entry) != created.ID {
 			t.Fatalf("index entry = %q, want %q", entry, created.ID)
@@ -92,7 +91,7 @@ func TestDeletingAResourceFreesItsIdempotencyKey(t *testing.T) {
 	// caller sees would notice — but every reaped record would leave an entry
 	// behind, and the bucket the index exists to stop walking would be the one
 	// growing without bound.
-	if err := store.db.View(func(tx *bbolt.Tx) error {
+	if err := store.view(func(tx *Tx) error {
 		if entry := tx.Bucket(bucketProviderResourceIdem).Get(providerResourceIdemKey(project.ID, domain.ResourceInferenceCall, keyHash)); entry != nil {
 			t.Fatalf("the deleted record left an index entry naming %q", entry)
 		}
@@ -103,7 +102,7 @@ func TestDeletingAResourceFreesItsIdempotencyKey(t *testing.T) {
 	if _, err := store.PutProviderResource(ctx, second, 0); err != nil {
 		t.Fatalf("the freed key was refused: %v", err)
 	}
-	if err := store.db.View(func(tx *bbolt.Tx) error {
+	if err := store.view(func(tx *Tx) error {
 		entry := tx.Bucket(bucketProviderResourceIdem).Get(providerResourceIdemKey(project.ID, domain.ResourceInferenceCall, keyHash))
 		if string(entry) != second.ID {
 			t.Fatalf("index entry = %q, want it to name the record that now holds the key", entry)
@@ -130,7 +129,7 @@ func TestSchemaFortyBuildsTheIndexFromExistingRecords(t *testing.T) {
 
 	// Back to schema 39: no index bucket, no migration record, and a record
 	// that has to be found without either.
-	if err := store.db.Update(func(tx *bbolt.Tx) error {
+	if err := store.update(func(tx *Tx) error {
 		if err := tx.DeleteBucket(bucketProviderResourceIdem); err != nil {
 			return err
 		}
@@ -147,7 +146,7 @@ func TestSchemaFortyBuildsTheIndexFromExistingRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	migrated, err := Open(path)
+	migrated, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}

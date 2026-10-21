@@ -27,7 +27,7 @@ const replacementRecoveryKMSKeyARN = "arn:aws:kms:eu-central-1:456789012345:key/
 
 func TestKMSRewrapPreservesMasterKeyCiphertextAndKeyVersion(t *testing.T) {
 	cfg, rewrapCfg, harness, credentialID := kmsRewrapFixture(t)
-	beforeStore, err := boltstore.Open(cfg.MetadataPath())
+	beforeStore, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestKMSRewrapPreservesMasterKeyCiphertextAndKeyVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestKMSRewrapRecoversIdempotentlyAtEveryPublicationPoint(t *testing.T) {
 			if _, err := rewrapKMSKeyWithOptions(context.Background(), cfg, options, harness.factory, time.Now, nil); err != nil {
 				t.Fatalf("recover %s: %v", point, err)
 			}
-			store, err := boltstore.Open(cfg.MetadataPath())
+			store, err := openMetadataForTest(t, cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -210,7 +210,7 @@ func TestKMSRewrapRejectsConflictingDurableAuditPayload(t *testing.T) {
 	if !errors.Is(err, injected) {
 		t.Fatalf("err=%v", err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestKMSRevokeRequiresConfirmationAndIsIdempotent(t *testing.T) {
 	}, harness.factory, time.Now, nil); err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestKMSRevokeRequiresConfirmationAndIsIdempotent(t *testing.T) {
 	if err != nil || afterRetry.Records != beforeRetry.Records {
 		t.Fatalf("retry appended duplicate audit event: before=%d after=%d err=%v", beforeRetry.Records, afterRetry.Records, err)
 	}
-	store, err = boltstore.Open(cfg.MetadataPath())
+	store, err = openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +359,7 @@ func TestKMSRevokeRecoversAtEveryPublicationPoint(t *testing.T) {
 			}, harness.factory, time.Now, nil); err != nil {
 				t.Fatal(err)
 			}
-			store, err := boltstore.Open(cfg.MetadataPath())
+			store, err := openMetadataForTest(t, cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -396,7 +396,7 @@ func TestKMSRevokePublishesCleanMetadataBeforeFinalSuccessAudit(t *testing.T) {
 	}, harness.factory, time.Now, nil); err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +438,7 @@ func TestKMSRevokePublishesCleanMetadataBeforeFinalSuccessAudit(t *testing.T) {
 	if bytes.Contains(raw, oldCiphertext) {
 		t.Fatal("published revoked metadata retained old wrapped ciphertext")
 	}
-	store, err = boltstore.Open(cfg.MetadataPath())
+	store, err = openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -501,7 +501,7 @@ func TestKMSRecoveryRewrapUsesPrimaryAsIndependentSource(t *testing.T) {
 	if len(harness.wrappers[recoveryKMSKeyARN].Calls()) != oldRecoveryCalls {
 		t.Fatal("Recovery rewrap attempted to use the retiring Recovery KMS Key")
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,7 +524,7 @@ func TestRecoveryRepairsPermanentlyUnavailablePrimaryBeforeColdStart(t *testing.
 		t.Fatal(err)
 	}
 	harness.wrappers[primaryKMSKeyARN] = brokenPrimary
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -548,7 +548,7 @@ func TestRecoveryRepairsPermanentlyUnavailablePrimaryBeforeColdStart(t *testing.
 		t.Fatal(err)
 	}
 	harness.wrappers[recoveryKMSKeyARN] = brokenRecovery
-	store, err = boltstore.Open(cfg.MetadataPath())
+	store, err = openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -580,7 +580,7 @@ func TestKMSDEKRotationReencryptsAllMaterialAndPreservesAudit(t *testing.T) {
 	defer clear(oldKey)
 	defer clear(newKey)
 	defer clear(oldAuditKey)
-	beforeStore, err := boltstore.Open(cfg.MetadataPath())
+	beforeStore, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -638,7 +638,7 @@ func TestKMSDEKRotationReencryptsAllMaterialAndPreservesAudit(t *testing.T) {
 	if result.OldKeyVersion != 1 || result.NewKeyVersion != 2 || result.OldFingerprint == result.NewFingerprint {
 		t.Fatalf("result=%#v", result)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -802,7 +802,7 @@ func kmsRewrapFixture(t *testing.T) (config.Config, config.Config, *kmsAppHarnes
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -842,7 +842,7 @@ func kmsRotationFixture(t *testing.T) (config.Config, *kmsAppHarness, []byte, []
 	}, []byte("kms-rotation-provider-secret")); err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

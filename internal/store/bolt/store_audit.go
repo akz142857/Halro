@@ -11,14 +11,13 @@ import (
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/masterkey"
-	bbolt "go.etcd.io/bbolt"
 )
 
 func (s *Store) PutAuditHMACEnvelope(value []byte) error {
 	if len(value) == 0 {
 		return errors.New("audit HMAC envelope cannot be empty")
 	}
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.update(func(tx *Tx) error {
 		meta := tx.Bucket(bucketMeta)
 		if meta.Get(keyAuditHMACEnvelope) != nil {
 			return ErrAlreadyExists
@@ -162,7 +161,7 @@ func (s *Store) replaceKeySlotDescriptorWithAuditIntent(ctx context.Context, cur
 	if err != nil {
 		return err
 	}
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.update(func(tx *Tx) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -205,7 +204,7 @@ func (s *Store) replaceKeySlotDescriptorWithAuditIntent(ctx context.Context, cur
 
 func (s *Store) KeySlotAuditIntent() (masterkey.KeySlotAuditIntent, error) {
 	var intent masterkey.KeySlotAuditIntent
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyKeySlotAuditIntent)
 		if raw == nil {
 			return ErrNotFound
@@ -219,7 +218,7 @@ func (s *Store) KeySlotAuditIntent() (masterkey.KeySlotAuditIntent, error) {
 }
 
 func (s *Store) MarkKeySlotAuditDelivered(ctx context.Context, eventID string) error {
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.update(func(tx *Tx) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -253,7 +252,7 @@ func (s *Store) EnsureMasterKeyRotationAuditIntent(ctx context.Context, operatio
 		return masterkey.MasterKeyRotationAuditIntent{}, err
 	}
 	var result masterkey.MasterKeyRotationAuditIntent
-	err = s.db.Update(func(tx *bbolt.Tx) error {
+	err = s.update(func(tx *Tx) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -287,7 +286,7 @@ func (s *Store) EnsureMasterKeyRotationAuditIntent(ctx context.Context, operatio
 
 func (s *Store) MasterKeyRotationAuditIntent() (masterkey.MasterKeyRotationAuditIntent, error) {
 	var intent masterkey.MasterKeyRotationAuditIntent
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyMasterKeyRotationAuditIntent)
 		if raw == nil {
 			return ErrNotFound
@@ -301,7 +300,7 @@ func (s *Store) MasterKeyRotationAuditIntent() (masterkey.MasterKeyRotationAudit
 }
 
 func (s *Store) MarkMasterKeyRotationAuditDelivered(ctx context.Context, eventID string) error {
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.update(func(tx *Tx) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -338,7 +337,7 @@ func (s *Store) MarkMasterKeyRotationAuditDelivered(ctx context.Context, eventID
 
 func (s *Store) ClearVaultRotationBridgeWithAuditIntent(ctx context.Context, operationID string, now time.Time) (masterkey.MasterKeyRotationAuditIntent, error) {
 	var completed masterkey.MasterKeyRotationAuditIntent
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+	err := s.update(func(tx *Tx) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -400,7 +399,7 @@ func (s *Store) PutAuditCheckpoint(checkpoint AuditCheckpoint) error {
 	if err != nil {
 		return err
 	}
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.update(func(tx *Tx) error {
 		meta := tx.Bucket(bucketMeta)
 		if raw := meta.Get(keyAuditCheckpoint); raw != nil {
 			var current AuditCheckpoint
@@ -420,7 +419,7 @@ func (s *Store) PutAuditCheckpoint(checkpoint AuditCheckpoint) error {
 
 func (s *Store) AuditCheckpoint() (AuditCheckpoint, error) {
 	var checkpoint AuditCheckpoint
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyAuditCheckpoint)
 		if raw == nil {
 			return ErrNotFound
@@ -469,7 +468,7 @@ func (s *Store) ListPendingPricingAuditIntents(ctx context.Context) ([]domain.Pr
 		return nil, err
 	}
 	var intents []domain.PricingAuditIntent
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		return tx.Bucket(bucketPricingAuditIntents).ForEach(func(_, raw []byte) error {
 			if raw == nil {
 				return nil
@@ -506,7 +505,7 @@ func (s *Store) MarkPricingAuditIntentDelivered(ctx context.Context, eventID str
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.update(func(tx *Tx) error {
 		bucket := tx.Bucket(bucketPricingAuditIntents)
 		raw := bucket.Get([]byte(eventID))
 		if raw == nil {
@@ -528,7 +527,7 @@ func (s *Store) MarkPricingAuditIntentDelivered(ctx context.Context, eventID str
 	})
 }
 
-func putPricingAuditIntentTx(tx *bbolt.Tx, intent domain.PricingAuditIntent) error {
+func putPricingAuditIntentTx(tx *Tx, intent domain.PricingAuditIntent) error {
 	if err := intent.Validate(); err != nil {
 		return err
 	}

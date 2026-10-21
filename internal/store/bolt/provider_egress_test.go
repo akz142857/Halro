@@ -10,11 +10,10 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
-	bolt "go.etcd.io/bbolt"
 )
 
 func TestProviderEgressProxyAndCredentialLifecycleIsAtomic(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +44,7 @@ func TestProviderEgressProxyAndCredentialLifecycleIsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.Update(func(tx *bolt.Tx) error {
+	if err := store.update(func(tx *Tx) error {
 		return tx.Bucket(bucketProviders).Put([]byte("provider_proxy"), providerJSON)
 	}); err != nil {
 		t.Fatal(err)
@@ -53,7 +52,7 @@ func TestProviderEgressProxyAndCredentialLifecycleIsAtomic(t *testing.T) {
 	if err := store.DeleteProviderEgressProxy(ctx, proxy.ID, stored.Revision, nil); !errors.Is(err, ErrProviderEgressProxyInUse) {
 		t.Fatalf("referenced proxy deletion err=%v", err)
 	}
-	if err := store.db.Update(func(tx *bolt.Tx) error {
+	if err := store.update(func(tx *Tx) error {
 		return tx.Bucket(bucketProviders).Delete([]byte("provider_proxy"))
 	}); err != nil {
 		t.Fatal(err)
@@ -70,7 +69,7 @@ func TestProviderEgressProxyAndCredentialLifecycleIsAtomic(t *testing.T) {
 }
 
 func TestProviderEgressProxyStoreEnforcesAuthenticationOwnership(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +121,7 @@ func TestProviderEgressProxyStoreEnforcesAuthenticationOwnership(t *testing.T) {
 }
 
 func TestProviderEgressProxyLimitIsAtomic(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +151,7 @@ func TestProviderEgressProxyLimitIsAtomic(t *testing.T) {
 }
 
 func TestProviderStoreRequiresExistingEgressProxy(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

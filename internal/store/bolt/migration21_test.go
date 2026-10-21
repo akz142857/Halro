@@ -11,7 +11,7 @@ func TestMigration21RefusesADirectoryCarryingLegacyEvidence(t *testing.T) {
 	path := t.TempDir() + "/metadata.db"
 	createV3ProviderMetadata(t, path) // no evidence -> migration 6 stamps `legacy`
 
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err == nil {
 		store.Close()
 		t.Fatal("a directory carrying legacy capability evidence was opened")
@@ -29,7 +29,7 @@ func TestMigration21LeavesACleanDirectoryAlone(t *testing.T) {
 	path := t.TempDir() + "/metadata.db"
 	createV3ProviderMetadataWithEvidence(t, path, true)
 
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatalf("a directory with no legacy evidence was refused: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestMigration21LeavesACleanDirectoryAlone(t *testing.T) {
 
 // A freshly initialised directory is the ordinary case and must be untouched.
 func TestMigration21DoesNotAffectAFreshDirectory(t *testing.T) {
-	store, err := Open(t.TempDir() + "/metadata.db")
+	store, err := openForTest(t, t.TempDir()+"/metadata.db")
 	if err != nil {
 		t.Fatalf("a fresh directory was refused: %v", err)
 	}

@@ -9,7 +9,7 @@ import (
 
 func TestOfflinePricingMigrationBindsResolutionToMetadataDigestAndPublishesStagedCopy(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metadata.db")
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestOfflinePricingMigrationBindsResolutionToMetadataDigestAndPublishesStage
 	if _, err := os.Stat(backup); err != nil {
 		t.Fatalf("rollback metadata missing: %v", err)
 	}
-	reopened, err := Open(path)
+	reopened, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}

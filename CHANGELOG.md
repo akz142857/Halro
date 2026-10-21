@@ -6,6 +6,17 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- `halro.db` is now a projection of `data/metadata.journal`: every metadata
+  write is appended to the journal and made durable before the bbolt commit,
+  and a start replays any frame the database has not applied. This is the
+  first step of bringing high availability onto the current release line; a
+  Standalone deployment configures nothing new and behaves the same.
+  **The metadata schema moves to 42**, so v0.9.2 and earlier refuse a data
+  directory this build has opened. Take a backup before upgrading; rolling
+  back is a restore of that backup, as it was across schema 41.
+
 ## [0.9.2] - 2026-10-21
 
 ### Upgrading from v0.9.1

@@ -77,7 +77,7 @@ func TestDerivedChainKeyIsRefusedAfterRotation(t *testing.T) {
 
 	openStore := func(t *testing.T, keyring *boltstore.VaultKeyring) *boltstore.Store {
 		t.Helper()
-		store, err := boltstore.Open(t.TempDir() + "/metadata.db")
+		store, err := openStagedMetadataForTest(t, t.TempDir()+"/metadata.db")
 		if err != nil {
 			t.Fatal(err)
 		}

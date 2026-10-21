@@ -31,7 +31,7 @@ func storedDetection(now time.Time) domain.ModelCapabilityDetection {
 
 func TestSchema24CreatesAndRequiresCapabilityDetectionBuckets(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metadata.db")
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,13 +42,13 @@ func TestSchema24CreatesAndRequiresCapabilityDetectionBuckets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Update(func(tx *bbolt.Tx) error { return tx.DeleteBucket(bucketCapabilityDetectionIndex) }); err != nil {
+	if err := publishInto(db, func(tx *Tx) error { return tx.DeleteBucket(bucketCapabilityDetectionIndex) }); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(path); err == nil {
+	if _, err := openForTest(t, path); err == nil {
 		t.Fatal("schema 24 opened without its fingerprint index")
 	}
 
@@ -58,7 +58,7 @@ func TestSchema24CreatesAndRequiresCapabilityDetectionBuckets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Update(func(tx *bbolt.Tx) error {
+	if err := publishInto(db, func(tx *Tx) error {
 		var schema [8]byte
 		binary.BigEndian.PutUint64(schema[:], 23)
 		if err := tx.Bucket(bucketMeta).Put(keySchemaVersion, schema[:]); err != nil {
@@ -71,7 +71,7 @@ func TestSchema24CreatesAndRequiresCapabilityDetectionBuckets(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	store, err = Open(path)
+	store, err = openForTest(t, path)
 	if err != nil {
 		t.Fatalf("schema 23 forward migration: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestSchema24CreatesAndRequiresCapabilityDetectionBuckets(t *testing.T) {
 }
 
 func TestCapabilityDetectionCreateIsIdempotentAndSingleFlight(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestCapabilityDetectionCreateIsIdempotentAndSingleFlight(t *testing.T) {
 	// the same target at the same moment must collapse onto one detection,
 	// because each one that does not is a billable Provider call nobody asked
 	// for.
-	racing, err := Open(filepath.Join(t.TempDir(), "racing.db"))
+	racing, err := openForTest(t, filepath.Join(t.TempDir(), "racing.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestCapabilityDetectionCreateIsIdempotentAndSingleFlight(t *testing.T) {
 
 func TestResetMigrationDiscardsExistingDetections(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metadata.db")
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestResetMigrationDiscardsExistingDetections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Update(func(tx *bbolt.Tx) error {
+	if err := publishInto(db, func(tx *Tx) error {
 		for index, name := range [][]byte{bucketModelCapabilityDetections, bucketCapabilityDetectionIdem, bucketCapabilityDetectionIndex} {
 			if err := tx.Bucket(name).Put([]byte("stale"), []byte{byte(index + 1)}); err != nil {
 				return err
@@ -205,12 +205,12 @@ func TestResetMigrationDiscardsExistingDetections(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err = Open(path)
+	store, err = openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if err := store.db.View(func(tx *bbolt.Tx) error {
+	if err := store.view(func(tx *Tx) error {
 		for _, name := range [][]byte{bucketModelCapabilityDetections, bucketCapabilityDetectionIdem, bucketCapabilityDetectionIndex} {
 			if keys := tx.Bucket(name).Stats().KeyN; keys != 0 {
 				t.Errorf("reset bucket %q retained %d records", name, keys)
@@ -227,7 +227,7 @@ func TestResetMigrationDiscardsExistingDetections(t *testing.T) {
 }
 
 func TestCapabilityDetectionRecoveryInterruptsWithoutReplayingCalls(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ func TestCapabilityDetectionRecoveryInterruptsWithoutReplayingCalls(t *testing.T
 // reports what was actually written — across enough records to span many pages,
 // with values that grow when rewritten.
 func TestEveryInFlightDetectionIsInterruptedAcrossManyPages(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

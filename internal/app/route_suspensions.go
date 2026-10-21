@@ -91,6 +91,9 @@ func ClearStoredRouteSuspension(ctx context.Context, cfg config.Config, scopeID 
 		return err
 	}
 	defer store.Close()
+	if err := attachMetadataJournalForCLI(ctx, cfg, store, "clear route suspension"); err != nil {
+		return err
+	}
 	eventID, err := id.New("aud")
 	if err != nil {
 		return err

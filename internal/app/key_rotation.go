@@ -207,6 +207,14 @@ func rotateMasterKeyWithHook(
 		return KeyRotationResult{}, err
 	}
 	defer clear(ledgerKey)
+	// Read while the live store is still open: the snapshot below closes it,
+	// and everything after that point works on the staged copy.
+	journalKey, err := loadMetadataJournalHMACKey(metadata, currentVault, currentKey)
+	if err != nil {
+		metadata.Close()
+		return KeyRotationResult{}, err
+	}
+	defer clear(journalKey)
 	if err := appendRotationAudit(metadata, cfg.AuditPath(), auditKey, "security.master_key_rotation.started"); err != nil {
 		metadata.Close()
 		return KeyRotationResult{}, err
@@ -232,7 +240,7 @@ func rotateMasterKeyWithHook(
 	if err := callRotationHook(hook, "after_metadata_snapshot"); err != nil {
 		return KeyRotationResult{}, err
 	}
-	stage, err := boltstore.Open(stagePath)
+	stage, err := boltstore.OpenForWholeFilePublish(stagePath)
 	if err != nil {
 		return KeyRotationResult{}, err
 	}
@@ -253,6 +261,11 @@ func rotateMasterKeyWithHook(
 		stage.Close()
 		return KeyRotationResult{}, err
 	}
+	journalEnvelope, err := encryptMetadataJournalHMACKey(newVault, journalKey)
+	if err != nil {
+		stage.Close()
+		return KeyRotationResult{}, err
+	}
 	bridge, err := encryptRotationBridge(currentVault, newKey)
 	if err != nil {
 		stage.Close()
@@ -260,6 +273,7 @@ func rotateMasterKeyWithHook(
 	}
 	err = stage.RewriteVaultMaterial(boltstore.VaultRewrite{
 		VaultKeyCheck: keyCheck, AuditHMACEnvelope: auditEnvelope, LedgerHMACEnvelope: ledgerEnvelope,
+		MetadataJournalHMACEnvelope: journalEnvelope,
 		Keyring: boltstore.VaultKeyring{
 			FormatVersion: 1, ActiveKeyVersion: keyring.ActiveKeyVersion + 1,
 			ActiveFingerprint: keyFingerprint(newKey), PreviousFingerprint: keyFingerprint(currentKey),
@@ -316,7 +330,7 @@ func rotateMasterKeyWithHook(
 		return KeyRotationResult{}, err
 	}
 	result.NewKeyVersion = keyring.ActiveKeyVersion + 1
-	compacted, err := boltstore.Open(compactPath)
+	compacted, err := boltstore.OpenForWholeFilePublish(compactPath)
 	if err != nil {
 		return KeyRotationResult{}, err
 	}
@@ -392,7 +406,7 @@ func finalizeMasterKeyRotation(ctx context.Context, cfg config.Config, newVault 
 	if err := metadata.Close(); err != nil {
 		return err
 	}
-	stage, err := boltstore.Open(stagePath)
+	stage, err := boltstore.OpenForWholeFilePublish(stagePath)
 	if err != nil {
 		return err
 	}
@@ -414,7 +428,7 @@ func finalizeMasterKeyRotation(ctx context.Context, cfg config.Config, newVault 
 		return err
 	}
 	defer os.Remove(compactPath)
-	compacted, err := boltstore.Open(compactPath)
+	compacted, err := boltstore.OpenForWholeFilePublish(compactPath)
 	if err != nil {
 		return err
 	}

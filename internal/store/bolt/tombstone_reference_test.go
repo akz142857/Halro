@@ -14,7 +14,7 @@ import (
 // test can tombstone one link and probe the writes that reference it.
 func tombstoneChain(t *testing.T) (*Store, domain.ProviderInstance, domain.Deployment, domain.Project) {
 	t.Helper()
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

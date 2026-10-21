@@ -22,7 +22,7 @@ import (
 )
 
 func TestAdminMFAChallengeClaimAndAuthenticatorInvariantsAreAtomic(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestAdminMFAChallengeClaimAndAuthenticatorInvariantsAreAtomic(t *testing.T)
 }
 
 func TestAdminMFAEnrollmentCommitsRecoveryIdentityAndAuditTogether(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestAdminMFAEnrollmentCommitsRecoveryIdentityAndAuditTogether(t *testing.T)
 func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metadata.db")
 	createV1Metadata(t, path)
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 41 ||
+	if len(history) != 42 ||
 		history[0] != (MigrationRecord{Version: 1, Name: "initial_schema"}) ||
 		history[1] != (MigrationRecord{Version: 2, Name: "migration_history"}) ||
 		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) ||
@@ -233,7 +233,8 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 		history[37] != (MigrationRecord{Version: 38, Name: "provider_egress_proxy_compatibility_fence"}) ||
 		history[38] != (MigrationRecord{Version: 39, Name: "route_suspensions"}) ||
 		history[39] != (MigrationRecord{Version: 40, Name: "provider_resource_idempotency_index"}) ||
-		history[40] != (MigrationRecord{Version: 41, Name: "drop_usage_derivatives"}) {
+		history[40] != (MigrationRecord{Version: 41, Name: "drop_usage_derivatives"}) ||
+		history[41] != (MigrationRecord{Version: 42, Name: "metadata_journal_fence"}) {
 		t.Fatalf("history=%#v", history)
 	}
 }
@@ -266,7 +267,7 @@ func TestProviderProfileMigrationFromV3IsAtomicAndConservative(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = db.View(func(tx *bbolt.Tx) error {
+			err = viewRaw(db, func(tx *Tx) error {
 				if version := binary.BigEndian.Uint64(tx.Bucket(bucketMeta).Get(keySchemaVersion)); version != 3 {
 					t.Fatalf("schema changed after rollback: %d", version)
 				}
@@ -290,7 +291,7 @@ func TestProviderProfileMigrationFromV3IsAtomicAndConservative(t *testing.T) {
 			// `legacy` evidence tier, and then migration 21, which refuses it
 			// rather than guessing what that tier meant. Refusing to open is
 			// the intended outcome, and the message has to say what to do.
-			store, err := Open(path)
+			store, err := openForTest(t, path)
 			if err == nil {
 				store.Close()
 				t.Fatal("a directory carrying legacy capability evidence was opened")
@@ -306,7 +307,7 @@ func TestProviderProfileBindingMigrationFromV8IsAtomicAndIdempotent(t *testing.T
 	root := t.TempDir()
 	templatePath := filepath.Join(root, "metadata-v8.db")
 	createV3ProviderMetadataWithEvidence(t, templatePath, true)
-	store, err := Open(templatePath)
+	store, err := openForTest(t, templatePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +318,7 @@ func TestProviderProfileBindingMigrationFromV8IsAtomicAndIdempotent(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = db.Update(func(tx *bbolt.Tx) error {
+	err = publishInto(db, func(tx *Tx) error {
 		var instance domain.ProviderInstance
 		if err := json.Unmarshal(tx.Bucket(bucketProviders).Get([]byte("provider_v3")), &instance); err != nil {
 			return err
@@ -364,7 +365,7 @@ func TestProviderProfileBindingMigrationFromV8IsAtomicAndIdempotent(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = raw.View(func(tx *bbolt.Tx) error {
+			err = viewRaw(raw, func(tx *Tx) error {
 				if got := binary.BigEndian.Uint64(tx.Bucket(bucketMeta).Get(keySchemaVersion)); got != 8 {
 					t.Fatalf("schema=%d", got)
 				}
@@ -383,7 +384,7 @@ func TestProviderProfileBindingMigrationFromV8IsAtomicAndIdempotent(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			retried, err := Open(path)
+			retried, err := openForTest(t, path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -419,7 +420,7 @@ func createV3ProviderMetadataWithEvidence(t *testing.T, path string, withEvidenc
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	err = db.Update(func(tx *bbolt.Tx) error {
+	err = publishInto(db, func(tx *Tx) error {
 		for _, name := range requiredBuckets() {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
@@ -476,7 +477,7 @@ func createV3ProviderMetadataWithEvidence(t *testing.T, path string, withEvidenc
 
 func TestMetadataSnapshotIsConsistentAndReopenable(t *testing.T) {
 	root := t.TempDir()
-	store, err := Open(filepath.Join(root, "metadata.db"))
+	store, err := openForTest(t, filepath.Join(root, "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +493,7 @@ func TestMetadataSnapshotIsConsistentAndReopenable(t *testing.T) {
 	if info.SchemaVersion != schemaVersion || info.TxID == 0 {
 		t.Fatalf("snapshot info=%#v", info)
 	}
-	snapshot, err := Open(snapshotPath)
+	snapshot, err := openForTest(t, snapshotPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -517,7 +518,7 @@ func TestV2RouteWithNoDeploymentIsRefused(t *testing.T) {
 		"provider_model": "gpt-legacy", "input_micros_per_million": 10, "output_micros_per_million": 20,
 		"priority": 3, "enabled": true, "created_at": now, "updated_at": now, "revision": 4,
 	}
-	err = db.Update(func(tx *bbolt.Tx) error {
+	err = publishInto(db, func(tx *Tx) error {
 		for _, name := range requiredBuckets() {
 			if bytes.Equal(name, bucketDeployments) {
 				continue
@@ -558,7 +559,7 @@ func TestV2RouteWithNoDeploymentIsRefused(t *testing.T) {
 	// requirement, and it was invisible to that migration's own guard because
 	// Stats() does not see writes made earlier in the same transaction. The
 	// directory is refused instead, and the message has to say what to do.
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err == nil {
 		store.Close()
 		t.Fatal("a directory holding a route with no deployment was opened")
@@ -586,7 +587,7 @@ func TestInterruptedMetadataMigrationRollsBackToV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = db.View(func(tx *bbolt.Tx) error {
+	err = viewRaw(db, func(tx *Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keySchemaVersion)
 		if binary.BigEndian.Uint64(raw) != 1 {
 			t.Fatalf("schema changed after rollback: %x", raw)
@@ -602,7 +603,7 @@ func TestInterruptedMetadataMigrationRollsBackToV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatalf("retry migration: %v", err)
 	}
@@ -624,7 +625,7 @@ func TestDeploymentLessRouteRefusalLeavesTheDirectoryUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err == nil {
 		store.Close()
 		t.Fatal("a directory holding deployment-less routes was opened")
@@ -634,7 +635,7 @@ func TestDeploymentLessRouteRefusalLeavesTheDirectoryUntouched(t *testing.T) {
 	}
 
 	// Reopening must fail the same way rather than half-applying something.
-	if store, err := Open(path); err == nil {
+	if store, err := openForTest(t, path); err == nil {
 		store.Close()
 		t.Fatal("a second open succeeded after the first was refused")
 	}
@@ -656,7 +657,7 @@ func createV2MetadataWithRoutes(t *testing.T, path string, count int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = db.Update(func(tx *bbolt.Tx) error {
+	err = publishInto(db, func(tx *Tx) error {
 		for _, name := range requiredBuckets() {
 			if bytes.Equal(name, bucketDeployments) {
 				continue
@@ -711,7 +712,7 @@ func assertV2MetadataUnchanged(t *testing.T, path string, routeCount int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = db.View(func(tx *bbolt.Tx) error {
+	err = viewRaw(db, func(tx *Tx) error {
 		if tx.Bucket(bucketDeployments) != nil {
 			return errors.New("deployments bucket survived rolled-back migration")
 		}
@@ -753,7 +754,7 @@ func TestMetadataNewerSchemaIsRejectedWithoutMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Update(func(tx *bbolt.Tx) error {
+	if err := publishInto(db, func(tx *Tx) error {
 		var encoded [8]byte
 		binary.BigEndian.PutUint64(encoded[:], schemaVersion+1)
 		return tx.Bucket(bucketMeta).Put(keySchemaVersion, encoded[:])
@@ -761,7 +762,7 @@ func TestMetadataNewerSchemaIsRejectedWithoutMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Close()
-	if _, err := Open(path); err == nil {
+	if _, err := openForTest(t, path); err == nil {
 		t.Fatal("newer metadata schema was accepted")
 	}
 	db, err = bbolt.Open(path, 0o600, nil)
@@ -769,7 +770,7 @@ func TestMetadataNewerSchemaIsRejectedWithoutMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := db.View(func(tx *bbolt.Tx) error {
+	if err := viewRaw(db, func(tx *Tx) error {
 		if tx.Bucket(bucketMigrationHistory) != nil {
 			t.Fatal("rejected newer schema was mutated")
 		}
@@ -785,7 +786,7 @@ func createV1Metadata(t *testing.T, path string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = db.Update(func(tx *bbolt.Tx) error {
+	err = publishInto(db, func(tx *Tx) error {
 		for _, name := range requiredBuckets() {
 			if bytes.Equal(name, bucketMigrationHistory) || bytes.Equal(name, bucketDeployments) {
 				continue
@@ -807,7 +808,7 @@ func createV1Metadata(t *testing.T, path string) {
 }
 
 func TestAuditCheckpointPersistenceAndMonotonicity(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -840,7 +841,7 @@ func TestAuditCheckpointPersistenceAndMonotonicity(t *testing.T) {
 
 func TestCredentialPersistenceAndRevision(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metadata.db")
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -877,7 +878,7 @@ func TestCredentialPersistenceAndRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err = Open(path)
+	store, err = openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -892,7 +893,7 @@ func TestCredentialPersistenceAndRevision(t *testing.T) {
 }
 
 func TestGatewayKeyHashIndex(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -926,7 +927,7 @@ func TestGatewayKeyHashIndex(t *testing.T) {
 }
 
 func TestProviderAndRouteReferencesAndUniqueness(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1002,7 +1003,7 @@ func TestProviderAndRouteReferencesAndUniqueness(t *testing.T) {
 }
 
 func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1156,7 +1157,7 @@ func TestSchema20RefusesADataDirectoryHoldingDeployments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Update(func(tx *bbolt.Tx) error {
+	if err := publishInto(db, func(tx *Tx) error {
 		return tx.Bucket(bucketDeployments).Put([]byte("deployment_v3"), encoded)
 	}); err != nil {
 		t.Fatal(err)
@@ -1164,7 +1165,7 @@ func TestSchema20RefusesADataDirectoryHoldingDeployments(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(path); err == nil {
+	if _, err := openForTest(t, path); err == nil {
 		t.Fatal("a data directory with deployments upgraded to schema 20")
 	} else if !strings.Contains(err.Error(), "reinitialize the data directory") {
 		t.Fatalf("refusal is not actionable: %v", err)
@@ -1197,7 +1198,7 @@ func TestSnapshotEvidenceBackfillMatchesWhatASaveWouldProduce(t *testing.T) {
 	}
 	writeV22Deployment(t, path, before)
 
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatalf("a v22 directory was refused rather than brought forward: %v", err)
 	}
@@ -1240,7 +1241,7 @@ func writeV22Deployment(t *testing.T, path string, deployment domain.Deployment)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = db.Update(func(tx *bbolt.Tx) error {
+	err = publishInto(db, func(tx *Tx) error {
 		for _, name := range requiredBuckets() {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err

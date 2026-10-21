@@ -20,7 +20,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 41
+const schemaVersion uint64 = 42
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -120,6 +120,13 @@ var (
 	keyAdminBootstrapCompletion        = []byte("admin_bootstrap_completion")
 	keyMinimumLedgerReaderVersion      = []byte("minimum_ledger_reader_version")
 	keyLedgerFeatureEpoch              = []byte("ledger_feature_epoch")
+	// The metadata journal's own keys. The envelope is class D — a node cannot
+	// authenticate the journal without it — while the applied sequence and the
+	// epoch are the projection's position in the journal, written by the
+	// transaction entry itself rather than by any caller.
+	keyMetadataHMACEnvelope   = []byte("metadata_hmac_envelope")
+	keyAppliedJournalSequence = []byte("applied_journal_sequence")
+	keyMetadataJournalEpoch   = []byte("metadata_journal_epoch")
 )
 
 type MigrationRecord struct {
@@ -130,12 +137,12 @@ type MigrationRecord struct {
 type migration struct {
 	version uint64
 	name    string
-	up      func(*bbolt.Tx, func(string) error) error
+	up      func(*Tx, func(string) error) error
 }
 
 var migrations = []migration{
 	{version: 1, name: "initial_schema", up: createInitialBuckets},
-	{version: 2, name: "migration_history", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 2, name: "migration_history", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_create_migration_history"); err != nil {
 			return err
 		}
@@ -160,7 +167,7 @@ var migrations = []migration{
 	}},
 	{version: 3, name: "deployments", up: migrateDeployments},
 	{version: 4, name: "provider_profiles", up: migrateProviderProfiles},
-	{version: 5, name: "provider_resources", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 5, name: "provider_resources", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_create_provider_resources"); err != nil {
 			return err
 		}
@@ -174,7 +181,7 @@ var migrations = []migration{
 	// anything. The identifiers that once shared the name are now
 	// InferenceResources; these three strings must not follow, or an upgraded
 	// instance stops matching its own migration history.
-	{version: 6, name: "phase2_capability_evidence", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 6, name: "phase2_capability_evidence", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_phase2_capability_evidence"); err != nil {
 			return err
 		}
@@ -200,7 +207,7 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_phase2_capability_evidence")
 	}},
-	{version: 7, name: "provider_resource_creation_status", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 7, name: "provider_resource_creation_status", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_provider_resource_creation_status"); err != nil {
 			return err
 		}
@@ -222,7 +229,7 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_provider_resource_creation_status")
 	}},
-	{version: 8, name: "admin_mfa", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 8, name: "admin_mfa", up: func(tx *Tx, step func(string) error) error {
 		for _, name := range [][]byte{bucketAdminMFAAuthenticators, bucketAdminMFARecoveryCodes, bucketAdminMFAChallenges} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
@@ -231,14 +238,14 @@ var migrations = []migration{
 		return migrationStep(step, "after_create_admin_mfa_buckets")
 	}},
 	{version: 9, name: "provider_profile_bindings", up: migrateProviderProfileBindings},
-	{version: 10, name: "master_key_slots", up: func(_ *bbolt.Tx, step func(string) error) error {
+	{version: 10, name: "master_key_slots", up: func(_ *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_reserve_key_slot_descriptor"); err != nil {
 			return err
 		}
 		return migrationStep(step, "after_reserve_key_slot_descriptor")
 	}},
 	{version: 11, name: "versioned_deployment_pricing", up: migrateVersionedDeploymentPricing},
-	{version: 12, name: "deployment_price_pin_intents", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 12, name: "deployment_price_pin_intents", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_create_deployment_price_pin_intents"); err != nil {
 			return err
 		}
@@ -269,7 +276,7 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_create_deployment_price_pin_intents")
 	}},
-	{version: 13, name: "cost_adjustment_intents", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 13, name: "cost_adjustment_intents", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_create_cost_adjustment_intents"); err != nil {
 			return err
 		}
@@ -288,7 +295,7 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_create_cost_adjustment_intents")
 	}},
-	{version: 14, name: "pricing_proposals", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 14, name: "pricing_proposals", up: func(tx *Tx, step func(string) error) error {
 		for _, name := range [][]byte{bucketDeploymentPriceProposals, bucketPricingProposalIdempotency} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
@@ -296,7 +303,7 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_create_pricing_proposal_buckets")
 	}},
-	{version: 15, name: "optional_manual_price_evidence", up: func(_ *bbolt.Tx, step func(string) error) error {
+	{version: 15, name: "optional_manual_price_evidence", up: func(_ *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_optional_manual_price_evidence"); err != nil {
 			return err
 		}
@@ -306,7 +313,7 @@ var migrations = []migration{
 	// (SeedInstanceAccountingSettings), not here: config.yaml is the seed, and
 	// this layer has no access to it. The step marks the version at which the
 	// accounting timezone stopped being read from configuration on every start.
-	{version: 16, name: "instance_accounting_settings", up: func(_ *bbolt.Tx, step func(string) error) error {
+	{version: 16, name: "instance_accounting_settings", up: func(_ *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_instance_accounting_settings"); err != nil {
 			return err
 		}
@@ -320,7 +327,7 @@ var migrations = []migration{
 	// This migration jumps straight to epoch 4 (frame HMAC + hash chain,
 	// ADR 0016) and retroactively covers the epoch-3 gap in the same step
 	// rather than leaving two generations of the same oversight stacked.
-	{version: 17, name: "ledger_frame_integrity", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 17, name: "ledger_frame_integrity", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_ledger_frame_integrity"); err != nil {
 			return err
 		}
@@ -348,7 +355,7 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_ledger_frame_integrity")
 	}},
-	{version: 18, name: "audit_anchors", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 18, name: "audit_anchors", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_create_audit_anchors"); err != nil {
 			return err
 		}
@@ -368,7 +375,7 @@ var migrations = []migration{
 	// existed there was exactly one kind of admin account and it could do
 	// everything; recording anything else here would take capability away from
 	// an operator who never gave it up.
-	{version: 19, name: "admin_role_backfill", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 19, name: "admin_role_backfill", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_admin_role_backfill"); err != nil {
 			return err
 		}
@@ -394,7 +401,7 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_admin_role_backfill")
 	}},
-	{version: 20, name: "deployment_capability_snapshot", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 20, name: "deployment_capability_snapshot", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_capability_snapshot_check"); err != nil {
 			return err
 		}
@@ -417,7 +424,7 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_capability_snapshot_check")
 	}},
-	{version: 21, name: "refuse_legacy_capability_evidence", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 21, name: "refuse_legacy_capability_evidence", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_legacy_evidence_check"); err != nil {
 			return err
 		}
@@ -478,7 +485,7 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_legacy_evidence_check")
 	}},
-	{version: 22, name: "refuse_deployment_less_routes", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 22, name: "refuse_deployment_less_routes", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_deployment_less_route_check"); err != nil {
 			return err
 		}
@@ -526,7 +533,7 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_deployment_less_route_check")
 	}},
-	{version: 23, name: "deployment_snapshot_evidence_and_disabled", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 23, name: "deployment_snapshot_evidence_and_disabled", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_snapshot_evidence_backfill"); err != nil {
 			return err
 		}
@@ -603,7 +610,7 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_snapshot_evidence_backfill")
 	}},
-	{version: 24, name: "model_capability_detections", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 24, name: "model_capability_detections", up: func(tx *Tx, step func(string) error) error {
 		for _, name := range [][]byte{bucketModelCapabilityDetections, bucketCapabilityDetectionIdem, bucketCapabilityDetectionIndex} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
@@ -621,7 +628,7 @@ var migrations = []migration{
 	// keep their own capability snapshot, and re-running one costs the same
 	// probes it cost the first time. So drop them and let them be re-detected
 	// rather than carry a fabricated shape forward.
-	{version: 25, name: "reset_capability_detections_for_interface_identification", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 25, name: "reset_capability_detections_for_interface_identification", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_reset_model_capability_detections"); err != nil {
 			return err
 		}
@@ -642,7 +649,7 @@ var migrations = []migration{
 	// asked". A record written before that carries no such list, and inventing
 	// one would mean re-deriving a detection plan from a provider whose bindings
 	// may since have changed. Same reasoning as 25: rebuild the cache.
-	{version: 26, name: "reset_capability_detections_for_verifiable_scope", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 26, name: "reset_capability_detections_for_verifiable_scope", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_reset_detections_for_verifiable_scope"); err != nil {
 			return err
 		}
@@ -663,7 +670,7 @@ var migrations = []migration{
 	// delivered afterwards. Nothing existing has to be reshaped — an instance
 	// upgrading here simply has no pending intents, which is the same state a
 	// fully drained instance is in.
-	{version: 27, name: "admin_audit_intents", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 27, name: "admin_audit_intents", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_create_admin_audit_intents"); err != nil {
 			return err
 		}
@@ -681,7 +688,7 @@ var migrations = []migration{
 	//
 	// Fields are patched into the decoded object rather than re-marshalled through
 	// the domain structs, so nothing this migration does not know about is lost.
-	{version: 28, name: "provider_executed_tools_capability", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 28, name: "provider_executed_tools_capability", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_provider_executed_tools_capability"); err != nil {
 			return err
 		}
@@ -721,7 +728,7 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_provider_executed_tools_capability")
 	}},
-	{version: 29, name: "project_allowed_models", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 29, name: "project_allowed_models", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_project_allowed_models"); err != nil {
 			return err
 		}
@@ -754,7 +761,7 @@ var migrations = []migration{
 	// Proposals carry a digest over their own billing terms, so a backfilled
 	// proposal is re-digested; leaving the old digest would make every stored
 	// proposal fail validation on the next read.
-	{version: 30, name: "deployment_price_cached_input_rate", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 30, name: "deployment_price_cached_input_rate", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_deployment_price_cached_input_rate"); err != nil {
 			return err
 		}
@@ -784,7 +791,7 @@ var migrations = []migration{
 	// that can get it wrong silently. Off for everyone is wrong in the direction
 	// that refuses rather than the one that forwards a request doomed upstream,
 	// and it costs one deliberate tick where the capability is really wanted.
-	{version: 31, name: "fetched_image_capability", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 31, name: "fetched_image_capability", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_fetched_image_capability"); err != nil {
 			return err
 		}
@@ -851,7 +858,7 @@ var migrations = []migration{
 	// version, which moved to v4 with this split: a v3 record's json_mode result
 	// answers a question no longer asked, because that probe sent response_format
 	// json_object and established nothing about a schema.
-	{version: 32, name: "structured_output_capability_split", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 32, name: "structured_output_capability_split", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_structured_output_capability_split"); err != nil {
 			return err
 		}
@@ -911,7 +918,7 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_structured_output_capability_split")
 	}},
-	{version: 33, name: "usage_daily_rollup", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 33, name: "usage_daily_rollup", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_create_usage_daily_rollup"); err != nil {
 			return err
 		}
@@ -926,7 +933,7 @@ var migrations = []migration{
 	// a generation the startup check reads that as a chain that moved and
 	// refuses to start. Every checkpoint written before sealing existed
 	// describes generation 1, which is what this stamps.
-	{version: 34, name: "ledger_chain_checkpoint_generation", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 34, name: "ledger_chain_checkpoint_generation", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_ledger_chain_checkpoint_generation"); err != nil {
 			return err
 		}
@@ -963,7 +970,7 @@ var migrations = []migration{
 	// rebuilds correctly: clearing only the checkpoint would leave a complete
 	// rollup while the next start replays the WAL from zero, and every row
 	// would be counted twice.
-	{version: 35, name: "usage_checkpoint_segments", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 35, name: "usage_checkpoint_segments", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_create_usage_checkpoint_segments"); err != nil {
 			return err
 		}
@@ -990,7 +997,7 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_create_usage_checkpoint_segments")
 	}},
-	{version: 36, name: "run_governance_attribution", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 36, name: "run_governance_attribution", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_run_governance_attribution"); err != nil {
 			return err
 		}
@@ -1043,7 +1050,7 @@ var migrations = []migration{
 	// rejects this directory during Store.Open, before runtime construction can
 	// bind a listener. The checkpoint is derivative, so discard it and replay
 	// the authenticated Ledger rather than attempt a lossy in-place rewrite.
-	{version: 37, name: "usage_provider_attribution_boundary", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 37, name: "usage_provider_attribution_boundary", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_usage_provider_attribution_boundary"); err != nil {
 			return err
 		}
@@ -1068,7 +1075,7 @@ var migrations = []migration{
 	// in their own Admin-managed bucket. No Provider rewrite is needed — absence
 	// is the direct path — but a schema fence is mandatory: schema-37 binaries
 	// ignore the unknown field and would serve a proxy-bound Provider directly.
-	{version: 38, name: "provider_egress_proxy_compatibility_fence", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 38, name: "provider_egress_proxy_compatibility_fence", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_provider_egress_proxy_compatibility_fence"); err != nil {
 			return err
 		}
@@ -1077,7 +1084,7 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_provider_egress_proxy_compatibility_fence")
 	}},
-	{version: 39, name: "route_suspensions", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 39, name: "route_suspensions", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_route_suspensions"); err != nil {
 			return err
 		}
@@ -1097,7 +1104,7 @@ var migrations = []migration{
 	// the Ledger. Their old home is cleared here rather than left behind: on a
 	// busy instance the checkpoint segments are gigabytes this file would
 	// otherwise carry, and back up, forever.
-	{version: 41, name: "drop_usage_derivatives", up: func(tx *bbolt.Tx, step func(string) error) error {
+	{version: 41, name: "drop_usage_derivatives", up: func(tx *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_drop_usage_derivatives"); err != nil {
 			return err
 		}
@@ -1117,9 +1124,21 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_drop_usage_derivatives")
 	}},
+	// halro.db became a projection of metadata.journal. Nothing in the file
+	// changes shape; the version moves so that a build without the journal
+	// refuses this directory instead of writing bbolt behind the journal's back,
+	// which would leave the journal describing a prefix the projection has
+	// already moved past and nothing to notice it. Rolling back across this
+	// version is a backup restore, as it was across 41.
+	{version: 42, name: "metadata_journal_fence", up: func(tx *Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_metadata_journal_fence"); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_metadata_journal_fence")
+	}},
 }
 
-func migrateProviderResourceIdempotencyIndex(tx *bbolt.Tx, step func(string) error) error {
+func migrateProviderResourceIdempotencyIndex(tx *Tx, step func(string) error) error {
 	if err := migrationStep(step, "before_provider_resource_idempotency_index"); err != nil {
 		return err
 	}
@@ -1343,7 +1362,7 @@ func patchArrayMember(object map[string]json.RawMessage, field string, patch fun
 	return nil
 }
 
-func rewriteBucketIfPresent(tx *bbolt.Tx, name []byte, patch func(map[string]json.RawMessage) error) error {
+func rewriteBucketIfPresent(tx *Tx, name []byte, patch func(map[string]json.RawMessage) error) error {
 	bucket := tx.Bucket(name)
 	if bucket == nil {
 		return nil
@@ -1434,28 +1453,34 @@ func (s *Store) MetadataWriteStats() MetadataWriteStats {
 	return stats
 }
 
-// batch is db.Batch plus the bookkeeping that makes coalescing observable. The
-// batched function may run more than once and several callers share one
-// transaction, so transactions are counted by watching tx.ID() change rather
-// than by counting calls: within one transaction bbolt runs the queued functions
-// sequentially on one goroutine, and separate write transactions are serialized,
-// so the swap below counts each transaction exactly once.
-func (s *Store) batch(fn func(*bbolt.Tx) error) error {
-	s.batchCalls.Add(1)
-	return s.db.Batch(func(tx *bbolt.Tx) error {
-		if id := uint64(tx.ID()); s.lastBatchTxID.Swap(id) != id {
-			s.batchTransactions.Add(1)
-		}
-		return fn(tx)
-	})
-}
-
 type Store struct {
 	db *bbolt.DB
 
+	// journal is the write-ahead log that makes db a projection. It is nil
+	// until AttachMetadataJournal installs it, because its HMAC key is derived
+	// from the Master Key and the Master Key is not available until after the
+	// store has opened. Everything written in that window — schema creation,
+	// migrations, the key envelopes themselves — is the starting state of a
+	// journal epoch rather than a set of operations inside one.
+	journal *attachedJournal
+	// journalKey is kept so a trim can reopen the file it just rewrote. It is
+	// the only copy this package holds and it never leaves it.
+	journalKey []byte
+	// migrated says a schema migration ran during this Open. It decides whether
+	// the attach continues the existing journal or publishes a new epoch: a
+	// migration rewrites the projection as a whole, and recording DDL as
+	// operations is the thing physical replication was chosen to avoid.
+	migrated bool
+	// publishing marks a database that is being built to replace another one
+	// rather than served. Its writes record nothing; see
+	// OpenForWholeFilePublish.
+	publishing bool
+	// batches is the coalescing layer that replaces db.Batch; see
+	// journal_entry.go for why db.Batch could not be kept.
+	batches batchState
+
 	batchCalls        atomic.Uint64
 	batchTransactions atomic.Uint64
-	lastBatchTxID     atomic.Uint64
 	// pricingStates holds deploymentID -> *deploymentPricingState. Entries are
 	// created on first use and never removed: one small struct per deployment
 	// that has been priced, which is bounded by the deployment count.
@@ -1497,6 +1522,13 @@ type MetadataInfo struct {
 	TxID                       uint64 `json:"txid"`
 	MinimumLedgerReaderVersion string `json:"minimum_ledger_reader_version"`
 	LedgerFeatureEpoch         uint8  `json:"ledger_feature_epoch"`
+	// MetadataJournalEpoch and MetadataJournalSequence are the position in the
+	// write-ahead journal this snapshot corresponds to. They are recorded for
+	// the reason the journal exists: a restored database is a projection, and
+	// a manifest that did not say which prefix it projects could only be taken
+	// on trust (HA design §12.1).
+	MetadataJournalEpoch    uint64 `json:"metadata_journal_epoch"`
+	MetadataJournalSequence uint64 `json:"metadata_journal_sequence"`
 }
 
 type LedgerCompatibilityGate struct {
@@ -1506,7 +1538,7 @@ type LedgerCompatibilityGate struct {
 
 func (s *Store) LedgerCompatibilityGate() (LedgerCompatibilityGate, error) {
 	var gate LedgerCompatibilityGate
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		meta := tx.Bucket(bucketMeta)
 		gate.MinimumReaderVersion = string(meta.Get(keyMinimumLedgerReaderVersion))
 		raw := meta.Get(keyLedgerFeatureEpoch)
@@ -1548,6 +1580,7 @@ func OpenReadOnly(path string) (*Store, error) {
 		return nil, fmt.Errorf("open metadata read-only: %w", err)
 	}
 	store := &Store{db: db}
+	store.batches.delay, store.batches.size = metadataBatchDelay, metadataBatchSize
 	version, err := store.SchemaVersion()
 	if err != nil {
 		db.Close()
@@ -1597,8 +1630,11 @@ func openWithMigrationHooks(path string, afterUp func(uint64) error, stepHook fu
 	if err != nil {
 		return nil, fmt.Errorf("open metadata: %w", err)
 	}
-	db.MaxBatchDelay, db.MaxBatchSize = metadataBatchDelay, metadataBatchSize
+	// bbolt's own batching is left at its defaults and unused: db.Batch was
+	// replaced by the coalescing layer in journal_entry.go, which owns these
+	// numbers now.
 	store := &Store{db: db}
+	store.batches.delay, store.batches.size = metadataBatchDelay, metadataBatchSize
 	if err := store.initialize(afterUp, stepHook); err != nil {
 		db.Close()
 		return nil, err
@@ -1610,16 +1646,27 @@ func (s *Store) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
+	// Anything still queued in the coalescing layer runs first: a caller
+	// blocked on the batch window must not be left waiting on a store that is
+	// going away, and its transaction is as durable as any other.
+	s.flushBatches()
+	var journalErr error
+	if s.journal != nil {
+		journalErr = s.journal.Close()
+		s.journal = nil
+	}
+	clear(s.journalKey)
+	s.journalKey = nil
 	err := s.db.Close()
 	s.db = nil
-	return err
+	return errors.Join(journalErr, err)
 }
 
 func (s *Store) PutLedgerHMACEnvelope(value []byte) error {
 	if len(value) == 0 {
 		return errors.New("ledger HMAC envelope cannot be empty")
 	}
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.update(func(tx *Tx) error {
 		meta := tx.Bucket(bucketMeta)
 		if meta.Get(keyLedgerHMACEnvelope) != nil {
 			return ErrAlreadyExists
@@ -1690,13 +1737,18 @@ type KeySlotInitialization struct {
 	AuditHMACEnvelope  []byte
 	AuditCheckpoint    AuditCheckpoint
 	LedgerHMACEnvelope []byte
-	Unwrapper          masterkey.SlotUnwrapper
-	Verifier           masterkey.CandidateVerifier
+	// MetadataJournalHMACEnvelope is published with the rest of the key state,
+	// for the reason the whole publication is atomic: a node holding the
+	// envelopes without the one that authenticates the journal could not apply
+	// the journal, and would not be a projection of anything.
+	MetadataJournalHMACEnvelope []byte
+	Unwrapper                   masterkey.SlotUnwrapper
+	Verifier                    masterkey.CandidateVerifier
 }
 
 func (s *Store) metaBytes(key []byte) ([]byte, error) {
 	var value []byte
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(key)
 		if raw == nil {
 			return ErrNotFound
@@ -1712,12 +1764,16 @@ type VaultRewrite struct {
 	VaultKeyCheck      []byte
 	AuditHMACEnvelope  []byte
 	LedgerHMACEnvelope []byte
-	Keyring            VaultKeyring
-	KeySlotDescriptor  *masterkey.KeySlotDescriptor
-	Transform          func(domain.Credential) (domain.Credential, error)
-	TransformAdminMFA  func(domain.AdminMFAAuthenticator) (domain.AdminMFAAuthenticator, error)
-	Unwrapper          masterkey.SlotUnwrapper
-	Verifier           masterkey.CandidateVerifier
+	// MetadataJournalHMACEnvelope is re-wrapped alongside the other two. Like
+	// them, the key inside it does not change: rotating the Master Key must not
+	// invalidate the frames the old key signed.
+	MetadataJournalHMACEnvelope []byte
+	Keyring                     VaultKeyring
+	KeySlotDescriptor           *masterkey.KeySlotDescriptor
+	Transform                   func(domain.Credential) (domain.Credential, error)
+	TransformAdminMFA           func(domain.AdminMFAAuthenticator) (domain.AdminMFAAuthenticator, error)
+	Unwrapper                   masterkey.SlotUnwrapper
+	Verifier                    masterkey.CandidateVerifier
 }
 
 // PutLedgerChainCheckpoint advances the trusted chain-head watermark. Same
@@ -1741,7 +1797,7 @@ func (s *Store) PutLedgerChainCheckpoint(checkpoint LedgerChainCheckpoint) error
 	if err != nil {
 		return err
 	}
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.update(func(tx *Tx) error {
 		meta := tx.Bucket(bucketMeta)
 		if raw := meta.Get(keyLedgerChainCheckpoint); raw != nil {
 			var current LedgerChainCheckpoint
@@ -1769,7 +1825,7 @@ func (s *Store) PutLedgerChainCheckpoint(checkpoint LedgerChainCheckpoint) error
 
 func (s *Store) LedgerChainCheckpoint() (LedgerChainCheckpoint, error) {
 	var checkpoint LedgerChainCheckpoint
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyLedgerChainCheckpoint)
 		if raw == nil {
 			return ErrNotFound
@@ -1821,7 +1877,7 @@ func (s *Store) PutBootstrap(ctx context.Context, records *BootstrapRecords) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.update(func(tx *Tx) error {
 		if tx.Bucket(bucketGatewayKeyHash).Get(records.GatewayKey.KeyHash[:]) != nil {
 			return ErrKeyHashConflict
 		}
@@ -1865,7 +1921,7 @@ func (s *Store) PutBootstrap(ctx context.Context, records *BootstrapRecords) err
 }
 
 func (s *Store) initialize(afterUp func(uint64) error, stepHook func(uint64, string) error) error {
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.migrate(func(tx *Tx) error {
 		meta := tx.Bucket(bucketMeta)
 		var currentVersion uint64
 		if meta != nil {
@@ -1896,6 +1952,12 @@ func (s *Store) initialize(afterUp func(uint64) error, stepHook func(uint64, str
 			if err := next.up(tx, step); err != nil {
 				return fmt.Errorf("apply metadata migration %d (%s): %w", next.version, next.name, err)
 			}
+			// A migration rewrites the projection rather than operating inside
+			// it, so the attach that follows publishes a new journal epoch
+			// instead of continuing the old one. Recorded here rather than
+			// derived from the version numbers afterwards, because initial
+			// creation runs the whole chain and is the same kind of event.
+			s.migrated = true
 			if afterUp != nil {
 				if err := afterUp(next.version); err != nil {
 					return fmt.Errorf("metadata migration %d interrupted: %w", next.version, err)
@@ -1951,7 +2013,7 @@ func versionKey(version uint64) []byte {
 	return encoded[:]
 }
 
-func createInitialBuckets(tx *bbolt.Tx, step func(string) error) error {
+func createInitialBuckets(tx *Tx, step func(string) error) error {
 	for _, name := range requiredBuckets() {
 		if bytes.Equal(name, bucketMigrationHistory) {
 			continue
@@ -1970,7 +2032,7 @@ func createInitialBuckets(tx *bbolt.Tx, step func(string) error) error {
 	return nil
 }
 
-func rewriteBucket(bucket *bbolt.Bucket, transform func([]byte) ([]byte, error)) error {
+func rewriteBucket(bucket *Bucket, transform func([]byte) ([]byte, error)) error {
 	type entry struct{ key, value []byte }
 	var updates []entry
 	if err := bucket.ForEach(func(key, raw []byte) error {
@@ -2047,7 +2109,7 @@ func requiredBuckets() [][]byte {
 
 func (s *Store) SchemaVersion() (uint64, error) {
 	var version uint64
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keySchemaVersion)
 		if len(raw) != 8 {
 			return errors.New("invalid metadata schema version")
@@ -2060,7 +2122,7 @@ func (s *Store) SchemaVersion() (uint64, error) {
 
 func (s *Store) MigrationHistory() ([]MigrationRecord, error) {
 	var records []MigrationRecord
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		return tx.Bucket(bucketMigrationHistory).ForEach(func(_, value []byte) error {
 			var record MigrationRecord
 			if err := json.Unmarshal(value, &record); err != nil {
@@ -2080,7 +2142,7 @@ func (s *Store) Snapshot(path string) (MetadataInfo, error) {
 		return MetadataInfo{}, err
 	}
 	var info MetadataInfo
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keySchemaVersion)
 		if len(raw) != 8 {
 			return errors.New("invalid metadata schema version")
@@ -2092,6 +2154,10 @@ func (s *Store) Snapshot(path string) (MetadataInfo, error) {
 		if epoch := tx.Bucket(bucketMeta).Get(keyLedgerFeatureEpoch); len(epoch) == 1 {
 			info.LedgerFeatureEpoch = epoch[0]
 		}
+		// Read inside the same transaction as the copy, so the position and
+		// the bytes it describes are the same instant.
+		info.MetadataJournalEpoch, _ = decodeUint64(tx.Bucket(bucketMeta).Get(keyMetadataJournalEpoch))
+		info.MetadataJournalSequence, _ = decodeUint64(tx.Bucket(bucketMeta).Get(keyAppliedJournalSequence))
 		return tx.CopyFile(path, 0o600)
 	})
 	if err != nil {
@@ -2146,7 +2212,7 @@ func (s *Store) getJSON(ctx context.Context, bucketName []byte, id string, targe
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.db.View(func(tx *bbolt.Tx) error {
+	return s.view(func(tx *Tx) error {
 		raw := tx.Bucket(bucketName).Get([]byte(id))
 		if raw == nil {
 			return ErrNotFound
@@ -2159,7 +2225,7 @@ func (s *Store) listJSON(ctx context.Context, bucketName []byte, visit func([]by
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.db.View(func(tx *bbolt.Tx) error {
+	return s.view(func(tx *Tx) error {
 		return tx.Bucket(bucketName).ForEach(func(_, value []byte) error {
 			if value == nil {
 				return nil
@@ -2174,7 +2240,7 @@ type revisioned interface {
 	SetRevision(uint64)
 }
 
-func putVersioned(bucket *bbolt.Bucket, id string, expectedRevision uint64, value revisioned) error {
+func putVersioned(bucket *Bucket, id string, expectedRevision uint64, value revisioned) error {
 	existing := bucket.Get([]byte(id))
 	if existing == nil {
 		if expectedRevision != 0 {

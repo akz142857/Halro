@@ -140,6 +140,9 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 	chainStatus := "unverified"
 	chainDetail := "cryptographic verification was skipped; run `halro ledger verify`"
 	var doctorVault *vault.Vault
+	// Kept alongside the Vault so the journal check can derive its own key. It
+	// is the same buffer unlockMasterKey returned and is cleared with it.
+	var doctorMasterKey []byte
 	staticKMS := options.NoKMS && cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots
 	if staticKMS {
 		if store == nil {
@@ -170,7 +173,7 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 					add("master_key", "fail", "master key does not decrypt the metadata key check")
 					secretVault.Close()
 				} else {
-					doctorVault = secretVault
+					doctorVault, doctorMasterKey = secretVault, masterKey
 					defer secretVault.Close()
 					report.VaultStatus = "verified"
 					add("master_key", "pass", "mode and encrypted metadata key check are valid")
@@ -280,6 +283,7 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 		add("disk", status, fmt.Sprintf("%d bytes available", free))
 	}
 
+	checkDoctorMetadataJournal(store, doctorVault, doctorMasterKey, add)
 	if store != nil {
 		checkDoctorProviderEgress(ctx, store, doctorVault, add)
 		checkDoctorTopology(ctx, cfg, store, add)

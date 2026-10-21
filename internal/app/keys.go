@@ -31,6 +31,9 @@ func CreateProjectKey(ctx context.Context, cfg config.Config, projectID, name st
 		return CreatedGatewayKey{}, err
 	}
 	defer store.Close()
+	if err := attachMetadataJournalForCLI(ctx, cfg, store, "create project key"); err != nil {
+		return CreatedGatewayKey{}, err
+	}
 	if _, err := store.GetProject(ctx, projectID); err != nil {
 		return CreatedGatewayKey{}, fmt.Errorf("load project: %w", err)
 	}
@@ -62,6 +65,9 @@ func DisableProjectKey(ctx context.Context, cfg config.Config, keyID string) err
 		return err
 	}
 	defer store.Close()
+	if err := attachMetadataJournalForCLI(ctx, cfg, store, "disable project key"); err != nil {
+		return err
+	}
 	key, err := store.GetGatewayKey(ctx, keyID)
 	if err != nil {
 		return fmt.Errorf("load gateway key: %w", err)

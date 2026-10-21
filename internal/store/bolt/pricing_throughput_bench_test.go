@@ -25,45 +25,40 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	bbolt "go.etcd.io/bbolt"
 )
 
 var benchmarkWorkerCounts = []int{1, 8, 64}
 
 // BenchmarkMetadataWriteTransaction measures one durable metadata write at
-// several concurrency levels, for both db.Update and db.Batch. db.Update does
-// not coalesce, so its rate is flat in the worker count — that flatness, next to
-// the Ledger's group commit, is the whole finding of the amendment.
+// several concurrency levels, for both the single-transaction entry and the
+// coalescing layer above it. The single entry does not coalesce, so its rate is
+// flat in the worker count — that flatness, next to the Ledger's group commit,
+// is the whole finding of the amendment.
+//
+// It measures Store.update and Store.batch rather than bbolt's own db.Update
+// and db.Batch, which is what the tuning now has to be balanced against: each
+// transaction here also appends and fsyncs a journal frame, so the fsync the
+// 250µs window trades against is a different and larger number than the one the
+// amendment measured. Re-run the sweep before changing metadataBatchDelay.
 func BenchmarkMetadataWriteTransaction(b *testing.B) {
 	value := make([]byte, 512)
 	for _, workers := range benchmarkWorkerCounts {
 		for _, mode := range []string{"update", "batch"} {
 			b.Run(fmt.Sprintf("%s/workers=%d", mode, workers), func(b *testing.B) {
-				db, err := bbolt.Open(filepath.Join(b.TempDir(), "bench.db"), 0o600, &bbolt.Options{
-					FreelistType: bbolt.FreelistMapType,
-				})
-				if err != nil {
-					b.Fatal(err)
-				}
-				defer db.Close()
-				db.MaxBatchDelay, db.MaxBatchSize = metadataBatchDelay, metadataBatchSize
-				bucket := []byte("bench")
-				if err := db.Update(func(tx *bbolt.Tx) error {
-					_, err := tx.CreateBucketIfNotExists(bucket)
-					return err
-				}); err != nil {
-					b.Fatal(err)
-				}
-
-				write := db.Update
+				store := benchmarkStore(b)
+				// An authoritative bucket, so every write in the sweep records
+				// a frame. Benchmarking a node-local bucket would measure the
+				// path with the journal switched off and report a number no
+				// real write can reach.
+				bucket := bucketRedactionPolicies
+				write := store.update
 				if mode == "batch" {
-					write = db.Batch
+					write = store.batch
 				}
 				runConcurrent(b, workers, "tx/s", func(index int) error {
 					var key [8]byte
 					binary.BigEndian.PutUint64(key[:], uint64(index))
-					return write(func(tx *bbolt.Tx) error {
+					return write(func(tx *Tx) error {
 						return tx.Bucket(bucket).Put(key[:], value)
 					})
 				})
@@ -76,10 +71,18 @@ func BenchmarkMetadataWriteTransaction(b *testing.B) {
 // attempt actually walks — shared gate, prepare, commit — against a single
 // deployment. Before the amendment this was flat in the worker count, because an
 // exclusive gate meant same-deployment attempts could not overlap at all.
+//
+// It is also the bbolt half of the end-to-end baseline §16.3 of the HA design
+// asks for. The other half is internal/budget's BenchmarkRequestLifecycle,
+// which walks one request's five Ledger events and deliberately touches no
+// bbolt — which is why the amendment's 7051/s cannot serve as the denominator
+// on its own. Since the metadata journal, every one of these two writes also
+// appends and fsyncs a frame, so this number now includes the cost the journal
+// added to the request path rather than only the cost bbolt had.
 func BenchmarkDeploymentPricePinCeiling(b *testing.B) {
 	for _, workers := range benchmarkWorkerCounts {
 		b.Run(fmt.Sprintf("workers=%d", workers), func(b *testing.B) {
-			store, err := Open(filepath.Join(b.TempDir(), "metadata.db"))
+			store, err := openForTest(b, filepath.Join(b.TempDir(), "metadata.db"))
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -162,25 +165,13 @@ func BenchmarkMetadataBatchDelay(b *testing.B) {
 	for _, delay := range []time.Duration{0, 250 * time.Microsecond, 500 * time.Microsecond, time.Millisecond, 2 * time.Millisecond, 10 * time.Millisecond} {
 		for _, workers := range []int{1, 8} {
 			b.Run(fmt.Sprintf("delay=%s/workers=%d", delay, workers), func(b *testing.B) {
-				db, err := bbolt.Open(filepath.Join(b.TempDir(), "bench.db"), 0o600, &bbolt.Options{
-					FreelistType: bbolt.FreelistMapType,
-				})
-				if err != nil {
-					b.Fatal(err)
-				}
-				defer db.Close()
-				db.MaxBatchDelay, db.MaxBatchSize = delay, metadataBatchSize
-				bucket := []byte("bench")
-				if err := db.Update(func(tx *bbolt.Tx) error {
-					_, err := tx.CreateBucketIfNotExists(bucket)
-					return err
-				}); err != nil {
-					b.Fatal(err)
-				}
+				store := benchmarkStore(b)
+				store.batches.delay = delay
+				bucket := bucketRedactionPolicies
 				runConcurrent(b, workers, "tx/s", func(index int) error {
 					var key [8]byte
 					binary.BigEndian.PutUint64(key[:], uint64(index))
-					return db.Batch(func(tx *bbolt.Tx) error {
+					return store.batch(func(tx *Tx) error {
 						return tx.Bucket(bucket).Put(key[:], value)
 					})
 				})
