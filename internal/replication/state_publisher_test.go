@@ -22,18 +22,23 @@ func TestStatePublisherWritesPrimaryAndReplicaProgress(t *testing.T) {
 			t.Fatal(err)
 		}
 		head := [32]byte{1}
-		if err := publisher.PublishPrimary(PrimaryProgress{DurableIndex: 2, ConfirmedIndex: 1, OrderingHeadMAC: head}); err != nil {
+		projection := ProjectionState{Index: 1, MetadataEpoch: 4, MetadataSequence: 9}
+		if err := publisher.PublishPrimary(PrimaryProgress{DurableIndex: 2, ConfirmedIndex: 1, OrderingHeadMAC: head, Projection: projection}); err != nil {
 			t.Fatal(err)
 		}
 		state, err := ReadState(path, key)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if state.DurableIndex != 2 || state.ConfirmedIndex != 1 || state.OrderingHeadMAC != head {
+		if state.DurableIndex != 2 || state.ConfirmedIndex != 1 || state.OrderingHeadMAC != head || state.Projection != projection {
 			t.Fatalf("state=%#v", state)
 		}
-		if err := publisher.PublishPrimary(PrimaryProgress{DurableIndex: 1, ConfirmedIndex: 1, OrderingHeadMAC: head}); err == nil {
+		if err := publisher.PublishPrimary(PrimaryProgress{DurableIndex: 1, ConfirmedIndex: 1, OrderingHeadMAC: head, Projection: projection}); err == nil {
 			t.Fatal("regressing Primary progress was accepted")
+		}
+		projection.Index = 0
+		if err := publisher.PublishPrimary(PrimaryProgress{DurableIndex: 2, ConfirmedIndex: 1, OrderingHeadMAC: head, Projection: projection}); err == nil {
+			t.Fatal("Primary projection detached from confirmed prefix")
 		}
 	})
 

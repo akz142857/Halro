@@ -86,7 +86,7 @@ func TestFrozenV1AdminRoutesAreRegistered(t *testing.T) {
 		"GET /admin/api/v1/dashboard", "GET /admin/api/v1/onboarding/readiness", "GET /admin/api/v1/usage", "GET /admin/api/v1/usage/requests/{}",
 		"GET /admin/api/v1/usage/summary", "GET /admin/api/v1/usage/failures", "GET /admin/api/v1/usage/failures/{}/payload",
 		"GET /admin/api/v1/settings/usage", "PUT /admin/api/v1/settings/usage",
-		"GET /admin/api/v1/alerts", "POST /admin/api/v1/alerts/test", "GET /admin/api/v1/audit", "GET /admin/api/v1/system/status",
+		"GET /admin/api/v1/alerts", "POST /admin/api/v1/alerts/test", "GET /admin/api/v1/audit", "GET /admin/api/v1/system/status", "GET /admin/api/v1/cluster/status",
 		"GET /admin/api/v1/developer/config", "POST /admin/api/v1/developer/execute/{}",
 		// Routes that were served without ever being frozen. The list was
 		// one-way until this round, so each of these was added and nothing

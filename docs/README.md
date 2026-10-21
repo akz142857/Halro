@@ -7,9 +7,12 @@
 | [User Guide](guides/user-guide.md) | 面向使用者的完整操作说明（英文） |
 | [中文使用手册](guides/user-guide.zh-CN.md) | 同一份手册的简体中文版 |
 | [Operator Guide](guides/operator-guide.md) | 部署、升级、备份、恢复、加固 |
+| [HA 使用手册](guides/ha-usage.zh-CN.md) | 三节点部署、状态查看、人工切换、恢复与验收边界 |
+| [HA Usage Guide](guides/ha-usage.en.md) | 同一份手册的英文版 |
 | [Encrypted backup and restore](guides/backup-restore.md) | 加密备份与恢复流程（含 Docker / Kubernetes） |
 | [选择 AWS 接入面](guides/aws-surface-selection.md) | Bedrock Runtime 与 Bedrock Mantle 怎么选，以及两者都不支持什么 |
 | [异步提交与延迟取回](guides/deferred-responses.zh-CN.md) | `background: true` 的提交、取回、取消、删除，以及重启时正在执行的请求为什么会 failed |
+| [Deferred responses](guides/deferred-responses.en.md) | 同一份手册的英文版 |
 | [诊断结论](guides/configuration-findings.zh-CN.md) | `halro doctor` 与控制台「诊断结论」面板：五条规则、证据的读法，以及它为什么不改任何东西 |
 | [Release Process](guides/releasing.md) | 发版流程与证据门禁 |
 
@@ -144,7 +147,7 @@ Markdown 编进二进制，由 `internal/app/admin_master_key_runbook.go` 提供
 | [告警投递适配方案](todo/alert-delivery-design.md) | 告警契约、平台格式、签名、企业网络与投递结果分类 | 提案待评审；`internal/alert` 今天只有 dispatcher |
 | [DLP（脱敏与数据防泄漏）升级方案](todo/dlp-upgrade-plan.zh-CN.md) | 敏感数据标识符、检测配置文件、DLP 策略、Project 绑定与编译快照 | 提案待评审；四层拆分尚未进 `internal/domain` |
 | [路由准入设计](todo/route-eligibility-design.zh-CN.md) | 把熔断器、探针健康与额度/订阅挂起合成一个准入门；作用域由失败自己声明，`FailureReason` 成为路由输入 | 提案待评审；`internal/routegate` 不存在，额度用尽今天不触发回退 |
-| [Halro HA 架构设计](todo/halro-ha-architecture.zh-CN.md) | 三节点同步复制 + 人工提升；账务只在 Provider I/O 前的两个事件与吊销类写上等待，RPO=0；自动故障切换是 §19 的未决问题 | 已实现部分（含 metadata journal）于 2026-10-15 移出 `main`，保存在 `ha` 分支待评审（#404）；内存有界的重新设计完成后再继续 |
+| [Halro HA 架构设计](todo/halro-ha-architecture.zh-CN.md) | 三节点同步复制与人工提升；详细不变量、实施记录与生产验收条件 | 正在移植回 `main`（[移植设计](todo/halro-ha-port-to-main.zh-CN.md)）：Phase 0a 与 0b–2 已回到 `main`，阶段 3（HA 健康系统）仍在 `ha` 分支；生产进入条件及目标环境验收未完成，自动切换已决定不做 |
 | [内存有界的历史存储：重新设计](todo/memory-bounded-redesign.zh-CN.md) | 内存与历史规模、请求速率无关：权威日志不变，热状态有上限并整体 MAC 快照，历史明细进独立 `history.db` 由后台从 WAL 追赶；数据默认永久保留；预算先于方案 | 已评审（#405），§6 预算 2026-10-15 确认；P0（#406）与 P1（Usage 历史索引）完成，实测见 [基线与各阶段结果](verification/memory-bounded-baseline.zh-CN.md) |
 | [实例自述文档与 Agent 操作通道](todo/agent-self-description-plan.zh-CN.md) | 实例把「我是什么、我能做什么、怎么配置我」服务出去：网关口的 `.well-known` 北向自述与 `GET /v1/models`，管理口登录后的 `GET /admin/api/v1/skill.md`；路由表由 `chi.Walk` 从同一棵树生成 | 提案待评审；`internal/selfdescribe` 不存在。不引入机器凭据，MCP 执行通道留待自述文档落地后单独评审 |
 

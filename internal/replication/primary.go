@@ -34,6 +34,7 @@ type PrimaryProgress struct {
 	DurableIndex    uint64
 	ConfirmedIndex  uint64
 	OrderingHeadMAC [sha256.Size]byte
+	Projection      ProjectionState
 }
 
 // PrimaryStateWriter atomically publishes the complete authenticated member
@@ -56,6 +57,7 @@ type PrimaryCoordinator struct {
 	outbound           OutboundQueue
 	persistState       PrimaryStateWriter
 	confirmed          uint64
+	projection         ProjectionState
 	available          bool
 	unavailable        error
 	changed            chan struct{}
@@ -99,10 +101,16 @@ func NewPrimaryCoordinator(clusterID, incarnation, nodeID string, term, confirme
 	if err != nil {
 		return nil, err
 	}
+	cursors, err := journal.StoreCursorsThrough(confirmed)
+	if err != nil {
+		return nil, fmt.Errorf("reconstruct confirmed primary projection: %w", err)
+	}
+	metadataCursor := cursors[StoreMetadata-StoreLedger]
+	projection := ProjectionState{Index: confirmed, MetadataEpoch: metadataCursor.Generation, MetadataSequence: metadataCursor.Sequence}
 	coordinator := &PrimaryCoordinator{
 		clusterID: clusterID, incarnation: incarnation, nodeID: nodeID, term: term, journal: journal,
 		confirmations: tracker, outbound: outbound, persistState: persistState,
-		confirmed: confirmed, available: true, changed: make(chan struct{}),
+		confirmed: confirmed, projection: projection, available: true, changed: make(chan struct{}),
 		pending: make(map[uint64][]byte), peerApplied: make(map[string]uint64, len(peers)),
 	}
 	for _, peer := range peers {
@@ -137,7 +145,7 @@ func NewPrimaryCoordinator(clusterID, incarnation, nodeID string, term, confirme
 		coordinator.pending[expectedIndex] = append([]byte(nil), commit.Encoded...)
 	}
 	_, _, orderingHead := journal.Head()
-	if err := persistState(PrimaryProgress{DurableIndex: index, ConfirmedIndex: confirmed, OrderingHeadMAC: orderingHead}); err != nil {
+	if err := persistState(PrimaryProgress{DurableIndex: index, ConfirmedIndex: confirmed, OrderingHeadMAC: orderingHead, Projection: projection}); err != nil {
 		return nil, fmt.Errorf("persist recovered primary member state: %w", err)
 	}
 	// Authenticate the complete suffix before any network-visible enqueue. A
@@ -191,7 +199,7 @@ func (c *PrimaryCoordinator) RecordDurable(frame Frame) (LocalCommit, error) {
 		c.poisoned = err
 		return LocalCommit{}, fmt.Errorf("register durable frame: %w", err)
 	}
-	if err := c.persistState(PrimaryProgress{DurableIndex: frame.Index, ConfirmedIndex: c.confirmed, OrderingHeadMAC: persistedRecord.MAC}); err != nil {
+	if err := c.persistState(PrimaryProgress{DurableIndex: frame.Index, ConfirmedIndex: c.confirmed, OrderingHeadMAC: persistedRecord.MAC, Projection: c.projection}); err != nil {
 		c.poisoned = err
 		c.available = false
 		c.unavailable = err
@@ -224,13 +232,22 @@ func (c *PrimaryCoordinator) Acknowledge(ack Acknowledgement) (uint64, error) {
 	advanced := confirmed != c.confirmed
 	if advanced {
 		durableIndex, _, orderingHead := c.journal.Head()
-		if err := c.persistState(PrimaryProgress{DurableIndex: durableIndex, ConfirmedIndex: confirmed, OrderingHeadMAC: orderingHead}); err != nil {
+		projection, projectionErr := c.projectionThrough(confirmed)
+		if projectionErr != nil {
+			c.poisoned = projectionErr
+			c.available = false
+			c.unavailable = projectionErr
+			c.signalChanged()
+			return c.confirmed, fmt.Errorf("reconstruct confirmed primary projection: %w", projectionErr)
+		}
+		if err := c.persistState(PrimaryProgress{DurableIndex: durableIndex, ConfirmedIndex: confirmed, OrderingHeadMAC: orderingHead, Projection: projection}); err != nil {
 			c.poisoned = err
 			c.available = false
 			c.unavailable = err
 			c.signalChanged()
 			return c.confirmed, fmt.Errorf("persist confirmed member state: %w", err)
 		}
+		c.projection = projection
 	}
 	c.outbound.Acknowledge(ack.NodeID, ack.DurableIndex, ack.AppliedIndex)
 	if ack.AppliedIndex > c.peerApplied[ack.NodeID] {
@@ -266,6 +283,32 @@ func (c *PrimaryCoordinator) Acknowledge(ack Acknowledgement) (uint64, error) {
 		c.signalChanged()
 	}
 	return confirmed, nil
+}
+
+// projectionThrough advances only across newly confirmed records. Replaying the
+// full ordering prefix for every ACK would make confirmation quadratic.
+func (c *PrimaryCoordinator) projectionThrough(confirmed uint64) (ProjectionState, error) {
+	projection := c.projection
+	for index := c.confirmed + 1; index <= confirmed; index++ {
+		record, err := c.journal.Record(index)
+		if err != nil {
+			return ProjectionState{}, err
+		}
+		if record.Kind != KindData || record.Store != StoreMetadata {
+			continue
+		}
+		if projection.MetadataEpoch == 0 {
+			if record.StoreSequenceFirst != 1 {
+				return ProjectionState{}, fmt.Errorf("ordering metadata begins at sequence %d", record.StoreSequenceFirst)
+			}
+		} else if projection.MetadataEpoch != record.StoreGeneration || projection.MetadataSequence+1 != record.StoreSequenceFirst {
+			return ProjectionState{}, errors.New("ordering metadata range does not continue its confirmed cursor")
+		}
+		projection.MetadataEpoch = record.StoreGeneration
+		projection.MetadataSequence = record.StoreSequenceLast
+	}
+	projection.Index = confirmed
+	return projection, nil
 }
 
 func (c *PrimaryCoordinator) MarkUnavailable(cause error) {

@@ -15,6 +15,8 @@ locally owned control boundary.
 - Anthropic-compatible Messages with portable and native routing
 - Versioned, capability-aware Provider Profiles and fail-closed transport
 - Durable accounting, audit integrity, anomaly containment, and redaction
+- Repository-supported, manually operated Primary/Replica HA (production
+  admission and target-environment validation are still pending)
 - Authenticated Prometheus metrics, Alertmanager rules, and an independent
   dead-man monitor
 
@@ -64,6 +66,10 @@ For SDK examples and the complete Admin workflow, read the
 [User Guide](docs/guides/user-guide.md), also available in
 [简体中文](docs/guides/user-guide.zh-CN.md). For deployment, upgrades, backup,
 recovery, and hardening, use the [Operator Guide](docs/guides/operator-guide.md).
+For a three-member HA deployment and manual handoff, read the
+[HA Usage Guide](docs/guides/ha-usage.en.md), also available in
+[简体中文](docs/guides/ha-usage.zh-CN.md). The Docker example below uses
+`v0.8.5`, which does **not** include the `cluster` commands.
 
 ## Run with Docker
 
@@ -147,9 +153,11 @@ one requires, are in
 
 Two container facts that bite:
 
-- **One replica, always.** Halro is single-writer over one data directory.
-  Mount the persistent parent at `/var/lib/halro`, and give Kubernetes
-  `replicas: 1` with a `Recreate` strategy — never a rolling update.
+- **One process per data directory.** For the Standalone Docker example here,
+  mount the persistent parent at `/var/lib/halro`; use Kubernetes `replicas: 1`
+  with a `Recreate` strategy. HA is a separate Primary/Replica deployment with
+  a distinct data directory and PVC for each member, approved seeding, and
+  manual promotion; see the [HA Usage Guide](docs/guides/ha-usage.en.md).
 - **`healthy` is not reachability.** `HEALTHCHECK` calls a readiness URL from
   inside the container, so it proves the process is ready, not that a published
   port, certificate name, firewall, or reverse proxy works. Probe the external
@@ -173,9 +181,10 @@ the Kubernetes manifest — is in the
 ## Data durability and encrypted backup
 
 Container or Pod replacement is safe only when the complete
-`storage.data_dir` remains on persistent storage. Halro is currently a
-single-writer service: Docker/Kubernetes deployments must run one instance,
-and Kubernetes must use `replicas: 1` with a `Recreate` strategy.
+`storage.data_dir` remains on persistent storage. In Standalone mode, run one
+instance for that directory and use Kubernetes `replicas: 1` with a `Recreate`
+strategy. In HA mode, each member owns its own persistent directory and no two
+members may mount the same writable PVC.
 
 File-mode `master.key` is not stored in the encrypted backup. Keep it outside
 the data directory and back it up independently from both the `.hmbk` archive
@@ -183,8 +192,10 @@ and its dedicated 32-byte backup key. Never restore only `halro.db` or mix
 the database, Ledger, Audit, Usage, and Provider-object files from different
 snapshots.
 
-Backups are deliberately offline: stop Halro, create the archive, verify it,
-and regularly perform an isolated restore drill. For containers, mount the
+Standalone backups are deliberately offline: stop Halro, create the archive,
+verify it, and regularly perform an isolated restore drill. HA has a separate
+Replica maintenance, backup, and report procedure in the
+[HA Usage Guide](docs/guides/ha-usage.en.md). For containers, mount the
 persistent parent directory and configure `storage.data_dir` as its child so
 restore can atomically rename the data directory on the same filesystem.
 
@@ -351,10 +362,13 @@ Capability-aware router ──► versioned Provider Primitive
 SafeTransport ──► OpenAI / Anthropic / Azure / DeepSeek / Gemini / Bedrock
 ```
 
-Halro currently runs as a standalone, single-writer system backed by bbolt
-metadata, an authoritative Ledger WAL, private local objects, and Parquet usage
-partitions. HA/Cluster and Realtime material in the architecture documents is
-future, gated design—not a statement of current runtime support.
+Without a `replication` configuration block, Halro runs as a Standalone,
+single-writer system backed by bbolt metadata, an authoritative Ledger WAL,
+private local objects, and Parquet usage partitions. The current source tree
+also implements manually operated Primary/Replica HA. Its repository gates
+and local exercise do not constitute production admission: target-environment
+fault injection, soak, RTO/RPO evidence, and the release gates are still
+required. Realtime remains unimplemented.
 
 ## Observability
 
@@ -383,10 +397,11 @@ contract, and production boundaries are documented in the
 
 ### Use and operations
 
-- [User Guide](docs/guides/user-guide.md) · [中文使用手册](docs/guides/user-guide.zh-CN.md)
+- [User Guide](docs/guides/user-guide.md)
 - [Operator Guide](docs/guides/operator-guide.md)
+- [HA Usage Guide](docs/guides/ha-usage.en.md) — deployment, status, manual handoff, recovery, and validation
 - [Backup and restore](docs/guides/backup-restore.md)
-- [异步提交与延迟取回](docs/guides/deferred-responses.zh-CN.md) — `background: true`
+- [Deferred responses](docs/guides/deferred-responses.en.md) — `background: true`
 - [Choosing an AWS access surface](docs/guides/aws-surface-selection.md)
 - [Metrics reference](docs/contracts/metrics-reference.md)
 - [Prometheus/Alertmanager deployment](deploy/observability/README.md)

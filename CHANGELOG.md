@@ -10,8 +10,9 @@ semantic versioning.
 
 - High-availability members are back on the current release line: the
   Primary/Replica replication runtime, `halro cluster` (establish, seed,
-  status, promote, stepdown, maintenance, leave), Replica backups and the HA
-  runbooks, as they were verified on the `ha` branch. A Replica now opens its accounting state
+  status, promote, stepdown, maintenance, leave), Replica backups, the HA
+  runbooks and the read-only Cluster status page in the Admin console, as they
+  were verified on the `ha` branch. A Replica now opens its accounting state
   the way a Standalone start does — state snapshot, archive, replay of the
   suffix — through the prefix it has applied, keeps its usage history from the
   records it applies, and writes snapshots while it runs, so its memory stays
