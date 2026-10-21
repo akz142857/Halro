@@ -27,6 +27,14 @@ describe("server refusals", () => {
     expect(localizedError(i18n.t, error)).toBe("The route is disabled. Enable it first.");
   });
 
+  it("explains an ambiguous HA mutation without repeating the server's English", async () => {
+    const error = refusal("replication_unavailable", "replication confirmation unavailable; read resource state before retrying", 503);
+    expect(localizedError(i18n.t, error)).toContain("回读资源及修订号");
+    expect(errorDetail(error)).toBe("");
+    await applyLocale("en-US");
+    expect(localizedError(i18n.t, error)).toContain("read the resource and revision");
+  });
+
   it("translates every Run Governance consistency refusal", async () => {
     const cases = [
       ["governance_unavailable", "业务结果治理暂不可用。当前页面不会把缺失数据解释为零，请先检查系统状态。", "Business outcome governance is unavailable. This view will not interpret missing data as zero; check system status first."],

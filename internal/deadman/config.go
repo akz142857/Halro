@@ -41,8 +41,11 @@ type FreshnessConfig struct {
 }
 
 type TargetConfig struct {
-	ID              string           `yaml:"id"`
-	Kind            string           `yaml:"kind"`
+	ID   string `yaml:"id"`
+	Kind string `yaml:"kind"`
+	// Mode may be ha_client_root on a Halro target. Empty preserves the v1
+	// ordinary 2xx endpoint check.
+	Mode            string           `yaml:"mode,omitempty"`
 	URL             string           `yaml:"url"`
 	BearerTokenFile string           `yaml:"bearer_token_file"`
 	TLS             TLSConfig        `yaml:"tls"`
@@ -157,6 +160,19 @@ func (c Config) Validate() error {
 		}
 		if target.Kind == "prometheus" && target.Freshness == nil {
 			problems = append(problems, fmt.Errorf("target %q must configure a freshness query", target.ID))
+		}
+		if target.Mode != "" {
+			if target.Mode != "ha_client_root" || target.Kind != "halro" {
+				problems = append(problems, fmt.Errorf("target %q has unsupported probe mode %q for kind %q", target.ID, target.Mode, target.Kind))
+			} else {
+				parsed, err := url.Parse(target.URL)
+				if err != nil || parsed.Path != "/" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.Opaque != "" {
+					problems = append(problems, fmt.Errorf("target %q HA client probe must use the HTTPS Service root without query or fragment", target.ID))
+				}
+				if target.Freshness != nil || target.AnchorURL != "" {
+					problems = append(problems, fmt.Errorf("target %q HA client probe cannot use freshness or anchor_url", target.ID))
+				}
+			}
 		}
 		if target.AnchorURL != "" {
 			if target.Kind != "halro" {

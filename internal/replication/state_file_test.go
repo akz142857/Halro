@@ -2,6 +2,7 @@ package replication
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"os"
 	"path/filepath"
 	"testing"
@@ -85,5 +86,28 @@ func TestStateBootstrapIsBoundedAndMustBeFollowedByAuthentication(t *testing.T) 
 	}
 	if _, err := ReadStateBootstrap(path); err == nil {
 		t.Fatal("oversized bootstrap was accepted")
+	}
+}
+
+func TestStateBootstrapReadsVersionThreeOnlyAfterAuthentication(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	masterKey := bytes.Repeat([]byte{0x42}, 32)
+	clusterKey, err := DeriveClusterKey(masterKey, "inc_01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := validMemberState()
+	state.Version = TransitionStateVersion
+	state.Transition = TransitionCursor{JournalID: "0123456789abcdef0123456789abcdef", Sequence: 0, Digest: sha256.Sum256([]byte("baseline"))}
+	if err := WriteState(path, state, clusterKey[:]); err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := ReadStateBootstrap(path)
+	if err != nil || bootstrap.Version != TransitionStateVersion {
+		t.Fatalf("bootstrap=%+v err=%v", bootstrap, err)
+	}
+	decoded, err := ReadStateWithMasterKey(path, masterKey)
+	if err != nil || decoded.Transition != state.Transition {
+		t.Fatalf("authenticated v3 state=%+v err=%v", decoded.Transition, err)
 	}
 }

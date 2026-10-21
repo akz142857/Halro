@@ -61,6 +61,13 @@ docker compose \
 Prometheus and Alertmanager listen only on loopback and no management port is
 published. Prometheus rule files are the only alert authority.
 
+For an HA cluster, provision separate authenticated scrape targets for every
+member and run the optional read-only `halro-ha-health` view outside the
+Primary failure domain. Its exact target labels, mTLS boundary, command and
+acceptance checks are in
+[`docs/observability/ha-health-service.md`](../../docs/observability/ha-health-service.md).
+The single-target Compose example remains the Standalone topology.
+
 ## Production boundary
 
 Production requires Phase B: versioned Metrics credentials and mutual workload
@@ -84,6 +91,29 @@ general-purpose probe. Its configuration therefore requires at least one
 `halro`, one `prometheus`, and one `alertmanager` target. Omitting any of
 those kinds is a configuration error rather than a way to silently reduce
 coverage.
+
+For HA, an optional Halro target with `mode: ha_client_root` probes the
+actual HTTPS client Service root from the dead-man failure domain. It closes
+each connection before retrying Ready Replica routes, verifies the returned
+`cluster_id` against the probe configuration, and only succeeds after reaching
+the Primary without an earlier unidentified route. Repeated checks with only
+Replica routes, transport failure, an identity gap or a wrong cluster enter
+the normal persisted down/up notification state machine. The event keeps
+`target_kind=halro`; give this target a distinct `id` so receivers can route
+client-entry incidents separately from node readiness. This is a no-Provider
+route check, not an end-to-end write or a client-final success metric. Place
+the target on an independently reachable network path, with its own reviewed
+TLS trust and without Gateway write credentials. The commented target in
+`config.example.yaml` shows the required fields; target-environment receiver
+delivery and Service routing still need fault-injection acceptance.
+
+For a routing rehearsal, verify that each new probe connection traverses the
+actual client Service and can select different Ready backends. `kubectl
+port-forward service/halro` resolves one backend Pod when the forward starts;
+repeated requests through that forward do not exercise Service balancing and
+can falsely report `primary_not_observed` when it selected a Replica. A local
+TCP bridge inside the cluster can preserve the Service hop for a limited test,
+but it does not establish an independent failure domain.
 
 Build and validate it with:
 

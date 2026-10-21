@@ -92,6 +92,7 @@ export function localizedError(t: TFunction, error: unknown) {
     governance_summary_unavailable: "errors.governanceSummaryUnavailable",
     governance_export_inconsistent: "errors.governanceExportInconsistent",
     governance_summary_overflow: "errors.governanceSummaryOverflow",
+    replication_unavailable: "errors.replicationUnavailable",
     deployment_price_unavailable: "errors.deploymentPriceUnavailable",
     price_effective_from_conflict: "errors.priceEffectiveConflict",
     price_timeline_conflict: "errors.priceTimelineConflict",
@@ -212,6 +213,7 @@ export function errorDetail(error: unknown) {
   // instruction makes the UI look like an internal validation failure.
   const localizedWorkflowCodes = [
     "invalid_request",
+    "replication_unavailable",
     "alert_id_required",
     "deployment_provider_unavailable",
     "deployment_provider_adapter_unavailable",

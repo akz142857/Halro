@@ -86,6 +86,7 @@ export const zhCN = {
     governanceSummaryUnavailable: "无法从一致的费用与结果快照生成治理汇总。请检查系统状态后重试。",
     governanceExportInconsistent: "治理导出无法取得一致的费用与结果快照，未接受不完整导出。",
     governanceSummaryOverflow: "治理汇总超出支持的数值范围，请缩小统计群组后重试。",
+    replicationUnavailable: "复制确认暂不可用。操作可能在副本恢复后生效；请等待恢复并回读资源及修订号，再决定是否重试。",
     invalidConsoleWindow: "控制台窗口长度不在允许范围内。",
     consoleWindowExceedsRetention: "控制台窗口不能超过归档保留天数，否则界面会承诺归档已经没有的历史。",
     consoleWindowTrimUnacknowledged: "缩短窗口会丢弃调用历史，需要先确认。",

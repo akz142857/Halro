@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/akz142857/Halro/internal/replication"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
@@ -39,6 +40,14 @@ func adminMutationError(writer http.ResponseWriter, err error) {
 		adminPreconditionFailed(writer)
 	case errors.Is(err, boltstore.ErrAlreadyExists), errors.Is(err, boltstore.ErrKeyHashConflict):
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": "resource conflict"})
+	case errors.Is(err, replication.ErrReplicationUnavailable):
+		// The local mutation may become confirmed after a Replica returns, even
+		// though this response cannot promise that outcome. Operators must read
+		// the resource and its revision before deciding whether to retry.
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{
+			"code":  "replication_unavailable",
+			"error": "replication confirmation unavailable; read resource state before retrying",
+		})
 	default:
 		adminBadRequest(writer, err.Error())
 	}

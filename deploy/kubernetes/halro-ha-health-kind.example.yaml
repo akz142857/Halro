@@ -1,0 +1,12 @@
+# Isolated local Kubernetes substrate for HA health acceptance. It creates
+# one control plane and three schedulable workers; it does not initialize or
+# deploy Halro members. The control plane has a NoSchedule taint by default,
+# while the StatefulSet requires three distinct schedulable hosts.
+# Use an explicit cluster name so the current kubectl context is never assumed.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
+  - role: worker

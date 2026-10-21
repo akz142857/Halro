@@ -7,6 +7,7 @@ spec:
   selector: {app.kubernetes.io/name: halro, app.kubernetes.io/component: ha-member}
   ports:
     - {name: replication, port: 9910, targetPort: replication}
+    - {name: metrics, port: 9090, targetPort: metrics}
 ---
 # Client routing option (a): every Ready member is an endpoint. Replicas return
 # 503 not_primary with Retry-After; clients must retry.

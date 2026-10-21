@@ -22,9 +22,9 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/audit"
+	"github.com/akz142857/Halro/internal/budget"
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
-	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/replication"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
@@ -184,6 +184,9 @@ func TestPrimaryAndReplicaRuntimesReplicateAndApplyAnAuditFrame(t *testing.T) {
 	if _, err := primary.store.PutGatewayKey(context.Background(), key, key.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
+	if got := primary.replication.requiredWaits[requiredMetadata][0].Load(); got != 1 {
+		t.Fatalf("revoking the Gateway key did not complete a required metadata confirmation: %d", got)
+	}
 	revocationDeadline := time.Now().Add(5 * time.Second)
 	for {
 		replicatedKey, readErr := replica.store.GetGatewayKey(context.Background(), bootstrap.KeyID)
@@ -201,15 +204,21 @@ func TestPrimaryAndReplicaRuntimesReplicateAndApplyAnAuditFrame(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	ledgerHead, err := primary.ledger.Append(context.Background(), ledger.Event{
-		EventID: "evt_runtime_usage_replication", Kind: ledger.EventRequestAccepted,
-		RequestID: "req_runtime_usage_replication", ProjectID: bootstrap.ProjectID,
-		PeriodID: bootstrap.ProjectID + ":2026-09-27:UTC", OccurredAt: time.Now().UTC(),
-		PeriodTimezone: "UTC", PeriodTimezoneVersion: 1,
-	})
+	request, err := primary.accounting.BeginRequestDetailed(context.Background(),
+		bootstrap.ProjectID, bootstrap.KeyID, "req_runtime_usage_replication", "chat")
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, err = primary.accounting.ReserveAttemptDetailed(context.Background(), request, 1_000, 100,
+		budget.AttemptMetadata{RouteID: bootstrap.RouteID, ProviderID: bootstrap.ProviderID,
+			ProviderModel: "gpt-test", AttemptNumber: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := primary.replication.requiredWaits[requiredLedger][0].Load(); got != 1 {
+		t.Fatalf("reserving an attempt did not complete a required Ledger confirmation: %d", got)
+	}
+	ledgerHead := primary.usage.Watermark()
 	deadline := time.Now().Add(8 * time.Second)
 	for {
 		primaryState := primary.replication.publisher.Snapshot()

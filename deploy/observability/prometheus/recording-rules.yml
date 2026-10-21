@@ -2,6 +2,51 @@ groups:
   - name: halro-recording
     interval: 15s
     rules:
+      # Only compare replication progress inside one continuously observed
+      # term and incarnation. A label change creates a second incarnation
+      # series in the range, while a missing metric sample reduces its count
+      # below up's; neither can certify a complete five-minute epoch. More
+      # than one source for any of these logical series also makes the epoch
+      # unknown, without causing a many-to-many evaluation error.
+      - record: halro:ha_epoch_stable:bool
+        expr: >-
+          (max by (environment, region, cluster, instance)
+          (changes(halro_cluster_term{job="halro",expected_target="true"}[5m])) == bool 0)
+          * on (environment, region, cluster, instance)
+          (count by (environment, region, cluster, instance)
+          (count_over_time(halro_cluster_incarnation_info{job="halro",expected_target="true"}[5m])) == bool 1)
+          and on (environment, region, cluster, instance)
+          (max by (environment, region, cluster, instance)
+          (count_over_time(halro_cluster_term{job="halro",expected_target="true"}[5m]))
+          == on (environment, region, cluster, instance)
+          max by (environment, region, cluster, instance)
+          (count_over_time(up{job="halro",expected_target="true"}[5m])))
+          and on (environment, region, cluster, instance)
+          (sum by (environment, region, cluster, instance)
+          (count_over_time(halro_cluster_incarnation_info{job="halro",expected_target="true"}[5m]))
+          == on (environment, region, cluster, instance)
+          max by (environment, region, cluster, instance)
+          (count_over_time(up{job="halro",expected_target="true"}[5m])))
+          and on (environment, region, cluster, instance)
+          (count by (environment, region, cluster, instance)
+          (count_over_time(halro_cluster_term{job="halro",expected_target="true"}[5m])) == 1)
+          and on (environment, region, cluster, instance)
+          (count by (environment, region, cluster, instance)
+          (count_over_time(up{job="halro",expected_target="true"}[5m])) == 1)
+          and on (environment, region, cluster, instance)
+          (up{job="halro",expected_target="true"} == 1)
+          and on (environment, region, cluster, instance)
+          (max by (environment, region, cluster, instance)
+          (timestamp(halro_cluster_term{job="halro",expected_target="true"}))
+          == on (environment, region, cluster, instance)
+          max by (environment, region, cluster, instance)
+          (timestamp(up{job="halro",expected_target="true"})))
+          and on (environment, region, cluster, instance)
+          (count by (environment, region, cluster, instance)
+          (timestamp(halro_cluster_incarnation_info{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance)
+          (timestamp(up{job="halro",expected_target="true"}))) == 1)
       - record: halro:requests:rate5m
         expr: >-
           sum by (environment, region, cluster)

@@ -169,18 +169,23 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 variable = variables[name]
                 self.assertIn(f"${{{variable}%%-*}}~${{{variable}#*-}}", source)
 
-    def test_both_released_binaries_carry_the_same_build_identity(self):
-        # The dead-man ships in the same archive and runs outside Halro's
-        # failure domain; a probe that cannot say which build it is cannot be
-        # tied to the release it came from.
+    def test_all_released_binaries_carry_the_same_build_identity(self):
+        # The dead-man and HA health view ship in the same archive but run
+        # outside Halro's failure domain. Their identity must match the release.
         build = self.workflow[
             self.workflow.index("package_dir=\"release/halro-${GOOS}-${GOARCH}\"") : self.workflow.index(
                 "cp deploy/observability/external-probe/config.example.yaml"
             )
         ]
-        self.assertEqual(build.count("internal/buildinfo.Version=${RELEASE_VERSION}"), 2)
-        self.assertEqual(build.count("internal/buildinfo.Commit=${RELEASE_COMMIT}"), 2)
-        self.assertEqual(build.count("internal/buildinfo.Date=${RELEASE_DATE}"), 2)
+        for binary in ("halro", "halro-deadman", "halro-ha-health"):
+            self.assertIn(f'-o "${{package_dir}}/{binary}" ./cmd/{binary}', build)
+        self.assertEqual(build.count("internal/buildinfo.Version=${RELEASE_VERSION}"), 3)
+        self.assertEqual(build.count("internal/buildinfo.Commit=${RELEASE_COMMIT}"), 3)
+        self.assertEqual(build.count("internal/buildinfo.Date=${RELEASE_DATE}"), 3)
+        self.assertIn(
+            'cp docs/observability/ha-health-service.md "${package_dir}/halro-ha-health.README.md"',
+            self.workflow,
+        )
 
     def test_release_notes_come_from_the_changelog(self):
         # --generate-notes writes the merged-pull-request list, which describes

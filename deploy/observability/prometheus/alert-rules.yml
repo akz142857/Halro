@@ -2,12 +2,42 @@ groups:
   - name: halro-alerts
     interval: 15s
     rules:
+      # Two targets for one configured member make its HA metrics ambiguous.
+      # This rule has no vector joins, so it still evaluates when other HA
+      # rules cannot match the duplicate raw series.
+      - alert: HalroMemberDuplicateScrapeSource
+        expr: >-
+          count by (environment, region, cluster, instance)
+          (up{job="halro",expected_target="true"}) > 1
+        for: 0m
+        labels: {severity: critical, service: halro, owner: sre, category: ha}
+        annotations:
+          summary: Multiple Metrics scrape sources claim one Halro member
+          runbook_url: /docs/observability/operations-runbook.md#halromemberduplicatescrapesource
       - alert: HalroNoPrimary
         expr: >-
-          sum by (environment, region, cluster) (halro_cluster_incarnation_info)
-          > 0
+          count by (environment, region, cluster)
+          ((up{job="halro",expected_target="true"} == 1)
+          and on (environment, region, cluster, instance)
+          (count by (environment, region, cluster, instance)
+          ((halro_cluster_role{job="halro",expected_target="true"} == 1)
+          and on (environment, region, cluster, instance, role)
+          (timestamp(halro_cluster_role{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))) == 1))
+          == on (environment, region, cluster)
+          count by (environment, region, cluster)
+          (up{job="halro",expected_target="true"})
           unless on (environment, region, cluster)
-          sum by (environment, region, cluster) (halro_cluster_role{role="primary"} == 1)
+          sum by (environment, region, cluster)
+          ((halro_cluster_role{job="halro",expected_target="true",role="primary"} == 1)
+          and on (environment, region, cluster, instance)
+          (count by (environment, region, cluster, instance)
+          (up{job="halro",expected_target="true"}) == 1)
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_cluster_role{job="halro",expected_target="true",role="primary"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"}))))
           > 0
         for: 2m
         labels: {severity: critical, service: halro, owner: sre, category: ha}
@@ -15,35 +45,412 @@ groups:
           summary: No Halro member reports the Primary role
           runbook_url: /docs/observability/operations-runbook.md#halronoprimary
       - alert: HalroMultiplePrimaries
-        expr: sum by (environment, region, cluster) (halro_cluster_role{role="primary"} == 1) > 1
+        expr: >-
+          sum by (environment, region, cluster)
+          ((halro_cluster_role{job="halro",expected_target="true",role="primary"} == 1)
+          and on (environment, region, cluster, instance)
+          (count by (environment, region, cluster, instance)
+          (up{job="halro",expected_target="true"}) == 1)
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_cluster_role{job="halro",expected_target="true",role="primary"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))) > 1
         for: 0m
         labels: {severity: critical, service: halro, owner: sre, category: ha}
         annotations:
           summary: Multiple Halro members report the Primary role
           runbook_url: /docs/observability/operations-runbook.md#halromultipleprimaries
+      - alert: HalroMemberIncarnationConflict
+        expr: >-
+          count by (environment, region, cluster)
+          (count by (environment, region, cluster, incarnation)
+          ((halro_cluster_incarnation_info{job="halro",expected_target="true"} == 1)
+          and on (environment, region, cluster, instance, incarnation)
+          (timestamp(halro_cluster_incarnation_info{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"}))))) > 1
+        for: 0m
+        labels: {severity: critical, service: halro, owner: sre, category: ha}
+        annotations:
+          summary: Halro members report conflicting cluster incarnations
+          runbook_url: /docs/observability/operations-runbook.md#halromemberincarnationconflict
+      - alert: HalroMemberIdentityMissing
+        expr: >-
+          up{job="halro",expected_target="true"} == 1
+          unless on (environment, region, cluster, instance)
+          ((halro_cluster_member_info{job="halro",expected_target="true"} == 1)
+          and on (environment, region, cluster, instance, cluster_id, node_id)
+          (timestamp(halro_cluster_member_info{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"}))))
+        for: 1m
+        labels: {severity: warning, service: halro, owner: sre, category: ha}
+        annotations:
+          summary: A scraped Halro member does not report its configured HA identity
+          runbook_url: /docs/observability/operations-runbook.md#halromemberidentitymissing
+      - alert: HalroMemberRoleMissing
+        expr: >-
+          up{job="halro",expected_target="true"} == 1
+          unless on (environment, region, cluster, instance)
+          ((halro_cluster_role{job="halro",expected_target="true"} == 1)
+          and on (environment, region, cluster, instance, role)
+          (timestamp(halro_cluster_role{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"}))))
+        for: 1m
+        labels: {severity: warning, service: halro, owner: sre, category: ha}
+        annotations:
+          summary: A scraped Halro member has no HA role observation
+          runbook_url: /docs/observability/operations-runbook.md#halromemberrolemissing
+      - alert: HalroMemberRoleAmbiguous
+        expr: >-
+          count by (environment, region, cluster, instance)
+          ((halro_cluster_role{job="halro",expected_target="true"} == 1)
+          and on (environment, region, cluster, instance, role)
+          (timestamp(halro_cluster_role{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))) > 1
+          and on (environment, region, cluster, instance)
+          (count by (environment, region, cluster, instance)
+          (up{job="halro",expected_target="true"}) == 1)
+        for: 0m
+        labels: {severity: critical, service: halro, owner: sre, category: ha}
+        annotations:
+          summary: A Halro member has conflicting role observations
+          runbook_url: /docs/observability/operations-runbook.md#halromemberroleambiguous
+      # Instant selectors can retain a missing metric through Prometheus's
+      # lookback; require the raw sample timestamp of each fixed signal to
+      # match this member's latest successful up scrape.
+      - alert: HalroMemberHASignalMissing
+        expr: >-
+          (up{job="halro",expected_target="true"} == 1)
+          and on (environment, region, cluster, instance)
+          (count by (environment, region, cluster, instance)
+          (up{job="halro",expected_target="true"}) == 1)
+          unless on (environment, region, cluster, instance)
+          (
+            (count by (environment, region, cluster, instance)
+            (timestamp(halro_cluster_maintenance{job="halro",expected_target="true"})
+            == on (environment, region, cluster, instance) group_left()
+            max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"}))) == 1)
+            and on (environment, region, cluster, instance)
+            (count by (environment, region, cluster, instance)
+            (timestamp(halro_cluster_term{job="halro",expected_target="true"})
+            == on (environment, region, cluster, instance) group_left()
+            max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"}))) == 1)
+            and on (environment, region, cluster, instance)
+            (count by (environment, region, cluster, instance)
+            (timestamp(halro_cluster_promised_term{job="halro",expected_target="true"})
+            == on (environment, region, cluster, instance) group_left()
+            max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"}))) == 1)
+            and on (environment, region, cluster, instance)
+            (sum by (environment, region, cluster, instance)
+            (count by (environment, region, cluster, instance, kind)
+            (timestamp(halro_replication_index{job="halro",expected_target="true",kind=~"durable|confirmed|applied"})
+            == on (environment, region, cluster, instance) group_left()
+            max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"}))) == bool 1) == 3)
+            and on (environment, region, cluster, instance)
+            (count by (environment, region, cluster, instance)
+            (timestamp(halro_replication_startup_ready{job="halro",expected_target="true"})
+            == on (environment, region, cluster, instance) group_left()
+            max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"}))) == 1)
+            and on (environment, region, cluster, instance)
+            (count by (environment, region, cluster, instance)
+            (timestamp(halro_replication_unavailable{job="halro",expected_target="true"})
+            == on (environment, region, cluster, instance) group_left()
+            max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"}))) == 1)
+            and on (environment, region, cluster, instance)
+            (count by (environment, region, cluster, instance)
+            (timestamp(halro_replication_member_incompatible{job="halro",expected_target="true",reason=~"schema|key_challenge|spki"})
+            == on (environment, region, cluster, instance) group_left()
+            max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"}))) == 3)
+            and on (environment, region, cluster, instance)
+            (
+              count by (environment, region, cluster, instance)
+              (timestamp(halro_replication_peer_connected{job="halro",expected_target="true"})
+              == on (environment, region, cluster, instance) group_left()
+              max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+              == on (environment, region, cluster) group_left()
+              (count by (environment, region, cluster)
+              (count by (environment, region, cluster, instance)
+              (up{job="halro",expected_target="true"})) - 1)
+            )
+          )
+        for: 1m
+        labels: {severity: warning, service: halro, owner: sre, category: ha}
+        annotations:
+          summary: A scraped Halro member has an incomplete HA signal inventory
+          runbook_url: /docs/observability/operations-runbook.md#halromemberhasignalmissing
+      - alert: HalroTransitionJournalCapacityUnreadable
+        expr: >-
+          (
+            (halro_replication_member_state_version{job="halro",expected_target="true"} == 3)
+            and on (environment, region, cluster, instance)
+            (up{job="halro",expected_target="true"} == 1)
+            and on (environment, region, cluster, instance)
+            (timestamp(halro_replication_member_state_version{job="halro",expected_target="true"})
+            == on (environment, region, cluster, instance) group_left()
+            max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+          )
+          unless on (environment, region, cluster, instance)
+          (
+            (halro_replication_transition_journal_capacity_readable{job="halro",expected_target="true"} == 1)
+            and on (environment, region, cluster, instance)
+            (timestamp(halro_replication_transition_journal_capacity_readable{job="halro",expected_target="true"})
+            == on (environment, region, cluster, instance) group_left()
+            max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+            and on (environment, region, cluster, instance)
+            (count by (environment, region, cluster, instance)
+            (timestamp(halro_replication_transition_journal_capacity_readable{job="halro",expected_target="true"})
+            == on (environment, region, cluster, instance) group_left()
+            max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"}))) == 1)
+            and on (environment, region, cluster, instance)
+            (count by (environment, region, cluster, instance)
+            (timestamp(halro_replication_transition_journal_segments{job="halro",expected_target="true"})
+            == on (environment, region, cluster, instance) group_left()
+            max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"}))) == 1)
+            and on (environment, region, cluster, instance)
+            (count by (environment, region, cluster, instance)
+            (timestamp(halro_replication_transition_journal_bytes{job="halro",expected_target="true"})
+            == on (environment, region, cluster, instance) group_left()
+            max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"}))) == 1)
+          )
+        for: 1m
+        labels: {severity: warning, service: halro, owner: sre, category: ha}
+        annotations:
+          summary: A version-3 Halro member cannot account for its retained transition journal files
+          runbook_url: /docs/observability/operations-runbook.md#halrotransitionjournalcapacityunreadable
+      - alert: HalroMemberIdentityMismatch
+        expr: >-
+          ((halro_cluster_member_info{job="halro",expected_target="true"} == 1
+          unless on (environment, region, cluster, instance, node_id)
+          label_replace(count by (environment, region, cluster, instance)
+          (halro_cluster_member_info{job="halro",expected_target="true"} == 1),
+          "node_id", "$1", "instance", "(.+)"))
+          or
+          (halro_cluster_member_info{job="halro",expected_target="true"} == 1
+          unless on (environment, region, cluster, instance, cluster_id)
+          label_replace(count by (environment, region, cluster, instance)
+          (halro_cluster_member_info{job="halro",expected_target="true"} == 1),
+          "cluster_id", "$1", "cluster", "(.+)")))
+          and on (environment, region, cluster, instance, cluster_id, node_id)
+          (timestamp(halro_cluster_member_info{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+        for: 0m
+        labels: {severity: critical, service: halro, owner: sre, category: ha}
+        annotations:
+          summary: A Halro member's self-reported identity disagrees with scrape inventory
+          runbook_url: /docs/observability/operations-runbook.md#halromemberidentitymismatch
+      - alert: HalroReplicationIndexOrderingInvalid
+        expr: >-
+          ((max by (environment, region, cluster, instance, job, expected_target)
+          (halro_replication_durable_index{job="halro",expected_target="true"})
+          < on (environment, region, cluster, instance)
+          max by (environment, region, cluster, instance, job, expected_target)
+          (halro_replication_confirmed_index{job="halro",expected_target="true"}))
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_replication_durable_index{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_replication_confirmed_index{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"}))))
+          and on (environment, region, cluster, instance)
+          (count by (environment, region, cluster, instance)
+          (up{job="halro",expected_target="true"}) == 1)
+          or
+          ((max by (environment, region, cluster, instance, job, expected_target)
+          (halro_replication_confirmed_index{job="halro",expected_target="true"})
+          < on (environment, region, cluster, instance)
+          max by (environment, region, cluster, instance, job, expected_target)
+          (halro_replication_applied_index{job="halro",expected_target="true"}))
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_replication_confirmed_index{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_replication_applied_index{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"}))))
+          and on (environment, region, cluster, instance)
+          (count by (environment, region, cluster, instance)
+          (up{job="halro",expected_target="true"}) == 1)
+        for: 0m
+        labels: {severity: critical, service: halro, owner: sre, category: ha}
+        annotations:
+          summary: A Halro member reports invalid durable/confirmed/applied ordering
+          runbook_url: /docs/observability/operations-runbook.md#halroreplicationindexorderinginvalid
+      - alert: HalroPromisedTermInvalid
+        expr: >-
+          max by (environment, region, cluster, instance, job, expected_target)
+          (halro_cluster_promised_term{job="halro",expected_target="true"})
+          < on (environment, region, cluster, instance)
+          max by (environment, region, cluster, instance, job, expected_target)
+          (halro_cluster_term{job="halro",expected_target="true"})
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_cluster_promised_term{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_cluster_term{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+          and on (environment, region, cluster, instance)
+          (count by (environment, region, cluster, instance)
+          (up{job="halro",expected_target="true"}) == 1)
+        for: 0m
+        labels: {severity: critical, service: halro, owner: sre, category: ha}
+        annotations:
+          summary: A Halro member reports a promise below its current term
+          runbook_url: /docs/observability/operations-runbook.md#halropromisedterminvalid
+      - alert: HalroReplicationIndexRegressed
+        expr: >-
+          delta(halro_replication_index{job="halro",expected_target="true"}[5m]) < 0
+          and on (environment, region, cluster, instance)
+          halro:ha_epoch_stable:bool == 1
+          and on (environment, region, cluster, instance, kind)
+          (timestamp(halro_replication_index{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_cluster_term{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+          and on (environment, region, cluster, instance)
+          (count by (environment, region, cluster, instance)
+          (timestamp(halro_cluster_incarnation_info{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"}))) == 1)
+        for: 0m
+        labels: {severity: critical, service: halro, owner: sre, category: ha}
+        annotations:
+          summary: A Halro member's replication index regressed within one epoch
+          runbook_url: /docs/observability/operations-runbook.md#halroreplicationindexregressed
       - alert: HalroAwaitingOperator
-        expr: halro_replication_startup_ready == 0 and on (instance) halro_cluster_role{role="primary"} == 1
+        expr: >-
+          (halro_replication_startup_ready{job="halro",expected_target="true"} == 0)
+          and on (environment, region, cluster, instance)
+          (halro_cluster_role{job="halro",expected_target="true",role="primary"} == 1)
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_replication_startup_ready{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_cluster_role{job="halro",expected_target="true",role="primary"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
         for: 2m
         labels: {severity: critical, service: halro, owner: sre, category: ha, role: primary}
         annotations:
           summary: A Halro member is waiting for startup role adjudication
           runbook_url: /docs/observability/operations-runbook.md#halroawaitingoperator
       - alert: HalroReplicationUnavailable
-        expr: halro_replication_unavailable == 1 and on (instance) halro_cluster_role{role="primary"} == 1
+        expr: >-
+          (halro_replication_unavailable{job="halro",expected_target="true"} == 1)
+          and on (environment, region, cluster, instance)
+          (halro_cluster_role{job="halro",expected_target="true",role="primary"} == 1)
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_replication_unavailable{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_cluster_role{job="halro",expected_target="true",role="primary"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
         for: 1m
         labels: {severity: critical, service: halro, owner: sre, category: ha, role: primary}
         annotations:
-          summary: The Halro Primary cannot confirm replicated writes
+          summary: The Halro Primary reports an internal replication block
           runbook_url: /docs/observability/operations-runbook.md#halroreplicationunavailable
-      - alert: HalroReplicaNotCandidate
-        expr: halro_replication_apply_backlog_frames > 0 and on (instance) halro_cluster_role{role="replica"} == 1
-        for: 5m
+      - alert: HalroReplicationNoConnectedPeer
+        expr: >-
+          sum by (environment, region, cluster, instance)
+          (halro_replication_peer_connected{job="halro",expected_target="true"}
+          and on (environment, region, cluster, instance, peer)
+          (timestamp(halro_replication_peer_connected{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))) == 0
+          and on (environment, region, cluster, instance)
+          (count by (environment, region, cluster, instance)
+          (timestamp(halro_replication_peer_connected{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+          == on (environment, region, cluster) group_left()
+          (count by (environment, region, cluster)
+          (count by (environment, region, cluster, instance)
+          (up{job="halro",expected_target="true"})) - 1))
+          and on (environment, region, cluster, instance)
+          (halro_cluster_role{job="halro",expected_target="true",role="primary"} == 1)
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_cluster_role{job="halro",expected_target="true",role="primary"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+        for: 1m
+        labels: {severity: critical, service: halro, owner: sre, category: ha, role: primary}
+        annotations:
+          summary: The Halro Primary has no authenticated Replica data session
+          runbook_url: /docs/observability/operations-runbook.md#halroreplicationnoconnectedpeer
+      - alert: HalroReplicationConfirmationStalled
+        expr: >-
+          halro_replication_confirmation_lag{job="halro",expected_target="true"} > 0
+          and on (environment, region, cluster, instance)
+          delta(halro_replication_confirmed_index{job="halro",expected_target="true"}[5m]) <= 0
+          and on (environment, region, cluster, instance)
+          halro_cluster_role{job="halro",expected_target="true",role="primary"} == 1
+          and on (environment, region, cluster, instance)
+          halro:ha_epoch_stable:bool == 1
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_replication_confirmation_lag{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_replication_confirmed_index{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_cluster_role{job="halro",expected_target="true",role="primary"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+        for: 1m
+        labels: {severity: warning, service: halro, owner: sre, category: ha, role: primary}
+        annotations:
+          summary: Durable Halro frames have not advanced to confirmed
+          runbook_url: /docs/observability/operations-runbook.md#halroreplicationconfirmationstalled
+      - alert: HalroReplicaApplyStalled
+        expr: >-
+          halro_replication_apply_backlog_frames{job="halro",expected_target="true"} > 0
+          and on (environment, region, cluster, instance)
+          delta(halro_replication_applied_index{job="halro",expected_target="true"}[5m]) <= 0
+          and on (environment, region, cluster, instance)
+          halro_cluster_role{job="halro",expected_target="true",role="replica"} == 1
+          and on (environment, region, cluster, instance)
+          halro:ha_epoch_stable:bool == 1
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_replication_apply_backlog_frames{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_replication_applied_index{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+          and on (environment, region, cluster, instance)
+          (timestamp(halro_cluster_role{job="halro",expected_target="true",role="replica"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
+        for: 1m
         labels: {severity: warning, service: halro, owner: sre, category: ha, role: replica}
         annotations:
-          summary: A Halro Replica is not caught up enough to promote
-          runbook_url: /docs/observability/operations-runbook.md#halroreplicanotcandidate
+          summary: A Halro Replica has an unapplied backlog without apply progress
+          runbook_url: /docs/observability/operations-runbook.md#halroreplicaapplystalled
       - alert: HalroMemberIncompatible
-        expr: halro_replication_member_incompatible == 1
+        expr: >-
+          (halro_replication_member_incompatible{job="halro",expected_target="true"} == 1)
+          and on (environment, region, cluster, instance, reason)
+          (timestamp(halro_replication_member_incompatible{job="halro",expected_target="true"})
+          == on (environment, region, cluster, instance) group_left()
+          max by (environment, region, cluster, instance) (timestamp(up{job="halro",expected_target="true"})))
         for: 2m
         labels: {severity: critical, service: halro, owner: sre, category: ha}
         annotations:
@@ -56,6 +463,39 @@ groups:
         annotations:
           summary: Halro Metrics target is down
           runbook_url: /docs/observability/operations-runbook.md#halrotargetdown
+      - alert: HalroClientObserverDown
+        expr: up{job="halro-client-observer",expected_client_observer="true"} == 0
+        for: 1m
+        labels: {severity: warning, service: halro, owner: sre, category: ha}
+        annotations:
+          summary: An accepted client-final observer target is down
+          runbook_url: /docs/observability/operations-runbook.md#halroclientobserverdown
+      - alert: HalroClientObserverCoverageIncomplete
+        expr: >-
+          up{job="halro-client-observer",expected_client_observer="true"} == 1
+          unless on (environment, region, cluster, instance)
+          (
+            (halro_ha_client_observer_ready{job="halro-client-observer",expected_client_observer="true"} == 1)
+            and on (environment, region, cluster, instance)
+            (
+              timestamp(halro_ha_client_observer_ready{job="halro-client-observer",expected_client_observer="true"})
+              == on (environment, region, cluster, instance)
+              timestamp(up{job="halro-client-observer",expected_client_observer="true"})
+            )
+            and on (environment, region, cluster, instance)
+            (halro_ha_client_observer_unreconciled_operations{job="halro-client-observer",expected_client_observer="true"} == 0)
+            and on (environment, region, cluster, instance)
+            (
+              timestamp(halro_ha_client_observer_unreconciled_operations{job="halro-client-observer",expected_client_observer="true"})
+              == on (environment, region, cluster, instance)
+              timestamp(up{job="halro-client-observer",expected_client_observer="true"})
+            )
+          )
+        for: 1m
+        labels: {severity: warning, service: halro, owner: sre, category: ha}
+        annotations:
+          summary: A client-final observer is unready, unreconciled or missing its coverage gauges
+          runbook_url: /docs/observability/operations-runbook.md#halroclientobservercoverageincomplete
       - alert: HalroConfigurationStale
         expr: halro_activation_stale == 1
         for: 1m

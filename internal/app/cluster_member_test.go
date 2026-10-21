@@ -258,6 +258,14 @@ func TestReplicaMaintenanceRejectsAnExistingUnsafeSentinel(t *testing.T) {
 	if err := os.WriteFile(maintenancePath(cfg), []byte("unsafe\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// WriteFile applies the process umask, so force the unsafe mode even when
+	// the test runner starts with a restrictive umask.
+	if err := os.Chmod(maintenancePath(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(maintenancePath(cfg)); err != nil || info.Mode().Perm() != 0o644 {
+		t.Fatalf("unsafe sentinel mode=%v err=%v", info, err)
+	}
 	if err := SetMemberMaintenance(context.Background(), cfg, true); err == nil {
 		t.Fatal("maintenance accepted an existing non-private sentinel")
 	}

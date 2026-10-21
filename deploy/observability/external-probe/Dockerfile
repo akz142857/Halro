@@ -12,6 +12,7 @@ RUN go mod download
 COPY cmd/halro-deadman ./cmd/halro-deadman
 COPY internal/buildinfo ./internal/buildinfo
 COPY internal/deadman ./internal/deadman
+COPY internal/hahealth ./internal/hahealth
 COPY internal/safelog ./internal/safelog
 COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /licenses/
 # The same identity the tarball and .deb carry. A probe deployed as a container
