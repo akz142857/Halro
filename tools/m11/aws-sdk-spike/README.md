@@ -24,7 +24,7 @@ test timings, 25 cold starts, binary/container sizes, SPDX SBOMs,
 Gateway dependency-graph assertion. Raw output and `summary.env` are retained
 in the selected result directory.
 
-The vulnerability step explicitly selects the project's Go 1.26.9 toolchain;
+The vulnerability step explicitly selects the project's Go 1.26.10 toolchain;
 this avoids the scanner module's older `toolchain` preference selecting a Go
 version that cannot load this repository.
 
