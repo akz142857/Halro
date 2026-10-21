@@ -33,6 +33,9 @@ need the steps in the v0.9.0 release notes below.
 
 - Built with Go 1.26.10 (from 1.26.9), for a standard-library fix in
   `crypto/x509` (GO-2026-6809) that Provider TLS verification reaches.
+- `github.com/klauspost/compress`, which the usage history's Parquet writer
+  uses for zstd, moves from 1.17.9 to 1.18.7 for CVE-2026-63209. Parquet files
+  written before and after the upgrade stay readable by both versions.
 
 ## [0.9.1] - 2026-10-20
 
