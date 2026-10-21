@@ -40,7 +40,9 @@ which carries `rolldown` and its platform bindings 1.2.8 to 1.2.14,
 `@oxc-project/types` 0.149.0 to 0.154.0, `postcss` 8.5.28 to 8.5.31 and
 `nanoid` 3.3.19 to 3.3.20 in `web/package-lock.json`. All remain MIT licensed
 and are build/test-time only; the embedded `internal/webui/dist` is rebuilt
-with this change.
+with this change. The Python compatibility lock moves `certifi` from 2026.7.22
+to 2026.10.19 (PYSEC-2026-4320); it stays MPL-2.0 and test-only, and only its
+two hashes change, both checked against the published PyPI wheel and sdist.
 
 The 2026-10-15 refresh changes only the `go` directive in `go.mod`, from
 1.26.6 to 1.26.9, for standard-library fixes in `net/http` and `crypto/tls`.
@@ -343,7 +345,7 @@ document is deliberately refreshed with the new inventory and hashes.
 - `tests/compatibility/node/package.json`: `08df1b6dbf9e6b758d28cfbb16cba47d42d409f2`
 - `tests/compatibility/node/package-lock.json`: `2b98506e0adbb5c5b77c96b731f752b1e0c1b105`
 - `tests/compatibility/python/requirements.in`: `178571770ce0d9f229f1bd770be6cbb207089226`
-- `tests/compatibility/python/requirements.txt`: `96c533c4ab5bc6815223c43129b443e8185c6986`
+- `tests/compatibility/python/requirements.txt`: `3b95c514771adb4eb5c01923fa6edba1ecdeab50`
 
 The Go hashes last moved for the 2026-09-18 Go refresh recorded above. The two
 web hashes last moved for the 2026-09-18 Admin UI refresh recorded above, before
