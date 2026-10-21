@@ -33,7 +33,7 @@ grep -q 'release-run-evidence.json.sigstore.json' .github/workflows/release.yml
 # supply-chain hole this release is signed to close; the check lives here so
 # adding an unpinned step fails the same gate as removing a signing step.
 unpinned=$(grep -hoE '^\s*(- )?uses: [^ ]+' .github/workflows/ci.yml .github/workflows/release.yml \
-  .github/workflows/publish-ghcr.yml \
+  .github/workflows/publish-ghcr.yml .github/workflows/image-scan.yml \
   | grep -vE '@[0-9a-f]{40}$' || true)
 if [ -n "$unpinned" ]; then
   echo "unpinned GitHub Action references:" >&2

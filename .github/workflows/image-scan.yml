@@ -1,0 +1,64 @@
+name: image-scan
+
+# The release workflow scans both shipped images and refuses a HIGH or CRITICAL
+# finding, but ordinary CI scans only the dead-man image. A module advisory in
+# the Halro image therefore surfaced first in a release rehearsal: v0.9.2's
+# failed on CVE-2026-63209 in klauspost/compress, published the day after
+# v0.9.1 shipped the same version. Scanning every pull request would instead
+# turn every unrelated change red the day an advisory lands.
+#
+# This runs the release scan on `main` once a day, so a new advisory is a red
+# run on its own the day it is published rather than a failed release. The
+# build arguments and Trivy settings match release.yml; keep them in step.
+on:
+  schedule:
+    - cron: "17 1 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: image-scan
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Build the Halro and dead-man images
+        run: |
+          set -euo pipefail
+          date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          docker build \
+            --build-arg RELEASE_VERSION=scan \
+            --build-arg RELEASE_COMMIT="${GITHUB_SHA}" \
+            --build-arg RELEASE_DATE="${date}" \
+            --tag halro:scan .
+          docker build \
+            -f deploy/observability/external-probe/Dockerfile \
+            --build-arg RELEASE_VERSION=scan \
+            --build-arg RELEASE_COMMIT="${GITHUB_SHA}" \
+            --build-arg RELEASE_DATE="${date}" \
+            --tag halro-deadman:scan .
+      - name: Scan the Halro image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: halro:scan
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          scanners: vuln,secret,misconfig
+      - name: Scan the dead-man image
+        # Runs even when the Halro scan failed, so one red run reports both.
+        if: ${{ !cancelled() }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: halro-deadman:scan
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          scanners: vuln,secret,misconfig
