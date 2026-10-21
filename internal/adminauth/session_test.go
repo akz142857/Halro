@@ -3,6 +3,7 @@ package adminauth
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"path/filepath"
 	"sync"
@@ -13,6 +14,42 @@ import (
 	"github.com/akz142857/Halro/internal/metadatajournal"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
+
+func TestReadOnlyAuthenticationNeverRefreshesOrDeletesReplicatedSession(t *testing.T) {
+	store, err := openJournalledStore(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+	user, err := NewUser("admin", []byte("correct horse battery staple"), domain.AdminRoleAdministrator, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err = store.PutAdminUser(context.Background(), user, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewManager(store, make([]byte, 32), time.Hour, 10*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	created, err := manager.Create(context.Background(), user, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := manager.AuthenticateReadOnly(context.Background(), created.Token, now.Add(3*time.Minute)); err != nil || !got.LastSeenAt.Equal(created.Session.LastSeenAt) {
+		t.Fatalf("read-only authentication session=%#v err=%v", got, err)
+	}
+	if _, err := manager.AuthenticateReadOnly(context.Background(), created.Token, now.Add(time.Hour)); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("expired session error=%v", err)
+	}
+	stored, err := store.GetAdminSession(context.Background(), sha256.Sum256([]byte(created.Token)))
+	if err != nil || !stored.LastSeenAt.Equal(created.Session.LastSeenAt) {
+		t.Fatalf("read-only authentication mutated session=%#v err=%v", stored, err)
+	}
+}
 
 type blockedRefreshStore struct {
 	*boltstore.Store

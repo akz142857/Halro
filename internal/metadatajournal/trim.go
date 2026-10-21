@@ -27,6 +27,13 @@ func Trim(path string, key []byte, throughSequence uint64) (Head, error) {
 	if len(key) != KeySize {
 		return Head{}, fmt.Errorf("metadata journal key must be %d bytes", KeySize)
 	}
+	// Sequence zero is the epoch header, not an operations prefix. Replacing it
+	// with a trim anchor would discard the authenticated epoch identity while
+	// claiming that no operation was removed. Keep the canonical header and
+	// make an empty cut an exact no-op.
+	if throughSequence == 0 {
+		return Verify(path, key)
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return Head{}, err

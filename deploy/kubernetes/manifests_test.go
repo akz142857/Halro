@@ -78,6 +78,28 @@ func TestBootstrapWorkloadSafetyInvariants(t *testing.T) {
 	}
 }
 
+func TestHAWorkloadSafetyInvariants(t *testing.T) {
+	ha := manifestText(t, "halro-ha-statefulset.yaml")
+	for _, required := range []string{
+		"publishNotReadyAddresses: true",
+		"replicas: 3",
+		"podManagementPolicy: Parallel",
+		"updateStrategy: {type: OnDelete}",
+		"persistentVolumeClaimRetentionPolicy: {whenDeleted: Retain, whenScaled: Retain}",
+		"accessModes: [ReadWriteOncePod]",
+		"minAvailable: 2",
+		"automountServiceAccountToken: false",
+		"port: 9910",
+	} {
+		if !strings.Contains(ha, required) {
+			t.Fatalf("HA manifest lacks %q", required)
+		}
+	}
+	if strings.Contains(ha, "pods/patch") || strings.Contains(ha, "halro.io/role=primary") {
+		t.Fatal("HA manifest must use client routing option (a), not Kubernetes role mutation")
+	}
+}
+
 func manifestText(t *testing.T, name string) string {
 	t.Helper()
 	payload, err := os.ReadFile(name)

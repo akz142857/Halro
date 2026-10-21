@@ -29,9 +29,17 @@ Admin browser
 
 Process
   → bbolt + Accounting Ledger + Governance Journal + derived exports
+
+HA member
+  → mTLS + per-member SPKI pin + Master Key challenge-response
+  → peer ordering journal and replicated authoritative stores
 ```
 
-The host root account is trusted for v1. Audit chaining detects offline record mutation but is not non-repudiation against a root attacker.
+The host root account is trusted for v1. In HA this expands to every member's
+root account, every PVC/storage administrator, and every RBAC or secret-manager
+principal that can read a member certificate or Master Key material. Audit
+chaining detects offline record mutation but is not non-repudiation against a
+root attacker.
 
 Ledger frame integrity (ADR 0016) draws the same boundary. The MAC and hash chain
 stop someone who can write to `ledger.wal` but does not hold the Master Key:
@@ -74,10 +82,18 @@ rewrite detectable by someone other than the rewriter.
 | Cross-log inconsistency hidden as a complete report | explicit partial/unknown states and separate accounting/governance watermarks; no invented global order |
 | High-cardinality metrics or unbounded Admin query | identifiers forbidden as Prometheus labels; low-cardinality cohort rollups; cursor pagination and 200-item page limit |
 | Duplicate cost in business exports | Attempt cost exists only in Usage export; normalized governance datasets reference IDs and manifest reconciliation checks counts/ranges |
+| Split-brain confirmation | One local writer per directory plus durable term/promise state; a Primary confirms authority-sensitive writes only after a Replica fsync; startup adjudication and promotion fail closed on conflicting identity, incarnation, term, or prefix |
+| Compromised HA member | Treat as whole-cluster compromise: the member holds replicated ciphertext plus access to the Master Key and can leave as a decrypting Standalone; externally fence it, revoke its SPKI or rotate the cluster CA, rotate Provider credentials, and retire its PVC |
+| Replication credential theft | mTLS, node allowlist, per-peer SPKI pins, Master Key challenge-response, bounded/deadlined streams, and no plaintext fallback; use the cluster CA rotation runbook for revocation |
+| Replication as an exfiltration path | Frames carry existing encrypted or authenticated bytes only; low-cardinality metrics and logs exclude payload, credential, object, full key fingerprint, and Project identifiers; seed is separately authorized by a target-bound, cluster-key-MACed manifest |
+| Seed bypasses Backup Key | Seed requires an authenticated cluster member and optional operator approval, uses private staging, verifies every digest, and emits requested/served Audit events; possession of a cluster identity plus Master Key is therefore a full-data export authority |
+| Retained or stolen PVC rejoins | Cluster incarnation and authenticated state reject stale members; scale-down PVCs must be destroyed or isolated; whole-cluster restore creates a new incarnation |
 
 ## Default assumptions
 
-- One active writer owns the data directory.
+- One process owns each data directory. In HA, durable term and promises bound
+  which member may confirm authoritative writes; they do not turn shared
+  storage into a supported topology.
 - Public access uses TLS.
 - Admin and Metrics are loopback or protected behind a precisely trusted TLS proxy.
 - Prompt/response bodies are not persisted by default.
@@ -111,3 +127,7 @@ rewrite detectable by someone other than the rewriter.
   bbolt, logs, exports, backup, errors, and browser artifacts.
 - Cross-project ID/scope matrix, control-plane rate/body/cardinality limits, and
   bounded cohort-query scan tests.
+- HA term/promise and startup-adjudication matrix; stale-incarnation rejection;
+  frame/MAC/SPKI/challenge tampering; split-brain partition and promotion;
+  seed interruption and staging permissions; replicated-byte secret canaries;
+  CA dual-trust rotation plus retired-certificate rejection.

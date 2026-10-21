@@ -159,3 +159,36 @@ node role. Neither example ServiceAccount needs `secrets/get`,
 `pods/log` or `pods/exec`. Treat the ability to create arbitrary Pods, patch
 workloads, add ephemeral containers, snapshot the PVC or impersonate the
 external secret/KMS identity as equivalent secret access.
+
+## HA StatefulSet
+
+`halro-ha-statefulset.yaml` is the separate three-member HA example. It does
+not replace the single-PVC Deployment above. Before applying it, create:
+
+- `halro-ha-config`, with `halro-0.yaml`, `halro-1.yaml`, and
+  `halro-2.yaml`; each file must carry that member's unique `node_id`, its two
+  peers and reviewed SPKI pins;
+- `halro-ha-cluster-tls`, with `ca.crt` and one `<pod>.crt` / `<pod>.key`
+  pair per ordinal; and
+- the Master Key and application TLS mounts named by those configurations.
+
+The headless `halro-members` Service publishes unready addresses so startup
+adjudication does not depend on readiness. The client Service deliberately
+uses routing option (a): it selects every Ready member, replicas answer 503
+`not_primary` with `Retry-After`, and the client retries. Halro has no
+`pods/patch` permission and never mutates a role label. Label only reviewed
+client or ingress-controller namespaces with `halro.io/client-access=allowed`;
+add separate narrow NetworkPolicies for Admin and Metrics access.
+
+The startup probe allows one hour for a large seed/catch-up. Size that budget
+and the 50 GiB `ReadWriteOncePod` claim from measured seed time and retained
+uncompressed backlog. `OnDelete` means upgrades are one explicitly chosen Pod
+at a time. Confirm the member is not the active Primary, or complete
+`halro cluster stepdown`, before deleting it. Never delete two Pods together;
+the PDB protects voluntary disruptions but not operator deletion or node loss.
+
+For an offline Replica backup, enable its maintenance sentinel, wait for
+readiness to fail while liveness remains healthy, run `backup create --replica`
+and `backup verify` in that Pod, report the backup on the Primary, then disable
+maintenance and wait for catch-up. A retained PVC removed by scale-down must be
+destroyed or explicitly isolated from every future cluster incarnation.

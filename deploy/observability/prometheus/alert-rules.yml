@@ -2,6 +2,53 @@ groups:
   - name: halro-alerts
     interval: 15s
     rules:
+      - alert: HalroNoPrimary
+        expr: >-
+          sum by (environment, region, cluster) (halro_cluster_incarnation_info)
+          > 0
+          unless on (environment, region, cluster)
+          sum by (environment, region, cluster) (halro_cluster_role{role="primary"} == 1)
+          > 0
+        for: 2m
+        labels: {severity: critical, service: halro, owner: sre, category: ha}
+        annotations:
+          summary: No Halro member reports the Primary role
+          runbook_url: /docs/observability/operations-runbook.md#halronoprimary
+      - alert: HalroMultiplePrimaries
+        expr: sum by (environment, region, cluster) (halro_cluster_role{role="primary"} == 1) > 1
+        for: 0m
+        labels: {severity: critical, service: halro, owner: sre, category: ha}
+        annotations:
+          summary: Multiple Halro members report the Primary role
+          runbook_url: /docs/observability/operations-runbook.md#halromultipleprimaries
+      - alert: HalroAwaitingOperator
+        expr: halro_replication_startup_ready == 0 and on (instance) halro_cluster_role{role="primary"} == 1
+        for: 2m
+        labels: {severity: critical, service: halro, owner: sre, category: ha, role: primary}
+        annotations:
+          summary: A Halro member is waiting for startup role adjudication
+          runbook_url: /docs/observability/operations-runbook.md#halroawaitingoperator
+      - alert: HalroReplicationUnavailable
+        expr: halro_replication_unavailable == 1 and on (instance) halro_cluster_role{role="primary"} == 1
+        for: 1m
+        labels: {severity: critical, service: halro, owner: sre, category: ha, role: primary}
+        annotations:
+          summary: The Halro Primary cannot confirm replicated writes
+          runbook_url: /docs/observability/operations-runbook.md#halroreplicationunavailable
+      - alert: HalroReplicaNotCandidate
+        expr: halro_replication_apply_backlog_frames > 0 and on (instance) halro_cluster_role{role="replica"} == 1
+        for: 5m
+        labels: {severity: warning, service: halro, owner: sre, category: ha, role: replica}
+        annotations:
+          summary: A Halro Replica is not caught up enough to promote
+          runbook_url: /docs/observability/operations-runbook.md#halroreplicanotcandidate
+      - alert: HalroMemberIncompatible
+        expr: halro_replication_member_incompatible == 1
+        for: 2m
+        labels: {severity: critical, service: halro, owner: sre, category: ha}
+        annotations:
+          summary: A Halro member failed replication compatibility checks
+          runbook_url: /docs/observability/operations-runbook.md#halromemberincompatible
       - alert: HalroTargetDown
         expr: up{job="halro",expected_target="true"} == 0 or absent(up{job="halro",expected_target="true"})
         for: 2m

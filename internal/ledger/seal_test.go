@@ -386,3 +386,37 @@ func TestAnInterruptedRollIsFinishedOrAbandonedByTheFilesAlone(t *testing.T) {
 		}
 	})
 }
+
+// A replayed record's Hash is the chain head after it, in the active
+// generation as in a sealed one: the next frame's PreviousHash, and at the
+// head the Log's own chain head. A Replica binds what it writes to it.
+func TestReplayedRecordHashIsTheChainHeadAfterIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage.wal")
+	log := openChained(t, path, nil)
+	defer log.Close()
+	appendReservations(t, log, 1, 4)
+	if result, err := log.Roll(); err != nil || !result.Rolled {
+		t.Fatalf("roll rolled=%t err=%v", result.Rolled, err)
+	}
+	appendReservations(t, log, 5, 3)
+	var records []Record
+	if _, err := log.Replay(Watermark{}, func(record Record) error {
+		records = append(records, record)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for index, record := range records {
+		if record.Hash == ([32]byte{}) {
+			t.Fatalf("record %d has no hash", record.Sequence)
+		}
+		if index+1 < len(records) && records[index+1].PreviousHash != record.Hash {
+			t.Fatalf("record %d's hash is not the next frame's previous hash", record.Sequence)
+		}
+	}
+	head, hash, ok := log.ChainHead()
+	last := records[len(records)-1]
+	if !ok || head.Sequence != last.Sequence || hash != last.Hash {
+		t.Fatalf("head %d differs from the last record %d", head.Sequence, last.Sequence)
+	}
+}

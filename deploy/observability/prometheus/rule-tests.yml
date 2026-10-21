@@ -7,6 +7,88 @@ evaluation_interval: 1m
 tests:
   - interval: 1m
     input_series:
+      - series: 'halro_cluster_incarnation_info{environment="test",region="local",cluster="ha",instance="replica-1",incarnation="inc_1"}'
+        values: '1x5'
+      - series: 'halro_cluster_role{environment="test",region="local",cluster="ha",instance="replica-1",role="replica"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroNoPrimary
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: HalroNoPrimary
+        exp_alerts:
+          - exp_labels: {alertname: HalroNoPrimary, category: ha, cluster: ha, environment: test, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: No Halro member reports the Primary role, runbook_url: /docs/observability/operations-runbook.md#halronoprimary}
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_cluster_role{environment="test",region="local",cluster="ha",instance="one",role="primary"}'
+        values: '1x3'
+      - series: 'halro_cluster_role{environment="test",region="local",cluster="ha",instance="two",role="primary"}'
+        values: '1x3'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: HalroMultiplePrimaries
+        exp_alerts:
+          - exp_labels: {alertname: HalroMultiplePrimaries, category: ha, cluster: ha, environment: test, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: Multiple Halro members report the Primary role, runbook_url: /docs/observability/operations-runbook.md#halromultipleprimaries}
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_cluster_role{environment="test",region="local",cluster="ha",instance="primary",role="primary"}'
+        values: '1x8'
+      - series: 'halro_replication_startup_ready{environment="test",region="local",cluster="ha",instance="primary"}'
+        values: '0x4 1x4'
+      - series: 'halro_replication_unavailable{environment="test",region="local",cluster="ha",instance="primary"}'
+        values: '0 1x3 0x4'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HalroReplicationUnavailable
+        exp_alerts:
+          - exp_labels: {alertname: HalroReplicationUnavailable, category: ha, cluster: ha, environment: test, instance: primary, owner: sre, region: local, role: primary, service: halro, severity: critical}
+            exp_annotations: {summary: The Halro Primary cannot confirm replicated writes, runbook_url: /docs/observability/operations-runbook.md#halroreplicationunavailable}
+      - eval_time: 3m
+        alertname: HalroAwaitingOperator
+        exp_alerts:
+          - exp_labels: {alertname: HalroAwaitingOperator, category: ha, cluster: ha, environment: test, instance: primary, owner: sre, region: local, role: primary, service: halro, severity: critical}
+            exp_annotations: {summary: A Halro member is waiting for startup role adjudication, runbook_url: /docs/observability/operations-runbook.md#halroawaitingoperator}
+      - eval_time: 5m
+        alertname: HalroAwaitingOperator
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_cluster_role{environment="test",region="local",cluster="ha",instance="replica",role="replica"}'
+        values: '1x8'
+      - series: 'halro_replication_apply_backlog_frames{environment="test",region="local",cluster="ha",instance="replica"}'
+        values: '2x6 0'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: HalroReplicaNotCandidate
+        exp_alerts:
+          - exp_labels: {alertname: HalroReplicaNotCandidate, category: ha, cluster: ha, environment: test, instance: replica, owner: sre, region: local, role: replica, service: halro, severity: warning}
+            exp_annotations: {summary: A Halro Replica is not caught up enough to promote, runbook_url: /docs/observability/operations-runbook.md#halroreplicanotcandidate}
+      - eval_time: 7m
+        alertname: HalroReplicaNotCandidate
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_replication_member_incompatible{environment="test",region="local",cluster="ha",instance="replica",reason="schema"}'
+        values: '1x3'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroMemberIncompatible
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: HalroMemberIncompatible
+        exp_alerts:
+          - exp_labels: {alertname: HalroMemberIncompatible, category: ha, cluster: ha, environment: test, instance: replica, owner: sre, reason: schema, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: A Halro member failed replication compatibility checks, runbook_url: /docs/observability/operations-runbook.md#halromemberincompatible}
+
+  - interval: 1m
+    input_series:
       - series: 'halro_activation_stale{environment="test",region="local",cluster="standalone",instance="one"}'
         values: '0 1 1 0'
     alert_rule_test:

@@ -65,6 +65,10 @@ const (
 	MaxPayloadSize = 8 << 20
 )
 
+// ReplicationFormatVersion is the metadata-journal frame version advertised
+// during the HA compatibility handshake.
+func ReplicationFormatVersion() uint16 { return uint16(frameVersion) }
+
 // ErrCorrupt is returned when the file is not what this writer would have
 // produced. It is deliberately not recoverable by the reader: the projection
 // this journal describes cannot be trusted past the first frame that fails.

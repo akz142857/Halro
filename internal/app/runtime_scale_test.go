@@ -92,7 +92,12 @@ const (
 	// 78: the accounting state snapshot and the usage history reconciliation
 	// that checks the history against it (memory-bounded redesign P2), as one
 	// field holding both rather than seven.
-	runtimeFieldBudget = 78
+	//
+	// 79: replication. Raised deliberately as one lifecycle-owned subsystem:
+	// authenticated role state, ordering journal, native source and peer
+	// transport must open and close together. Spreading them into Runtime would
+	// add several fields and make partial cleanup states representable.
+	runtimeFieldBudget = 79
 	runtimeMutexBudget = 10
 )
 
