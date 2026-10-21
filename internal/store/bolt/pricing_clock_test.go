@@ -38,7 +38,7 @@ func quarantineReason(t *testing.T, store *Store, deploymentID string) string {
 // A metadata write stall longer than the forward tolerance, with the clock
 // moving normally, is not a forward jump (261017 V-013).
 func TestDeploymentPricePinWriteStallIsNotAForwardJump(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestDeploymentPricePinWriteStallIsNotAForwardJump(t *testing.T) {
 // than the rollback tolerance, are concurrency, not a clock that went back.
 // This is what quarantined the E05b soak (261017 V-013).
 func TestDeploymentPricePinReorderedCommitIsNotARollback(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestDeploymentPricePinReorderedCommitIsNotARollback(t *testing.T) {
 // A wall clock stepped back while the monotonic clock ran on is still a
 // rollback, within one process.
 func TestDeploymentPricePinQuarantinesRollbackDrift(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestDeploymentPricePinQuarantinesRollbackDrift(t *testing.T) {
 // still catches a rollback.
 func TestDeploymentPricePinQuarantinesRollbackAcrossRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metadata.db")
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestDeploymentPricePinQuarantinesRollbackAcrossRestart(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	store, err = Open(path)
+	store, err = openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}

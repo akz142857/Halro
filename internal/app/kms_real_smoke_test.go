@@ -19,7 +19,6 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/kms/awskms"
 	"github.com/akz142857/Halro/internal/masterkey"
-	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"gopkg.in/yaml.v3"
 )
 
@@ -54,7 +53,7 @@ func TestRealAWSDualSlotInitializeAndRecovery(t *testing.T) {
 	if err := initializeKMS(ctx, cfg, kmsInitializationOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +142,7 @@ func TestRealAWSKMSKeyLifecycle(t *testing.T) {
 	}, []byte("ephemeral-lifecycle-smoke-secret")); err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +171,7 @@ func TestRealAWSKMSKeyLifecycle(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	store, err = boltstore.Open(cfg.MetadataPath())
+	store, err = openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +197,7 @@ func TestRealAWSKMSKeyLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err = boltstore.Open(cfg.MetadataPath())
+	store, err = openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +305,7 @@ func TestRealAWSKMSDisasterRecovery(t *testing.T) {
 	if err != nil || !recoveryResult.VaultVerified || !recoveryResult.RecoveryAudited || recoveryResult.UnlockPath != "recovery" {
 		t.Fatalf("Recovery restore=%#v err=%v", recoveryResult, err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,7 @@
 package adminauth
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/metadatajournal"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
@@ -35,7 +37,7 @@ func (s *blockedRefreshStore) RefreshAdminSession(
 }
 
 func TestSessionHashPersistenceCSRFAndExpiry(t *testing.T) {
-	store, err := boltstore.Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openJournalledStore(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +84,7 @@ func TestSessionHashPersistenceCSRFAndExpiry(t *testing.T) {
 }
 
 func TestSessionRefreshCannotRecreateRevokedSession(t *testing.T) {
-	store, err := boltstore.Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openJournalledStore(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,4 +133,22 @@ func TestSessionRefreshCannotRecreateRevokedSession(t *testing.T) {
 	if _, err := store.GetAdminSession(context.Background(), created.Session.IDHash); !errors.Is(err, boltstore.ErrNotFound) {
 		t.Fatalf("revoked session was recreated: %v", err)
 	}
+}
+
+// openJournalledStore opens a metadata store with its write-ahead journal
+// attached. Sessions are replicated state, so the store refuses to commit one
+// that nothing would record — the key here only has to be stable, since nothing
+// in this fixture was ever signed with a derived one.
+func openJournalledStore(t *testing.T) (*boltstore.Store, error) {
+	t.Helper()
+	store, err := boltstore.Open(filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		return nil, err
+	}
+	key := bytes.Repeat([]byte{0x3b}, metadatajournal.KeySize)
+	if _, err := store.AttachMetadataJournal(key, "test"); err != nil {
+		store.Close()
+		return nil, err
+	}
+	return store, nil
 }

@@ -203,6 +203,16 @@ func initializeFile(cfg config.Config) error {
 		metadata.Close()
 		return err
 	}
+	// Derived here, beside the other two, because the Master Key is cleared as
+	// soon as the Vault is built below.
+	journalKey, err := vault.DeriveMetadataJournalHMACKey(masterKey)
+	if err != nil {
+		clear(masterKey)
+		clear(auditKey)
+		clear(ledgerKey)
+		metadata.Close()
+		return err
+	}
 	masterKeyFingerprint := keyFingerprint(masterKey)
 	secretVault, err := vault.New(masterKey)
 	clear(masterKey)
@@ -234,12 +244,39 @@ func initializeFile(cfg config.Config) error {
 		return fmt.Errorf("protect audit HMAC key: %w", err)
 	}
 	ledgerEnvelope, err := encryptLedgerHMACKey(secretVault, ledgerKey)
-	secretVault.Close()
 	if err != nil {
+		secretVault.Close()
 		clear(auditKey)
 		clear(ledgerKey)
 		metadata.Close()
 		return fmt.Errorf("protect ledger HMAC key: %w", err)
+	}
+	journalEnvelope, err := encryptMetadataJournalHMACKey(secretVault, journalKey)
+	secretVault.Close()
+	if err != nil {
+		clear(journalKey)
+		clear(auditKey)
+		clear(ledgerKey)
+		metadata.Close()
+		return fmt.Errorf("protect metadata journal HMAC key: %w", err)
+	}
+	// The journal is attached before the first recorded write, and the database
+	// as it stands — schema created, migrations run, nothing else — becomes
+	// epoch 1's starting projection. Everything below this line is an operation
+	// inside that epoch and is recorded.
+	_, err = metadata.AttachMetadataJournal(journalKey, "initialize")
+	clear(journalKey)
+	if err != nil {
+		clear(auditKey)
+		clear(ledgerKey)
+		metadata.Close()
+		return fmt.Errorf("attach metadata journal: %w", err)
+	}
+	if err := metadata.PutMetadataJournalHMACEnvelope(journalEnvelope); err != nil {
+		clear(auditKey)
+		clear(ledgerKey)
+		metadata.Close()
+		return fmt.Errorf("store metadata journal HMAC envelope: %w", err)
 	}
 	if err := metadata.PutVaultKeyCheck(envelope); err != nil {
 		clear(auditKey)

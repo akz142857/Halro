@@ -40,7 +40,7 @@ func pinnedAttempt(t *testing.T, store *Store, attemptID string, sequence uint64
 
 func openHotStatePricing(t *testing.T) *Store {
 	t.Helper()
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

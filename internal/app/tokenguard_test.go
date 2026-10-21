@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
-	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/tokenguard"
 )
 
@@ -17,7 +16,7 @@ func TestRuntimeRejectsMissingTokenGuardPolicyReference(t *testing.T) {
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +39,7 @@ func TestRuntimeLoadsReferencedTokenGuardPolicy(t *testing.T) {
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +76,7 @@ func TestRuntimePersistsAndRestoresEWMABaseline(t *testing.T) {
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +135,7 @@ func TestCorruptEWMACheckpointFallsBackToFixedLimits(t *testing.T) {
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +153,7 @@ func TestCorruptEWMACheckpointFallsBackToFixedLimits(t *testing.T) {
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}
-	store, err = boltstore.Open(cfg.MetadataPath())
+	store, err = openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -23,7 +23,7 @@ func adminIntent(eventID, action, targetType, targetID string) *domain.AdminAudi
 // make unreachable — one leaves a change nothing accounted for, the other
 // puts a change in the audit log that never happened.
 func TestAdminMutationAndAuditIntentCommitTogether(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestAdminMutationAndAuditIntentCommitTogether(t *testing.T) {
 }
 
 func TestDeliveredAdminAuditIntentIsRetired(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestDeliveredAdminAuditIntentIsRetired(t *testing.T) {
 // Two mutations must never share an event ID: the audit log would then carry
 // one record for two changes, and the drain could not tell which it delivered.
 func TestAdminAuditIntentRejectsDuplicateEventID(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestAdminAuditIntentRejectsDuplicateEventID(t *testing.T) {
 // same there: a Token Guard policy that commits without its record leaves a
 // change to what traffic is admitted with nothing accounting for it.
 func TestPolicyMutationsCarryTheirAuditIntent(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

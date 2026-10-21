@@ -4,8 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
-
-	bbolt "go.etcd.io/bbolt"
 )
 
 var keyShutdownTruncatedAttempts = []byte("shutdown_truncated_attempts_total")
@@ -16,7 +14,7 @@ var keyShutdownTruncatedAttempts = []byte("shutdown_truncated_attempts_total")
 // an in-memory-only counter would disappear with the process that recorded it.
 func (s *Store) ShutdownTruncatedAttempts() (uint64, error) {
 	var total uint64
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyShutdownTruncatedAttempts)
 		if len(raw) == 0 {
 			return nil
@@ -37,7 +35,7 @@ func (s *Store) AddShutdownTruncatedAttempts(delta uint64) (uint64, error) {
 		return s.ShutdownTruncatedAttempts()
 	}
 	var total uint64
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+	err := s.update(func(tx *Tx) error {
 		meta := tx.Bucket(bucketMeta)
 		raw := meta.Get(keyShutdownTruncatedAttempts)
 		if len(raw) != 0 && len(raw) != 8 {

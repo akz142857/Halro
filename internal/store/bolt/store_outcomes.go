@@ -30,7 +30,7 @@ func (s *Store) PutOutcomeDefinition(ctx context.Context, definition domain.Outc
 	if err := ctx.Err(); err != nil {
 		return domain.OutcomeDefinition{}, err
 	}
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+	err := s.update(func(tx *Tx) error {
 		var project domain.Project
 		rawProject := tx.Bucket(bucketProjects).Get([]byte(definition.ProjectID))
 		if rawProject == nil {
@@ -110,7 +110,7 @@ func (s *Store) PutOutcomeDefinition(ctx context.Context, definition domain.Outc
 
 func (s *Store) GetOutcomeDefinition(ctx context.Context, projectID, id string, version uint64) (domain.OutcomeDefinition, error) {
 	var result domain.OutcomeDefinition
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		bucket := tx.Bucket(bucketOutcomeDefinitions)
 		if version != 0 {
 			raw := bucket.Get(outcomeDefinitionKey(id, version))
@@ -211,7 +211,7 @@ func (s *Store) SaveGovernanceCheckpoint(sequence uint64, offset int64, journalH
 	if err != nil {
 		return err
 	}
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.update(func(tx *Tx) error {
 		segments := tx.Bucket(bucketGovernanceCheckpointSegments)
 		if raw := tx.Bucket(bucketMeta).Get(keyGovernanceCheckpoint); raw != nil {
 			var current GovernanceCheckpoint
@@ -263,7 +263,7 @@ func (s *Store) SaveGovernanceCheckpoint(sequence uint64, offset int64, journalH
 
 func (s *Store) LoadGovernanceCheckpoint() (GovernanceCheckpoint, error) {
 	var value GovernanceCheckpoint
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyGovernanceCheckpoint)
 		if raw == nil {
 			return ErrNotFound
@@ -304,7 +304,7 @@ func (s *Store) PutGovernanceJournalAnchor(sequence uint64, offset int64, hash, 
 	if err != nil {
 		return err
 	}
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.update(func(tx *Tx) error {
 		meta := tx.Bucket(bucketMeta)
 		if raw := meta.Get(keyGovernanceJournalAnchor); raw != nil {
 			var current GovernanceJournalAnchor
@@ -327,7 +327,7 @@ func (s *Store) PutGovernanceJournalAnchor(sequence uint64, offset int64, hash, 
 
 func (s *Store) GovernanceJournalAnchor() (GovernanceJournalAnchor, error) {
 	var anchor GovernanceJournalAnchor
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyGovernanceJournalAnchor)
 		if raw == nil {
 			return ErrNotFound
@@ -341,7 +341,7 @@ func (s *Store) GovernanceJournalAnchor() (GovernanceJournalAnchor, error) {
 }
 
 func (s *Store) ResetGovernanceCheckpoint() error {
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.update(func(tx *Tx) error {
 		if err := tx.Bucket(bucketMeta).Delete(keyGovernanceCheckpoint); err != nil {
 			return err
 		}

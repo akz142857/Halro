@@ -9,7 +9,6 @@ import (
 	"sort"
 
 	"github.com/akz142857/Halro/internal/domain"
-	bbolt "go.etcd.io/bbolt"
 )
 
 func (s *Store) PutTokenGuardCheckpoint(payload []byte) error {
@@ -17,14 +16,14 @@ func (s *Store) PutTokenGuardCheckpoint(payload []byte) error {
 		return errors.New("Token Guard checkpoint payload is invalid")
 	}
 	copyPayload := bytes.Clone(payload)
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.update(func(tx *Tx) error {
 		return tx.Bucket(bucketMeta).Put(keyTokenGuardCheckpoint, copyPayload)
 	})
 }
 
 func (s *Store) TokenGuardCheckpoint() ([]byte, error) {
 	var payload []byte
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyTokenGuardCheckpoint)
 		if raw == nil {
 			return ErrNotFound
@@ -36,7 +35,7 @@ func (s *Store) TokenGuardCheckpoint() ([]byte, error) {
 }
 
 func (s *Store) DeleteTokenGuardCheckpoint() error {
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.update(func(tx *Tx) error {
 		return tx.Bucket(bucketMeta).Delete(keyTokenGuardCheckpoint)
 	})
 }
@@ -53,7 +52,7 @@ func (s *Store) PutRedactionPolicy(
 	if err := ctx.Err(); err != nil {
 		return domain.RedactionPolicy{}, err
 	}
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+	err := s.update(func(tx *Tx) error {
 		if err := putVersioned(
 			tx.Bucket(bucketRedactionPolicies),
 			policy.ID,
@@ -99,7 +98,7 @@ func (s *Store) PutTokenGuardPolicy(
 	if err := ctx.Err(); err != nil {
 		return domain.TokenGuardPolicy{}, err
 	}
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+	err := s.update(func(tx *Tx) error {
 		if err := putVersioned(tx.Bucket(bucketTokenGuardPolicies), policy.ID, expectedRevision, &policy); err != nil {
 			return err
 		}
@@ -140,7 +139,7 @@ func (s *Store) PutAlertWebhook(
 	if err := ctx.Err(); err != nil {
 		return domain.AlertWebhook{}, err
 	}
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+	err := s.update(func(tx *Tx) error {
 		if webhook.CredentialID != "" &&
 			tx.Bucket(bucketCredentials).Get([]byte(webhook.CredentialID)) == nil {
 			return fmt.Errorf("credential %q: %w", webhook.CredentialID, ErrNotFound)
@@ -179,7 +178,7 @@ func (s *Store) PutAlertWebhookBundle(
 	if err := ctx.Err(); err != nil {
 		return domain.AlertWebhook{}, err
 	}
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+	err := s.update(func(tx *Tx) error {
 		if credential != nil {
 			if err := putVersioned(
 				tx.Bucket(bucketCredentials),

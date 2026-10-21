@@ -19,7 +19,6 @@ import (
 	"github.com/akz142857/Halro/internal/kms/awskms"
 	"github.com/akz142857/Halro/internal/kms/fakekms"
 	"github.com/akz142857/Halro/internal/masterkey"
-	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/vault"
 )
 
@@ -101,7 +100,7 @@ func TestKMSInitializationPublishesIndependentVerifiedSlotsWithoutPlaintextKey(t
 	if state, err := InspectInitialization(cfg); err != nil || state != InitializationSystemReady {
 		t.Fatalf("state=%q err=%v", state, err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataReadForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +233,7 @@ func TestKeySlotStartDoesNotAutoInitializeOrTrustFilePresence(t *testing.T) {
 	if harness.callCount() != 0 {
 		t.Fatal("Runtime auto-initialization path called KMS")
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataReadForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

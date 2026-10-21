@@ -14,7 +14,6 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/routegate"
-	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/vault"
 )
 
@@ -152,7 +151,7 @@ func TestOfflineRouteSuspensionClearKeepsAnIntentWhenAuditDeliveryFails(t *testi
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +186,7 @@ func TestOfflineRouteSuspensionClearKeepsAnIntentWhenAuditDeliveryFails(t *testi
 		t.Fatal(err)
 	}
 
-	store, err = boltstore.Open(cfg.MetadataPath())
+	store, err = openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +211,7 @@ func TestOfflineRouteSuspensionClearKeepsAnIntentWhenAuditDeliveryFails(t *testi
 // HMAC key through the vault, and read.
 func offlineAuditKey(t *testing.T, cfg config.Config) []byte {
 	t.Helper()
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

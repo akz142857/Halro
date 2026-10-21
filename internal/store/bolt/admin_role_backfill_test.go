@@ -22,7 +22,7 @@ func writeLegacyAdminUser(t *testing.T, path, username string) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	err = db.Update(func(tx *bbolt.Tx) error {
+	err = publishInto(db, func(tx *Tx) error {
 		for _, name := range requiredBuckets() {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
@@ -67,7 +67,7 @@ func TestUpgradeBackfillsTheRoleOfAnAccountCreatedBeforeRolesExisted(t *testing.
 	path := filepath.Join(t.TempDir(), "metadata.db")
 	writeLegacyAdminUser(t, path, "admin")
 
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatalf("opening a metadata file with a role-less admin failed: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestBackfillLeavesAnExplicitReadOnlyRoleAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Update(func(tx *bbolt.Tx) error {
+	if err := publishInto(db, func(tx *Tx) error {
 		raw := tx.Bucket(bucketAdminUsers).Get([]byte("admin"))
 		var record map[string]any
 		if err := json.Unmarshal(raw, &record); err != nil {
@@ -120,7 +120,7 @@ func TestBackfillLeavesAnExplicitReadOnlyRoleAlone(t *testing.T) {
 	}
 	db.Close()
 
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestBackfillDoesNotPromoteAnUnrecognisedRole(t *testing.T) {
 	writeLegacyAdminUser(t, path, "admin")
 	setStoredRole(t, path, "admin", "superuser")
 
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func setStoredRole(t *testing.T, path, username, role string) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := db.Update(func(tx *bbolt.Tx) error {
+	if err := publishInto(db, func(tx *Tx) error {
 		raw := tx.Bucket(bucketAdminUsers).Get([]byte(username))
 		var record map[string]any
 		if err := json.Unmarshal(raw, &record); err != nil {

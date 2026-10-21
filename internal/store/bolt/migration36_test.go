@@ -16,7 +16,7 @@ import (
 
 func TestMigration36BackfillsInferenceOnlyAndCreatesRunGovernanceBuckets(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metadata.db")
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestMigration36BackfillsInferenceOnlyAndCreatesRunGovernanceBuckets(t *test
 	if _, err := store.PutGatewayKey(context.Background(), key, 0, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.Update(func(tx *bbolt.Tx) error {
+	if err := publishInto(store.db, func(tx *Tx) error {
 		raw := tx.Bucket(bucketGatewayKeys).Get([]byte(key.ID))
 		var legacy map[string]any
 		if err := json.Unmarshal(raw, &legacy); err != nil {
@@ -94,7 +94,7 @@ func TestMigration36BackfillsInferenceOnlyAndCreatesRunGovernanceBuckets(t *test
 				t.Fatal(err)
 			}
 			defer readOnly.Close()
-			if err := readOnly.View(func(tx *bbolt.Tx) error {
+			if err := viewRaw(readOnly, func(tx *Tx) error {
 				version := binary.BigEndian.Uint64(tx.Bucket(bucketMeta).Get(keySchemaVersion))
 				if version != 35 {
 					t.Fatalf("schema=%d want rollback to 35", version)
@@ -106,7 +106,7 @@ func TestMigration36BackfillsInferenceOnlyAndCreatesRunGovernanceBuckets(t *test
 		})
 	}
 
-	migrated, err := Open(path)
+	migrated, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}

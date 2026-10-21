@@ -469,6 +469,15 @@ func initializeKMS(ctx context.Context, cfg config.Config, options kmsInitializa
 	if err != nil {
 		return err
 	}
+	journalKey, err := vault.DeriveMetadataJournalHMACKey(key)
+	if err != nil {
+		return err
+	}
+	defer clear(journalKey)
+	journalEnvelope, err := encryptMetadataJournalHMACKey(secretVault, journalKey)
+	if err != nil {
+		return err
+	}
 	descriptor, err := masterkey.NewKeySlotDescriptor(fingerprint)
 	if err != nil {
 		return err
@@ -546,7 +555,7 @@ func initializeKMS(ctx context.Context, cfg config.Config, options kmsInitializa
 	}
 	stageConfig := cfg
 	stageConfig.Storage.DataDir = stageRoot
-	metadata, err := boltstore.Open(stageConfig.MetadataPath())
+	metadata, err := boltstore.OpenForWholeFilePublish(stageConfig.MetadataPath())
 	if err != nil {
 		return err
 	}
@@ -591,8 +600,9 @@ func initializeKMS(ctx context.Context, cfg config.Config, options kmsInitializa
 			FormatVersion: 1, ActiveKeyVersion: 1, ActiveFingerprint: fingerprint,
 		},
 		VaultKeyCheck: keyCheck, AuditHMACEnvelope: auditEnvelope, LedgerHMACEnvelope: ledgerEnvelope,
-		AuditCheckpoint: boltstore.AuditCheckpoint{Records: auditSummary.Records, Bytes: auditSummary.Bytes, LastHash: auditSummary.LastHash},
-		Unwrapper:       unwrapper, Verifier: verifier,
+		MetadataJournalHMACEnvelope: journalEnvelope,
+		AuditCheckpoint:             boltstore.AuditCheckpoint{Records: auditSummary.Records, Bytes: auditSummary.Bytes, LastHash: auditSummary.LastHash},
+		Unwrapper:                   unwrapper, Verifier: verifier,
 	}); err != nil {
 		return err
 	}
@@ -608,7 +618,7 @@ func initializeKMS(ctx context.Context, cfg config.Config, options kmsInitializa
 			return err
 		}
 	}
-	verificationStore, err := boltstore.Open(stageConfig.MetadataPath())
+	verificationStore, err := boltstore.OpenForWholeFilePublish(stageConfig.MetadataPath())
 	if err != nil {
 		return err
 	}

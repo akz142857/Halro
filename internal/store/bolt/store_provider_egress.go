@@ -7,7 +7,6 @@ import (
 	"sort"
 
 	"github.com/akz142857/Halro/internal/domain"
-	bbolt "go.etcd.io/bbolt"
 )
 
 // PutProviderEgressProxy commits a proxy definition and its optional internal
@@ -42,7 +41,7 @@ func (s *Store) PutProviderEgressProxy(
 	if err := ctx.Err(); err != nil {
 		return domain.ProviderEgressProxy{}, err
 	}
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+	err := s.update(func(tx *Tx) error {
 		proxies := tx.Bucket(bucketProviderEgressProxies)
 		var current domain.ProviderEgressProxy
 		if raw := proxies.Get([]byte(proxy.ID)); raw != nil {
@@ -129,7 +128,7 @@ func (s *Store) DeleteProviderEgressProxy(ctx context.Context, id string, expect
 	if id == "" || expectedRevision == 0 {
 		return errors.New("Provider egress proxy id and expected revision are required")
 	}
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.update(func(tx *Tx) error {
 		proxies := tx.Bucket(bucketProviderEgressProxies)
 		raw := proxies.Get([]byte(id))
 		if raw == nil {

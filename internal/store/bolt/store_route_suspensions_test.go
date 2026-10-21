@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
-	bbolt "go.etcd.io/bbolt"
 )
 
 func suspensionFixture() domain.RouteSuspension {
@@ -22,7 +21,7 @@ func suspensionFixture() domain.RouteSuspension {
 
 func openSuspensionStore(t *testing.T) *Store {
 	t.Helper()
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +144,7 @@ func TestAnUnreadableRowIsSkippedRatherThanFailingTheRead(t *testing.T) {
 	if err := store.PutRouteSuspension(ctx, suspensionFixture()); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.Update(func(tx *bbolt.Tx) error {
+	if err := store.update(func(tx *Tx) error {
 		return tx.Bucket(bucketRouteSuspensions).Put([]byte("credential\x1fcorrupt"), []byte("{not json"))
 	}); err != nil {
 		t.Fatal(err)

@@ -33,7 +33,7 @@ func (v rejectingBoltTestCandidateVerifier) VerifyCandidate(context.Context, []b
 }
 
 func TestKeySlotDescriptorPersistenceUsesRevisionedCOW(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestKeySlotDescriptorPersistenceUsesRevisionedCOW(t *testing.T) {
 func TestKeySlotDescriptorPublicationRollsBackAtEveryKillPoint(t *testing.T) {
 	for _, point := range []string{"before_put_key_slot_descriptor", "after_put_key_slot_descriptor"} {
 		t.Run(point, func(t *testing.T) {
-			store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+			store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -122,7 +122,7 @@ func TestKeySlotInitializationPublishesCompleteStateAtomically(t *testing.T) {
 	}
 	for _, point := range points {
 		t.Run(point, func(t *testing.T) {
-			store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+			store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -152,7 +152,7 @@ func TestKeySlotInitializationPublishesCompleteStateAtomically(t *testing.T) {
 		})
 	}
 
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestKeySlotInitializationPublishesCompleteStateAtomically(t *testing.T) {
 }
 
 func TestKeySlotInitializationRejectsUnverifiedDescriptor(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestKeySlotInitializationRejectsUnverifiedDescriptor(t *testing.T) {
 }
 
 func TestKeySlotDescriptorStoreRejectsSkippedStateAndRemovedMetadata(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestKeySlotDescriptorStoreRejectsSkippedStateAndRemovedMetadata(t *testing.
 }
 
 func TestKeySlotDescriptorOperationsHonorCancellation(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestKeySlotDescriptorOperationsHonorCancellation(t *testing.T) {
 
 func TestKeySlotCompactionExcludesRevokedProviderMaterial(t *testing.T) {
 	livePath := filepath.Join(t.TempDir(), "metadata.db")
-	store, err := Open(livePath)
+	store, err := openForTest(t, livePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestKeySlotCompactionExcludesRevokedProviderMaterial(t *testing.T) {
 	if bytes.Contains(compactBytes, []byte(secretReference)) {
 		t.Fatal("compact snapshot retained revoked provider material")
 	}
-	compact, err := Open(compactPath)
+	compact, err := openForTest(t, compactPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +329,7 @@ func TestKeySlotCompactionExcludesRevokedProviderMaterial(t *testing.T) {
 }
 
 func TestMasterKeyRotationAuditIntentIsAtomicWithBridgeCleanup(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +383,7 @@ func TestMasterKeyRotationAuditIntentIsAtomicWithBridgeCleanup(t *testing.T) {
 }
 
 func TestVaultRewritePublishesRotatedDescriptorWithVaultGeneration(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

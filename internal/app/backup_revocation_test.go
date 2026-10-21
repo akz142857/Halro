@@ -43,7 +43,7 @@ func TestRestoreNamesAGatewayKeyThatWasDisabledAfterTheBackup(t *testing.T) {
 	// A second key that is already disabled when the backup is taken. It is the
 	// control: restore must not name it, because restoring it changes nothing.
 	const disabledKeyID = "gwk_disabled_at_backup_time"
-	seedStore, err := boltstore.Open(cfg.MetadataPath())
+	seedStore, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestRestoreNamesAGatewayKeyThatWasDisabledAfterTheBackup(t *testing.T) {
 	// one that was disabled is enabled. A report that simply echoed live state,
 	// or that always named every key it saw, would name both or the wrong one —
 	// only a report computed from the archive's enabled set names A alone.
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestRestoreNamesAGatewayKeyThatWasDisabledAfterTheBackup(t *testing.T) {
 	// And the key really is back, which is why the operator has to act on that
 	// list rather than read it as a formality. The control key goes the other
 	// way: restore disables it again, and that is not what the list reports on.
-	restored, err := boltstore.Open(cfg.MetadataPath())
+	restored, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

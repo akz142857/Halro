@@ -84,13 +84,22 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 		return BootstrapResult{}, err
 	}
 	secretVault, err := vault.New(masterKey)
-	clear(masterKey)
 	if err != nil {
+		clear(masterKey)
 		return BootstrapResult{}, err
 	}
 	defer secretVault.Close()
 	if err := verifyVaultKeyCheck(store, secretVault); err != nil {
+		clear(masterKey)
 		return BootstrapResult{}, err
+	}
+	// Bootstrap writes a Credential, Provider, Deployment, Route, Project and
+	// Gateway Key — every one of them authoritative, so it goes through the
+	// same entry a running instance does.
+	_, journalErr := attachMetadataJournal(store, secretVault, masterKey, "bootstrap")
+	clear(masterKey)
+	if journalErr != nil {
+		return BootstrapResult{}, journalErr
 	}
 	credentialID, err := id.New("cred")
 	if err != nil {

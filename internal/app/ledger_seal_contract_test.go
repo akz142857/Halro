@@ -27,7 +27,7 @@ import (
 
 func openSealingLedger(t *testing.T, cfg config.Config) (*ledger.Log, *boltstore.Store, []byte) {
 	t.Helper()
-	metadata, err := boltstore.Open(cfg.MetadataPath())
+	metadata, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
