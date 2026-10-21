@@ -1,6 +1,6 @@
 # Build from the repository root so the read-only HA view and its embedded UI
 # always come from the same source tree and build identity.
-FROM --platform=$BUILDPLATFORM golang:1.26.9-bookworm AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.10-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
