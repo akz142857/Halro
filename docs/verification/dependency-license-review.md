@@ -38,6 +38,13 @@ Python compatibility lock from 2026.7.22 to 2026.10.19 (PYSEC-2026-4320); it
 stays MPL-2.0 and test-only, and only its two hashes change, both checked
 against the published PyPI wheel and sdist.
 
+A second 2026-10-21 refresh moves the transitive `github.com/klauspost/compress`
+(reached through `parquet-go`'s zstd codec in `internal/usage`) from 1.17.9 to
+1.18.7 for CVE-2026-63209, reported by the release workflow's Trivy scan of the
+Halro image. No other module moves in `go.mod` or `go.sum`, and the module's
+LICENSE file is byte-identical across the bump (BSD-3-Clause, with its bundled
+MIT and Apache-2.0 notices unchanged).
+
 The 2026-10-15 refresh changes only the `go` directive in `go.mod`, from
 1.26.6 to 1.26.9, for standard-library fixes in `net/http` and `crypto/tls`.
 No module was added, removed, upgraded or relicensed; `go.sum` is unchanged.
@@ -370,8 +377,8 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `dc324d27f54e765e4269bee3642e72ab567179b4`
-- `go.sum`: `343bd2189fc0f3998a18e7f09f413f56d3b34ec1`
+- `go.mod`: `7ae6f019dc23e744ec47b0b1f5190ebb5cca3314`
+- `go.sum`: `970818705511fbf525299e52de822fcca6c000d9`
 - `web/package.json`: `4ffb712f631f5a5d1383cbfbace37f3bba98ffcb`
 - `web/package-lock.json`: `787919b41d0440ab5eb09f7be3e45d77b93a382e`
 - `tests/compatibility/go/go.mod`: `5956600457121a28ce98fe409119c8b6e8b451ea`
