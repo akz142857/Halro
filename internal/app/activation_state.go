@@ -67,6 +67,11 @@ type activationTracker struct {
 	mu         sync.Mutex
 	stale      map[activationDomain]activationDomainState
 	generation uint64
+	// wake asks runActivationRecovery to replay stale domains now instead of
+	// on its next tick. It is buffered by one: a wake that finds one already
+	// pending has nothing to add. A tracker built without it never wakes, and
+	// recovery falls back to the tick.
+	wake chan struct{}
 }
 
 // markStale records that a durable mutation did not reach the live snapshots.
@@ -196,7 +201,34 @@ func (r *Runtime) runActivationRecovery(ctx context.Context, interval time.Durat
 			if r.activation.status().Stale {
 				r.recoverActivationDomains()
 			}
+		case <-r.activation.wake:
+			// A wake carries no audit work: the intent of the mutation that
+			// caused it is still pending and the next tick delivers it.
+			if r.activation.status().Stale {
+				r.recoverActivationDomains()
+			}
 		}
+	}
+}
+
+// noteUnconfirmedMetadataCommit handles a withdrawing metadata write that is
+// committed locally but whose replica confirmation failed. Which snapshot it
+// belongs to is not known here, so every domain is marked stale: the data
+// plane refuses until recovery has rebuilt them from the store, which now
+// holds the withdrawal. That is the fail-closed reading of a 503 the caller
+// was told not to trust either way.
+//
+// It runs inside the store call, under whatever lock the handler holds, so it
+// only marks and wakes. Recovery itself runs on its own goroutine once those
+// locks are released, rather than five seconds later on the next tick.
+func (r *Runtime) noteUnconfirmedMetadataCommit() {
+	now := time.Now().UTC()
+	for _, domain := range activationDomains {
+		r.activation.markStale(domain, "a withdrawing metadata write is committed locally without replica confirmation", now)
+	}
+	select {
+	case r.activation.wake <- struct{}{}:
+	default:
 	}
 }
 

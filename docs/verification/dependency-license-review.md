@@ -30,6 +30,27 @@ module and lock files.
 | `golang.org/x/sys` | 0.48.0 | BSD-3-Clause | runtime |
 | `gopkg.in/yaml.v3` | 3.0.1 | MIT and Apache-2.0 | runtime |
 
+The 2026-10-21 refresh moves the `go` directive in `go.mod` from 1.26.9 to
+1.26.10 for GO-2026-6809 in `crypto/x509`, which govulncheck reaches through
+`internal/safetransport`. No module was added, removed, upgraded or
+relicensed; `go.sum` is unchanged. The same refresh moves `vite` in
+`web/package.json` from 8.3.0 to 8.3.4 (GHSA-698v-4r3x-3vcv,
+GHSA-r825-w8mm-5pxw, GHSA-587h-7wmj-h5pm in its bundled `launch-editor`),
+which carries `rolldown` and its platform bindings 1.2.8 to 1.2.14,
+`@oxc-project/types` 0.149.0 to 0.154.0, `postcss` 8.5.28 to 8.5.31 and
+`nanoid` 3.3.19 to 3.3.20 in `web/package-lock.json`. All remain MIT licensed
+and are build/test-time only; the embedded `internal/webui/dist` is rebuilt
+with this change. The Python compatibility lock moves `certifi` from 2026.7.22
+to 2026.10.19 (PYSEC-2026-4320); it stays MPL-2.0 and test-only, and only its
+two hashes change, both checked against the published PyPI wheel and sdist.
+
+The 2026-10-15 refresh changes only the `go` directive in `go.mod`, from
+1.26.6 to 1.26.9, for standard-library fixes in `net/http` and `crypto/tls`.
+No module was added, removed, upgraded or relicensed; `go.sum` is unchanged.
+The same refresh moves the transitive `source-map-js` in
+`web/package-lock.json` from 1.2.1 to 1.2.2 (GHSA-68fv-2mgg-jv7q); it stays
+BSD-3-Clause and is a build/test-time dependency of Vite and jsdom.
+
 The 2026-08-28 refresh moved six direct versions and added, removed, and
 relicensed nothing: the module path sets in `go.mod` and `go.sum` are identical
 to the reviewed tree before it, so every row above is a version change rather
@@ -315,16 +336,16 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `742ec795e94a3945336be2f5e3a7b35d5209e180`
+- `go.mod`: `1327d4f3fd1eebd8cc29c372764539ecad218d6c`
 - `go.sum`: `f2b3fdf9939c7cbef8048f41ac042bafb6165079`
-- `web/package.json`: `ef5d38e8a10ddb05637847ef44ad0ff3a5f5afab`
-- `web/package-lock.json`: `3a1d755426394151731995ee69f599a332bceed6`
+- `web/package.json`: `d3431688bbc0b2abff2a1124f5e63cc1a93f3cdc`
+- `web/package-lock.json`: `cbf835a2131b6f8d5fecc7faeccdb5e91d22402b`
 - `tests/compatibility/go/go.mod`: `738e441acd384f01b95150407cfad761111a63aa`
 - `tests/compatibility/go/go.sum`: `e41910b1dfe53890a0f3d9caa912db7a3f00c6c7`
 - `tests/compatibility/node/package.json`: `08df1b6dbf9e6b758d28cfbb16cba47d42d409f2`
 - `tests/compatibility/node/package-lock.json`: `2b98506e0adbb5c5b77c96b731f752b1e0c1b105`
 - `tests/compatibility/python/requirements.in`: `178571770ce0d9f229f1bd770be6cbb207089226`
-- `tests/compatibility/python/requirements.txt`: `96c533c4ab5bc6815223c43129b443e8185c6986`
+- `tests/compatibility/python/requirements.txt`: `3b95c514771adb4eb5c01923fa6edba1ecdeab50`
 
 The Go hashes last moved for the 2026-09-18 Go refresh recorded above. The two
 web hashes last moved for the 2026-09-18 Admin UI refresh recorded above, before

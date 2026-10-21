@@ -926,6 +926,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		usageExporter:       usageExporter,
 		periods:             periods,
 		now:                 time.Now,
+		activation:          activationTracker{wake: make(chan struct{}, 1)},
 		capabilityDetections: capabilityDetectionRuntime{
 			cancels:   make(map[string]context.CancelFunc),
 			global:    make(chan struct{}, cfg.Admin.ModelCapabilityDetection.GlobalConcurrency),
@@ -937,6 +938,9 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	// this the console would show every withheld route as Enabled until the
 	// first topology mutation happened to republish them.
 	runtime.publishRouteWithholdings(loaded)
+	if memberReplication != nil {
+		memberReplication.unconfirmedMetadata = runtime.noteUnconfirmedMetadataCommit
+	}
 	if catalogManager != nil {
 		catalogManager.SetObserver(runtime.observeModelCatalogRefresh)
 		catalogManager.SetActivationPreparer(runtime.prepareModelCatalogActivation)
