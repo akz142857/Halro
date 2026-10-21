@@ -416,6 +416,11 @@ type Record struct {
 	// It is read from the frame, not computed, so it is authenticated only as
 	// far as the walk that read it was.
 	PreviousHash [32]byte `json:"-"`
+	// Hash is the chain head after this record: the hash of its MAC, which is
+	// the next frame's PreviousHash. It is zero for a frame written before the
+	// chain. Like PreviousHash it is read from the frame, so it is
+	// authenticated only as far as the walk that read it was.
+	Hash [32]byte `json:"-"`
 }
 
 type Watermark struct {

@@ -19,7 +19,7 @@ func (s *Store) PutProject(ctx context.Context, project domain.Project, expected
 	if err := ctx.Err(); err != nil {
 		return domain.Project{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.updateContext(ctx, func(tx *Tx) error {
 		if err := putVersioned(tx.Bucket(bucketProjects), project.ID, expectedRevision, &project); err != nil {
 			return err
 		}
@@ -64,7 +64,7 @@ func (s *Store) PutGatewayKey(ctx context.Context, key domain.GatewayKey, expect
 	if err := ctx.Err(); err != nil {
 		return domain.GatewayKey{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.updateContext(ctx, func(tx *Tx) error {
 		rawProject := tx.Bucket(bucketProjects).Get([]byte(key.ProjectID))
 		if rawProject == nil {
 			return fmt.Errorf("project %q: %w", key.ProjectID, ErrNotFound)

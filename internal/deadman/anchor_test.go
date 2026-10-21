@@ -77,7 +77,7 @@ func TestPullAnchorsFetchesAndPersistsIncrementally(t *testing.T) {
 		var anchors []PulledAnchor
 		if since == "0" {
 			anchors = []PulledAnchor{
-				{Sequence: 1, Records: 10, InstanceID: "ins_1", ObservedAt: time.Now().UTC()},
+				{Sequence: 1, Records: 10, InstanceID: "ins_1", ClusterID: "production-a", Incarnation: "inc_01", NodeID: "halro-0", Term: 7, ObservedAt: time.Now().UTC()},
 				{Sequence: 2, Records: 20, InstanceID: "ins_1", ObservedAt: time.Now().UTC()},
 			}
 		} else if since == "2" {
@@ -125,6 +125,9 @@ func TestPullAnchorsFetchesAndPersistsIncrementally(t *testing.T) {
 	}
 	if len(loaded) != 3 || loaded[0].Sequence != 1 || loaded[2].Sequence != 3 {
 		t.Fatalf("persisted anchors=%#v raw=%q", loaded, payload)
+	}
+	if loaded[0].ClusterID != "production-a" || loaded[0].Incarnation != "inc_01" || loaded[0].NodeID != "halro-0" || loaded[0].Term != 7 || loaded[0].TargetID != "halro" {
+		t.Fatalf("pulled HA identity was not preserved: %#v", loaded[0])
 	}
 
 	// State survives a restart: a fresh engine loading the same state file

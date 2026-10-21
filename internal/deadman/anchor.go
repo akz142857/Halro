@@ -17,12 +17,17 @@ import (
 // app's storage package). halro audit verify-anchor decodes the file
 // anchorWriter produces using its own matching type.
 type PulledAnchor struct {
-	Sequence   uint64    `json:"sequence"`
-	Records    uint64    `json:"records"`
-	LastHash   [32]byte  `json:"last_hash"`
-	Bytes      int64     `json:"bytes"`
-	InstanceID string    `json:"instance_id"`
-	ObservedAt time.Time `json:"observed_at"`
+	Sequence    uint64    `json:"sequence"`
+	Records     uint64    `json:"records"`
+	LastHash    [32]byte  `json:"last_hash"`
+	Bytes       int64     `json:"bytes"`
+	InstanceID  string    `json:"instance_id"`
+	ClusterID   string    `json:"cluster_id,omitempty"`
+	Incarnation string    `json:"incarnation,omitempty"`
+	NodeID      string    `json:"node_id,omitempty"`
+	Term        uint64    `json:"term,omitempty"`
+	TargetID    string    `json:"target_id,omitempty"`
+	ObservedAt  time.Time `json:"observed_at"`
 }
 
 type anchorSink interface {
@@ -107,6 +112,7 @@ func (e *Engine) pullAnchors(ctx context.Context) map[string]string {
 		expected := since + 1
 		reason := ""
 		for _, anchor := range anchors {
+			anchor.TargetID = target.ID
 			if anchor.Sequence <= since {
 				// The endpoint was asked for anchors after `since` and answered
 				// with ones at or before it. On a healthy instance that cannot

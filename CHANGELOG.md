@@ -6,6 +6,22 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- High-availability members are back on the current release line: the
+  Primary/Replica replication runtime, `halro cluster` (establish, seed,
+  status, promote, stepdown, maintenance, leave), Replica backups, the HA
+  runbooks and the read-only Cluster status page in the Admin console, as they
+  were verified on the `ha` branch. A Replica now opens its accounting state
+  the way a Standalone start does — state snapshot, archive, replay of the
+  suffix — through the prefix it has applied, keeps its usage history from the
+  records it applies, and writes snapshots while it runs, so its memory stays
+  bounded and a promotion does not replay from the first frame. A Replica never
+  seals a Ledger generation; it compacts generations up to its usage history
+  and applied prefix. A deployment without a `replication` block is Standalone
+  and unchanged. HA is still not supported in production until the entry
+  conditions in `docs/todo/halro-ha-architecture.zh-CN.md` §1.3 are met.
+
 ### Changed
 
 - `halro.db` is now a projection of `data/metadata.journal`: every metadata

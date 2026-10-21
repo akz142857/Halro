@@ -1,8 +1,10 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"os"
+	"time"
 
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/usage"
@@ -51,9 +53,15 @@ func (r *Runtime) warnAboutUnsealedLedger(activeBytes int64) {
 }
 
 // sealLedgerGeneration rolls the active WAL once it passes the configured size.
+//
+// Never on a Replica. The Primary decides where a generation ends and the
+// roll reaches a Replica as an ordered record (HA design §6.2.3); one that
+// rolled on its own size check would end a generation where the Primary's
+// does not, and every frame after it would conflict. Its Ledger refuses a
+// local roll as well, but asking it every few seconds would only log that.
 func (r *Runtime) sealLedgerGeneration() {
 	seal := r.config.Ledger.Seal
-	if !seal.Enabled || seal.MaxActiveBytes <= 0 {
+	if !seal.Enabled || seal.MaxActiveBytes <= 0 || r.isReplica() {
 		return
 	}
 	if r.ledger.ActiveBytes() < seal.MaxActiveBytes {
@@ -135,13 +143,26 @@ func (r *Runtime) compactLedgerSegments() {
 // caught up to. It is a minimum rather than either one alone: a generation is
 // only safely archivable once neither the archive nor the history index still
 // needs to read it.
+//
+// A Replica exports no Parquet (HA design §6.2), so the manifest is not its
+// bar: there it is the history index and the applied prefix. The index only
+// ever holds applied records, so the second is the first restated, kept so the
+// bar does not rest on how the index is fed. Compression is node-local and the
+// two nodes need not agree on it (§6.2.3).
 func (r *Runtime) ledgerArchivedThrough() (uint64, bool) {
-	manifest, err := r.usageExporter.LoadManifest()
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			r.logger.Warn("ledger segments not compacted: the export manifest could not be read", "error", err)
+	replica := r.isReplica()
+	var exported uint64
+	if replica {
+		exported = r.replication.ledgerApplied.sequence()
+	} else {
+		manifest, err := r.usageExporter.LoadManifest()
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				r.logger.Warn("ledger segments not compacted: the export manifest could not be read", "error", err)
+			}
+			return 0, false
 		}
-		return 0, false
+		exported = manifest.LastSequence
 	}
 	state, err := r.usage.History().State()
 	if err != nil {
@@ -153,5 +174,31 @@ func (r *Runtime) ledgerArchivedThrough() (uint64, bool) {
 		}
 		return 0, false
 	}
-	return min(manifest.LastSequence, state.Watermark.Sequence), true
+	return min(exported, state.Watermark.Sequence), true
+}
+
+// runReplicaMaintenance is intentionally smaller than runUsageMaintenance.
+// A Replica keeps its usage history caught up with what it applied and checks
+// it against its state — the history is what the console reads once it is
+// promoted — and may compact generations the Primary has already sealed. It
+// never exports Parquet, rolls the Ledger, delivers alerts, anchors Audit, or
+// writes the Token Guard checkpoint. Its state snapshots run on their own loop.
+func (r *Runtime) runReplicaMaintenance(ctx context.Context) {
+	checkpointTicker := time.NewTicker(r.config.Usage.CheckpointInterval.Value())
+	compactionTicker := time.NewTicker(r.config.Usage.ParquetInterval.Value())
+	defer checkpointTicker.Stop()
+	defer compactionTicker.Stop()
+	for {
+		select {
+		case <-checkpointTicker.C:
+			r.reopenHistoryFiles(true)
+			r.catchUpUsageHistory()
+		case <-compactionTicker.C:
+			r.reconcileUsageHistory(time.Now())
+			r.compactLedgerSegments()
+			r.reopenHistoryFiles(false)
+		case <-ctx.Done():
+			return
+		}
+	}
 }

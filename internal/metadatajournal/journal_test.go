@@ -317,6 +317,32 @@ func TestTrimKeepsTheTailAndSignsWhereItCut(t *testing.T) {
 	}
 }
 
+func TestTrimZeroPreservesTheEpochHeaderAndTail(t *testing.T) {
+	path, log := newJournal(t)
+	if _, err := log.Append([]Op{put("projects", "one", "value")}); err != nil {
+		t.Fatal(err)
+	}
+	before := log.Head()
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := Trim(path, testKey(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("head after Trim(0)=%#v, want %#v", after, before)
+	}
+	reopened, err := Open(path, testKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if _, err := reopened.Append([]Op{put("projects", "two", "value")}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestTrimRefusesToGoBackwards. A second trim that claims a lower cut than the
 // anchor already records would be rewriting history rather than shortening it.
 func TestTrimRefusesToGoBackwards(t *testing.T) {

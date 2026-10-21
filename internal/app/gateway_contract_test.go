@@ -57,8 +57,8 @@ func TestEveryGatewayRouteIsADeclaredNorthboundMethod(t *testing.T) {
 // apply.
 //
 // Middleware values are functions and cannot be compared, so this counts them:
-// the router itself carries three (panic recovery, the first-byte arrival
-// stamp, the write deadline) and each guarded group adds three (the
+// the router itself carries the common middleware stack (including the HA
+// startup gate when configured) and each guarded group adds three (the
 // stale-snapshot refusal, the limiter, the guard). Counting is enough to catch
 // the mistake the warning is about — registering a northbound route on the bare
 // router — without pinning which three they are.
@@ -69,7 +69,10 @@ func TestEveryGatewayRouteIsADeclaredNorthboundMethod(t *testing.T) {
 func TestEveryGatewayRouteSitsInsideItsGuardedGroup(t *testing.T) {
 	served, middlewares := walkGatewayRoutes(t)
 	declared := declaredNorthboundMethods()
-	const baseMiddlewares = 3
+	baseMiddlewares, ok := middlewares["GET /health/live"]
+	if !ok {
+		t.Fatal("GET /health/live is missing from the gateway router")
+	}
 	for _, route := range served {
 		if _, ok := declared[route]; !ok {
 			continue
@@ -83,8 +86,8 @@ func TestEveryGatewayRouteSitsInsideItsGuardedGroup(t *testing.T) {
 	// does carry fewer. Health is deliberately outside the guarded groups — an
 	// orchestrator probes it on a fixed interval and limiting by source would
 	// eventually mark a healthy instance unready — so it is the witness.
-	if count, ok := middlewares["GET /health/live"]; !ok || count != baseMiddlewares {
-		t.Fatalf("GET /health/live carries %d middlewares, want the bare router's %d — the count above no longer separates guarded from unguarded", count, baseMiddlewares)
+	if count := middlewares["GET /health/ready"]; count != baseMiddlewares {
+		t.Fatalf("GET /health/ready carries %d middlewares, want the bare router's %d — the count above no longer separates guarded from unguarded", count, baseMiddlewares)
 	}
 }
 

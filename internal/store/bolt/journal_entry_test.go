@@ -24,6 +24,292 @@ func journalHead(t *testing.T, store *Store) metadatajournal.Head {
 	return head
 }
 
+func TestAuthorityWithdrawalWaitsOnlyAfterProjectionCommit(t *testing.T) {
+	store := openJournalledStore(t, filepath.Join(t.TempDir(), "metadata.db"))
+	var nextIndex uint64
+	var waited []uint64
+	if err := store.SetMetadataJournalAfterDurable(func(metadatajournal.DurableBatch) (uint64, error) {
+		nextIndex++
+		return nextIndex, nil
+	}, func(_ context.Context, index uint64) error {
+		var raw []byte
+		if err := store.view(func(tx *Tx) error {
+			raw = append([]byte(nil), tx.Bucket(bucketGatewayKeys).Get([]byte("key-1"))...)
+			return nil
+		}); err != nil {
+			return err
+		}
+		if !strings.Contains(string(raw), `"enabled":false`) {
+			return errors.New("confirmation wait ran before the bbolt projection committed")
+		}
+		waited = append(waited, index)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.update(func(tx *Tx) error {
+		return tx.Bucket(bucketMeta).Put(keyRuntimeSettings, []byte("value"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(waited) != 0 {
+		t.Fatalf("ordinary metadata waited at indexes %v", waited)
+	}
+	if err := store.update(func(tx *Tx) error {
+		return tx.Bucket(bucketGatewayKeys).Put([]byte("key-1"), []byte(`{"enabled":false}`))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(waited) != 1 || waited[0] != 2 {
+		t.Fatalf("withdrawal waits=%v, want [2]", waited)
+	}
+}
+
+func TestAuthorityWithdrawalConfirmationUsesTheRequestContext(t *testing.T) {
+	store := openJournalledStore(t, filepath.Join(t.TempDir(), "metadata.db"))
+	project := domain.Project{ID: "prj_cancel", Name: "cancel", Enabled: true}
+	var err error
+	project, err = store.PutProject(context.Background(), project, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting := make(chan struct{})
+	if err := store.SetMetadataJournalAfterDurable(func(metadatajournal.DurableBatch) (uint64, error) {
+		return 17, nil
+	}, func(ctx context.Context, index uint64) error {
+		if index != 17 {
+			t.Fatalf("confirmation index=%d, want 17", index)
+		}
+		close(waiting)
+		<-ctx.Done()
+		return ctx.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	project.Enabled = false
+	go func() {
+		_, err := store.PutProject(ctx, project, project.Revision, nil)
+		done <- err
+	}()
+	select {
+	case <-waiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("authority withdrawal did not reach its confirmation wait")
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("withdrawal returned %v, want context cancellation", err)
+	}
+	stored, err := store.GetProject(context.Background(), project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Enabled {
+		t.Fatal("request cancellation rolled back a withdrawal that had already committed")
+	}
+}
+
+func TestAuthorityTighteningClassificationCoversPromotionFailOpenWrites(t *testing.T) {
+	tests := []struct {
+		name     string
+		bucket   []byte
+		previous string
+		value    string
+		want     bool
+	}{
+		{name: "new enabled project is additive", bucket: bucketProjects, value: `{"enabled":true}`, want: false},
+		{name: "existing project may tighten limits", bucket: bucketProjects, previous: `{"enabled":true,"rpm":100}`, value: `{"enabled":true,"rpm":50}`, want: true},
+		{name: "existing gateway key may lose a scope", bucket: bucketGatewayKeys, previous: `{"enabled":true,"scopes":["inference","governance:read"]}`, value: `{"enabled":true,"scopes":["inference"]}`, want: true},
+		{name: "token guard policy may tighten", bucket: bucketTokenGuardPolicies, value: `{"enabled":true}`, want: true},
+		{name: "redaction rule may be added", bucket: bucketRedactionPolicies, value: `{"enabled":true}`, want: true},
+		{name: "existing admin may rotate password", bucket: bucketAdminUsers, previous: `{"role":"admin","password_hash":"old"}`, value: `{"role":"admin","password_hash":"new"}`, want: true},
+		{name: "new MFA authenticator is additive", bucket: bucketAdminMFAAuthenticators, value: `{"status":"pending"}`, want: false},
+		{name: "existing MFA authenticator may advance the TOTP watermark", bucket: bucketAdminMFAAuthenticators, previous: `{"status":"active","last_accepted_time_step":41}`, value: `{"status":"active","last_accepted_time_step":42}`, want: true},
+		{name: "new MFA challenge is additive", bucket: bucketAdminMFAChallenges, value: `{"claimed":false}`, want: false},
+		{name: "existing MFA challenge claim is one time", bucket: bucketAdminMFAChallenges, previous: `{"claimed":false}`, value: `{"claimed":true}`, want: true},
+		{name: "reserved provider resource has not reached upstream", bucket: bucketProviderResources, value: `{"creation_status":"reserved"}`, want: false},
+		{name: "in flight provider resource gates upstream dispatch", bucket: bucketProviderResources, previous: `{"creation_status":"reserved"}`, value: `{"creation_status":"in_flight"}`, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := metadataOpRequiresConfirmation(
+				metadatajournal.OpPut, []string{string(test.bucket)}, []byte(test.previous), []byte(test.value),
+			)
+			if got != test.want {
+				t.Fatalf("requires confirmation=%t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestAuthorityWithdrawingDeletesRequireConfirmation(t *testing.T) {
+	for _, bucket := range [][]byte{bucketAdminSessions, bucketAdminMFAChallenges} {
+		if !metadataOpRequiresConfirmation(metadatajournal.OpDelete, []string{string(bucket)}, []byte(`{"present":true}`), nil) {
+			t.Fatalf("delete from %q did not require confirmation", bucket)
+		}
+	}
+}
+
+func TestAdminOneTimeStateTransitionsWaitForConfirmation(t *testing.T) {
+	store := openJournalledStore(t, filepath.Join(t.TempDir(), "metadata.db"))
+	var nextIndex uint64
+	var waits []uint64
+	if err := store.SetMetadataJournalAfterDurable(func(metadatajournal.DurableBatch) (uint64, error) {
+		nextIndex++
+		return nextIndex, nil
+	}, func(_ context.Context, index uint64) error {
+		waits = append(waits, index)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	challengeHash := [32]byte{1}
+	challenge := domain.AdminMFAChallenge{
+		IDHash: challengeHash, Username: "admin", Purpose: domain.AdminMFAChallengeLogin,
+		CreatedAt: now, ExpiresAt: now.Add(time.Minute), AttemptsRemaining: 3, SessionGeneration: 1,
+	}
+	if err := store.PutAdminMFAChallenge(context.Background(), challenge); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 0 {
+		t.Fatalf("new challenge unexpectedly waited: %v", waits)
+	}
+	if _, err := store.ClaimAdminMFAChallenge(context.Background(), challengeHash, now); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 1 {
+		t.Fatalf("challenge claim waits=%v, want one", waits)
+	}
+	if err := store.CompleteAdminMFAChallenge(context.Background(), challengeHash); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 2 {
+		t.Fatalf("challenge completion waits=%v, want two", waits)
+	}
+
+	confirmedAt := now
+	authenticator := domain.AdminMFAAuthenticator{
+		ID: "mfa_confirm", Username: "admin", Name: "phone", Type: domain.AdminMFATypeTOTP,
+		SecretCiphertext: []byte("sealed"), Status: domain.AdminMFAStatusActive,
+		CreatedAt: now, ConfirmedAt: &confirmedAt,
+	}
+	storedAuthenticator, err := store.PutAdminMFAAuthenticator(context.Background(), authenticator, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 2 {
+		t.Fatalf("new authenticator unexpectedly waited: %v", waits)
+	}
+	if err := store.AcceptAdminMFATimeStep(context.Background(), "admin", storedAuthenticator.ID, 42, now); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 3 {
+		t.Fatalf("TOTP consumption waits=%v, want three", waits)
+	}
+
+	sessionHash := [32]byte{2}
+	session := domain.AdminSession{
+		IDHash: sessionHash, Username: "admin", Generation: 1, CreatedAt: now, LastSeenAt: now,
+		AbsoluteExpiresAt: now.Add(time.Hour), IdleExpiresAt: now.Add(15 * time.Minute),
+	}
+	if err := store.PutAdminSession(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 3 {
+		t.Fatalf("new session unexpectedly waited: %v", waits)
+	}
+	if err := store.DeleteAdminSession(context.Background(), sessionHash); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 4 {
+		t.Fatalf("session revocation waits=%v, want four", waits)
+	}
+}
+
+func TestProviderInFlightBoundaryWaitsForConfirmation(t *testing.T) {
+	store := openJournalledStore(t, filepath.Join(t.TempDir(), "metadata.db"))
+	var nextIndex uint64
+	var waits []uint64
+	if err := store.SetMetadataJournalAfterDurable(func(metadatajournal.DurableBatch) (uint64, error) {
+		nextIndex++
+		return nextIndex, nil
+	}, func(_ context.Context, index uint64) error {
+		waits = append(waits, index)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.update(func(tx *Tx) error {
+		return tx.Bucket(bucketProviderResources).Put([]byte("idm_1"), []byte(`{"creation_status":"reserved"}`))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 0 {
+		t.Fatalf("reservation unexpectedly waited: %v", waits)
+	}
+	if err := store.update(func(tx *Tx) error {
+		return tx.Bucket(bucketProviderResources).Put([]byte("idm_1"), []byte(`{"creation_status":"in_flight"}`))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 1 || waits[0] != 2 {
+		t.Fatalf("in-flight boundary waits=%v, want [2]", waits)
+	}
+}
+
+func TestCursorDeleteRecordsAndConfirmsMFARevocation(t *testing.T) {
+	store := openJournalledStore(t, filepath.Join(t.TempDir(), "metadata.db"))
+	var waits []uint64
+	var index uint64
+	if err := store.SetMetadataJournalAfterDurable(func(metadatajournal.DurableBatch) (uint64, error) {
+		index++
+		return index, nil
+	}, func(_ context.Context, confirmed uint64) error {
+		waits = append(waits, confirmed)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("admin\x00code")
+	if err := store.update(func(tx *Tx) error {
+		return tx.Bucket(bucketAdminMFARecoveryCodes).Put(key, []byte(`{"used_at":null}`))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 0 {
+		t.Fatalf("additive recovery code waited at %v", waits)
+	}
+	if err := store.updateContext(context.Background(), func(tx *Tx) error {
+		cursor := tx.Bucket(bucketAdminMFARecoveryCodes).Cursor()
+		found, _ := cursor.Seek([]byte("admin\x00"))
+		if string(found) != string(key) {
+			return errors.New("recovery code cursor did not find seeded key")
+		}
+		return cursor.Delete()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 1 || waits[0] != 2 {
+		t.Fatalf("MFA revocation waits=%v, want [2]", waits)
+	}
+	var last metadatajournal.Record
+	_, err := metadatajournal.Replay(store.MetadataJournalPath(), testJournalKey(), func(record metadatajournal.Record) error {
+		if record.Kind == metadatajournal.KindOperations {
+			last = record
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(last.Ops) != 1 || last.Ops[0].Kind != metadatajournal.OpDelete || string(last.Ops[0].Key) != string(key) {
+		t.Fatalf("last MFA journal operations=%#v", last.Ops)
+	}
+}
+
 func appliedSequence(t *testing.T, store *Store) uint64 {
 	t.Helper()
 	state, err := store.MetadataJournalState()

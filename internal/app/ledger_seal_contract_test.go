@@ -140,7 +140,7 @@ func TestABackupTakenAfterASealRestoresEveryGeneration(t *testing.T) {
 	backupKey := bytes.Repeat([]byte{0x5e}, 32)
 	manifest, err := createBackupSnapshotWithLedger(
 		context.Background(), cfg, configPath, archivePath, backupKey,
-		metadata, fingerprint, log, ledgerKey,
+		metadata, fingerprint, log, ledgerKey, nil, nil,
 	)
 	clear(ledgerKey)
 	closeErr := errors.Join(log.Close(), metadata.Close())

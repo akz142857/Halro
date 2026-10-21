@@ -1,6 +1,6 @@
 # HA 移植到当前 `main` 的设计
 
-- 状态：owner 已确认 §7 的四项建议（2026-10-21），按 §5 分阶段实施
+- 状态：owner 已确认 §7 的四项建议（2026-10-21），按 §5 分阶段实施。0a 已合入（#445）；0b–2 的实现见 §8
 - 依据：[`halro-ha-architecture.zh-CN.md`](halro-ha-architecture.zh-CN.md)（下称"HA 设计"，代码在 `ha` 分支）、
   [`memory-bounded-redesign.zh-CN.md`](memory-bounded-redesign.zh-CN.md)（下称"内存有界设计"，已随 v0.9.0 发布）
 - 范围：把 `ha` 分支上已实现、已在本地三节点演练通过的 HA，搬到 v0.9.2 之后的 `main` 上。
@@ -185,3 +185,52 @@ HA 设计 §1.3 的进入条件（kind、Linux、相邻版本、生产演练）�
    （与 v0.9.0 的做法一致），回滚走备份恢复。
 3. **`state.snap` 播种时带不带**（§4.5）。建议带上，依赖绑定校验。
 4. **Parquet 导出在切换后的归属**（§4.4）。建议维持"只有 Primary 导出"，文档说明归档要从两个节点收。
+
+## 8. 阶段 0b–2 的实现记录
+
+按 §5，从 `a5e21480`、`52c45f42` 与 `202a1419` 的 shutdown_test 部分的回退开始，再并入 `ha` 上 #439
+（`2227daf8`）。冲突的处理：
+
+- **§4.1** Replica 打开时走 `openBoundedLedgerState`：与 Standalone 相同的快照 + 归档 + 后缀，只重放到
+  ordering journal 给出的已应用 Ledger 序号；快照越过已应用前缀即弃用重建。投影应用的每条记录同时喂
+  给 `ledger.State`、已应用链头与用量收集器（`history.db`）。Replica 跑快照循环与 `Close` 时写快照。
+- **快照绑定哪个链头。** 设计里写的是"只推进到 confirmed index"。Replica 的内存状态本来就只含已应用
+  前缀，但 `WriteStateSnapshot` 与 `FlushArchive` 绑定的是 `Log.ChainHead()`——在 Replica 上它可能落在
+  durable 而未确认的尾部。所以 Replica 给它们一个 `appliedLedgerHead`：最后一条已应用记录的链头。
+  为此 `ledger.Record.Hash` 改为对每个链式帧都填（帧 MAC 的哈希，即下一帧的 `PreviousHash`），
+  与 `PreviousHash` 同样"由读到它的那次遍历认证"；此前只有带校验器的遍历才填，`Log.Replay` 的活动代
+  拿不到。唯一的旧调用方（`ledger.ReplicationHeadAt`）另外要求 `ChainVerified`，结果不变。
+- **§4.2** `sealLedgerGeneration` 在 Replica 上直接返回（Ledger 在 Replica 模式下本来也拒绝本地 `Roll`）。
+- **§4.3** Replica 的压缩门槛为 `min(history.db 水位, 已应用前缀)`。
+- **§4.5** 播种照旧拷整个 `ledger/` 目录，`state.snap` 随之带过去；被改动的快照 MAC 失败、重建。
+  `history/` 不在播种清单里：不要求也不校验，带过去的 `history.db`/`archive.db` 在 Replica 打开时按它
+  自己的 Ledger 校验，对不上即重建。备份本来就不含这三个派生文件。
+- **§4.6** `archive.db` 每个节点自己写，Replica 的写入绑定已应用链头。
+
+- **#385 提前到本阶段。** 不带 `687f8d6a`（#385：集群状态页、计划内交接加固）时，Primary 从不更新成员状态
+  里的 projection；stepdown 之后老 Primary 以 Replica 打开即报 "Replica metadata projection does not match
+  authenticated member state"。用 `ha`（`2227daf8`）与本分支的二进制跑同一脚本（establish → 播种 → 一次元数据
+  写 → stepdown → 重启老 Primary）确认：`ha` 上老 Primary 是 term 2、projection index 13，能打开；本分支不带 #385
+  时是 term 1、projection index 0，打不开；带上 #385 后与 `ha` 一致。所以 #385 并入本阶段，阶段 3 只剩
+  `716ac18c`（#386 HA 健康系统）与 §1 的发现 (2)。
+
+测试：`TestReplicaLedgerState*`、`TestReplicaCompactionGateIsTheHistoryAndTheAppliedPrefix`、
+`TestReplicaRuntimeNeverRollsItsLedger`、`TestReplayedRecordHashIsTheChainHeadAfterIt`，以及集成测试
+`TestPrimaryAndReplicaRuntimesReplicateAndApplyAnAuditFrame` 增加的"Replica 关闭写出快照"。§6 的
+24 小时堆曲线仍未跑。
+
+本地三节点演练（2026-10-21，darwin，本分支二进制）：
+
+| 项 | 结果 |
+| --- | --- |
+| establish、两个 Replica 从索引 0 播种、复制收敛 | 通过 |
+| Primary 重启从快照恢复；Replica 运行中写 `state.snap`；Replica 重启从快照恢复（head 1438） | 通过 |
+| stepdown n0→n1：n1 以 Primary 身份从它作为 Replica 写的快照恢复 | 通过 |
+| 老 Primary 带过时 projection（旧二进制写的）→ 从 n1 reseed：带过去的 `state.snap` 直接被使用 | 通过 |
+| stepdown n1→n2（n2 始终是 Replica）：用量汇总与请求列表切换前后逐字段一致（只差 `generated_at`） | 通过 |
+| 停机后三个节点的 Ledger、Audit、Governance、metadata journal 逐字节一致；三个节点 `doctor` 通过 | 通过 |
+| Replica 维护模式 → `backup create --replica` → `backup verify` → 退出维护 | 通过 |
+| Primary 封存、Replica 应用封存与压缩 | **未跑**：封存阈值下限 16 MiB，本地失败请求经路由挂起后只能写约 0.3 MB/分钟；由单元测试覆盖，Replica 应用 Roll 的代码与 `ha` 相同 |
+| 热状态上限附近切换（§4.7） | 未跑 |
+
+演练中再次遇到 `route suspensions` 在 HA 成员上的过时提示（"this build has no replication runtime"），即 §1 的发现 (2)，留在阶段 3。

@@ -221,23 +221,23 @@ describe("admin internationalization", () => {
     expect([
       zhCN.navigation.overview, zhCN.navigation.providers, zhCN.navigation.deployments,
       zhCN.navigation.routes, zhCN.navigation.policies, zhCN.navigation.projects,
-      zhCN.navigation.developer, zhCN.navigation.usage, zhCN.navigation.runGovernance, zhCN.navigation.operations,
+      zhCN.navigation.developer, zhCN.navigation.usage, zhCN.navigation.runGovernance, zhCN.navigation.operations, zhCN.navigation.cluster,
       zhCN.navigation.settings,
     ]).toEqual([
       zhCN.dashboard.title, zhCN.providers.title, zhCN.deployments.title,
       zhCN.routes.title, zhCN.policyManagement.title, zhCN.projects.title,
-      zhCN.developer.title, zhCN.usage.title, zhCN.runGovernance.title, zhCN.operations.title,
+      zhCN.developer.title, zhCN.usage.title, zhCN.runGovernance.title, zhCN.operations.title, zhCN.cluster.title,
       zhCN.settings.title,
     ]);
     expect([
       enUS.navigation.overview, enUS.navigation.providers, enUS.navigation.deployments,
       enUS.navigation.routes, enUS.navigation.policies, enUS.navigation.projects,
-      enUS.navigation.developer, enUS.navigation.usage, enUS.navigation.runGovernance, enUS.navigation.operations,
+      enUS.navigation.developer, enUS.navigation.usage, enUS.navigation.runGovernance, enUS.navigation.operations, enUS.navigation.cluster,
       enUS.navigation.settings,
     ]).toEqual([
       enUS.dashboard.title, enUS.providers.title, enUS.deployments.title,
       enUS.routes.title, enUS.policyManagement.title, enUS.projects.title,
-      enUS.developer.title, enUS.usage.title, enUS.runGovernance.title, enUS.operations.title,
+      enUS.developer.title, enUS.usage.title, enUS.runGovernance.title, enUS.operations.title, enUS.cluster.title,
       enUS.settings.title,
     ]);
   });
