@@ -6,6 +6,11 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Security
+
+- Built with Go 1.26.10 (from 1.26.9), for a standard-library fix in
+  `crypto/x509` (GO-2026-6809) that Provider TLS verification reaches.
+
 ## [0.9.1] - 2026-10-20
 
 ### Upgrading from v0.9.0

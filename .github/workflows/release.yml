@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GOTOOLCHAIN: go1.26.9
+  GOTOOLCHAIN: go1.26.10
 
 jobs:
   # prepare is the one place a release version is decided. Everything downstream

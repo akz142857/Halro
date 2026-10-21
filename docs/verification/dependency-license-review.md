@@ -30,6 +30,14 @@ module and lock files.
 | `golang.org/x/sys` | 0.49.0 | BSD-3-Clause | runtime |
 | `gopkg.in/yaml.v3` | 3.0.1 | MIT and Apache-2.0 | runtime |
 
+The 2026-10-21 refresh moves the `go` directive in `go.mod` from 1.26.9 to
+1.26.10 for GO-2026-6809 in `crypto/x509`, which govulncheck reaches through
+`internal/safetransport`. No module was added, removed, upgraded or
+relicensed; `go.sum` is unchanged. The same refresh moves `certifi` in the
+Python compatibility lock from 2026.7.22 to 2026.10.19 (PYSEC-2026-4320); it
+stays MPL-2.0 and test-only, and only its two hashes change, both checked
+against the published PyPI wheel and sdist.
+
 The 2026-10-15 refresh changes only the `go` directive in `go.mod`, from
 1.26.6 to 1.26.9, for standard-library fixes in `net/http` and `crypto/tls`.
 No module was added, removed, upgraded or relicensed; `go.sum` is unchanged.
@@ -362,7 +370,7 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `45dc78e252a7497ddb947416cdd0899618c57fcc`
+- `go.mod`: `dc324d27f54e765e4269bee3642e72ab567179b4`
 - `go.sum`: `343bd2189fc0f3998a18e7f09f413f56d3b34ec1`
 - `web/package.json`: `881100a63f73e57798604ed0f97e450a045f664d`
 - `web/package-lock.json`: `35d03a585f0cdc1b3a5de64e11fe3eb3ff76a67a`
@@ -371,7 +379,7 @@ document is deliberately refreshed with the new inventory and hashes.
 - `tests/compatibility/node/package.json`: `8189b4738da40529f77b9d2644fcf05b95c115ea`
 - `tests/compatibility/node/package-lock.json`: `3529b7584be983ae4eda1067ed41919edc7d03fa`
 - `tests/compatibility/python/requirements.in`: `d2db9779dd34fbe3374aea32475bdde0e0ae4ddf`
-- `tests/compatibility/python/requirements.txt`: `72c07938239f8aca7e5bff1ea9e35be4429dc2af`
+- `tests/compatibility/python/requirements.txt`: `11090f7ea5d0cc3dd8f14d8ce2cab0f7c47e0340`
 
 All ten hashes last moved for the 2026-10-17 refreshes recorded above. Before
 that the Go hashes moved for the 2026-09-18 Go refresh, and the two web hashes
