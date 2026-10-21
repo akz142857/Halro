@@ -6,6 +6,29 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-21
+
+### Upgrading from v0.9.1
+
+No configuration migration or data-directory re-initialisation is required.
+This patch changes the Go toolchain and the Admin console, not any on-disk
+format. Take a backup before upgrading. Upgrades from v0.8.5 or earlier still
+need the steps in the v0.9.0 release notes below.
+
+### Changed
+
+- Admin console diagnostics lead each finding with a plain-language conclusion
+  that quotes its numbers, show the parameters as labelled values with the
+  configuration key beneath each, and keep the server's arithmetic as a
+  footnote. A route suspension without a recorded reason points to the
+  instance's own per-call timeout first.
+- The Usage summary's granularity defaults to day: with no range set it shows
+  the last 30 days, where the month default showed the last 12 months. The CSV
+  export default follows.
+- `configs/config.example.yaml` documents the shape of a `tls.certificates`
+  entry, and the commented example in the generated configuration is aligned
+  under `tls` instead of reading as nested under `tls.enabled`.
+
 ### Security
 
 - Built with Go 1.26.10 (from 1.26.9), for a standard-library fix in
@@ -2561,6 +2584,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.9.2]: https://github.com/akz142857/Halro/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/akz142857/Halro/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/akz142857/Halro/compare/v0.8.5...v0.9.0
 [0.8.5]: https://github.com/akz142857/Halro/compare/v0.8.4...v0.8.5
