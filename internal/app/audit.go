@@ -51,8 +51,17 @@ func VerifyAudit(ctx context.Context, cfg config.Config) (audit.Summary, error) 
 	if completionErr != nil && !errors.Is(completionErr, boltstore.ErrNotFound) {
 		return audit.Summary{}, fmt.Errorf("load administrator bootstrap completion: %w", completionErr)
 	}
+	checkpoint, err := store.AuditCheckpoint()
+	if err != nil {
+		return audit.Summary{}, fmt.Errorf("load audit checkpoint: %w", err)
+	}
 	foundBootstrap := false
+	// The record at the checkpoint's position, for a member's prefix check.
+	var atCheckpoint audit.Record
 	summary, err := audit.VerifyWithVisitor(cfg.AuditPath(), auditKey, func(record audit.Record) error {
+		if record.Sequence == checkpoint.Records {
+			atCheckpoint = record
+		}
 		if completionErr != nil || record.Event.EventID != completion.AuditEventID {
 			return nil
 		}
@@ -70,13 +79,31 @@ func VerifyAudit(ctx context.Context, cfg config.Config) (audit.Summary, error) 
 	if completionErr == nil && !foundBootstrap {
 		return audit.Summary{}, errors.New("administrator bootstrap completion has no matching audit event")
 	}
-	checkpoint, err := store.AuditCheckpoint()
-	if err != nil {
-		return audit.Summary{}, fmt.Errorf("load audit checkpoint: %w", err)
+	if cfg.Replication != nil {
+		if !auditCheckpointIsPrefix(checkpoint, summary, atCheckpoint) {
+			return audit.Summary{}, errors.New("audit log does not match its trusted checkpoint")
+		}
+		return summary, nil
 	}
 	if checkpoint.Records != summary.Records || checkpoint.Bytes != summary.Bytes ||
 		checkpoint.LastHash != summary.LastHash {
 		return audit.Summary{}, errors.New("audit log does not match its trusted checkpoint")
 	}
 	return summary, nil
+}
+
+// auditCheckpointIsPrefix is the checkpoint check on an HA member. The
+// checkpoint is node-derived (class C) and a Replica never advances it: the
+// frames it holds past it were appended by replication, authenticated by the
+// chain, and ordered by the Primary. So the checkpoint has to name a point on
+// the verified chain — not past its end, and the same hash and length there —
+// rather than its end. A truncated or rewritten log still fails.
+func auditCheckpointIsPrefix(checkpoint boltstore.AuditCheckpoint, summary audit.Summary, at audit.Record) bool {
+	if checkpoint.Records > summary.Records {
+		return false
+	}
+	if checkpoint.Records == 0 {
+		return checkpoint.Bytes == 0
+	}
+	return at.Sequence == checkpoint.Records && at.Hash == checkpoint.LastHash && at.Offset == checkpoint.Bytes
 }

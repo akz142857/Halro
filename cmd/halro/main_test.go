@@ -190,12 +190,37 @@ func TestReplicationRefusesOfflineMemberStateMutationsUntilRuntimeExists(t *test
 	for _, operation := range []string{
 		"start initialization", "init", "bootstrap", "admin reset-password",
 		"key rotate", "backup create", "backup restore", "route clear-suspension",
-		"key slot status", "route suspensions", "audit verify", "audit verify-anchor",
-		"usage rebuild-summary", "ledger verify", "ledger seal",
+		"key slot status", "usage rebuild-summary", "ledger seal",
 	} {
 		err := rejectReplicationMutation(cfg, operation)
 		if err == nil || !strings.Contains(err.Error(), operation) || !strings.Contains(err.Error(), "outside the replication order") {
 			t.Fatalf("operation %q error=%v", operation, err)
+		}
+	}
+}
+
+// The verify commands and listings append nothing, so a seeded member answers
+// them; a member directory without its state still refuses.
+func TestReadOnlyCommandsRunOnAMember(t *testing.T) {
+	cfg := config.Default()
+	cfg.Storage.DataDir = filepath.Join(t.TempDir(), "member")
+	cfg.Replication = &config.Replication{}
+	operations := []string{"route suspensions", "audit verify", "audit verify-anchor", "ledger verify"}
+	for _, operation := range operations {
+		if err := guardReadOnlyCommand(cfg, operation); err == nil || !strings.Contains(err.Error(), "join or re-seed") {
+			t.Fatalf("%q on an unseeded member error=%v", operation, err)
+		}
+	}
+	cluster := filepath.Join(cfg.Storage.DataDir, "cluster")
+	if err := os.MkdirAll(cluster, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cluster, "state.json"), []byte("seeded"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range operations {
+		if err := guardReadOnlyCommand(cfg, operation); err != nil {
+			t.Fatalf("%q on a seeded member refused: %v", operation, err)
 		}
 	}
 }
@@ -242,11 +267,7 @@ func TestReplicationMutationCommandsRefuseBeforeTouchingTheDataDirectory(t *test
 		{"key", "slot", "status", "--config", path},
 		{"backup", "create", "--config", path, "--output", filepath.Join(root, "backup.hmbk"), "--key-file", filepath.Join(root, "backup.key")},
 		{"route", "clear-suspension", "--config", path, "--scope-id", "route:r1"},
-		{"route", "suspensions", "--config", path},
-		{"audit", "verify", "--config", path},
-		{"audit", "verify-anchor", "--config", path, "--anchors", filepath.Join(root, "anchors.jsonl")},
 		{"usage", "rebuild-summary", "--config", path},
-		{"ledger", "verify", "--config", path},
 		{"ledger", "seal", "--config", path},
 		{"pricing", "migrate", "--config", path, "--apply", "--resolution-file", filepath.Join(root, "resolution.json")},
 	}
@@ -256,6 +277,18 @@ func TestReplicationMutationCommandsRefuseBeforeTouchingTheDataDirectory(t *test
 	}
 	for _, command := range commands {
 		if err := run(command, logger); err == nil || !strings.Contains(err.Error(), "outside the replication order") {
+			t.Fatalf("command %q error=%v", command, err)
+		}
+	}
+	// The read-only commands are admitted on a member, but not on one that has
+	// not been seeded yet.
+	for _, command := range [][]string{
+		{"route", "suspensions", "--config", path},
+		{"audit", "verify", "--config", path},
+		{"audit", "verify-anchor", "--config", path, "--anchors", filepath.Join(root, "anchors.jsonl")},
+		{"ledger", "verify", "--config", path},
+	} {
+		if err := run(command, logger); err == nil || !strings.Contains(err.Error(), "join or re-seed") {
 			t.Fatalf("command %q error=%v", command, err)
 		}
 	}

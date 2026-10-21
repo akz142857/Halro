@@ -1448,7 +1448,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		}
 		switch arguments[1] {
 		case "suspensions":
-			if err := rejectReplicationMutation(cfg, "route suspensions"); err != nil {
+			if err := guardReadOnlyCommand(cfg, "route suspensions"); err != nil {
 				return err
 			}
 			items, err := app.ListStoredRouteSuspensions(context.Background(), cfg)
@@ -1541,7 +1541,7 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
-			if err := rejectReplicationMutation(cfg, "audit verify"); err != nil {
+			if err := guardReadOnlyCommand(cfg, "audit verify"); err != nil {
 				return err
 			}
 			if err := hardenSecretHandlingCommand(); err != nil {
@@ -1566,7 +1566,7 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
-			if err := rejectReplicationMutation(cfg, "audit verify-anchor"); err != nil {
+			if err := guardReadOnlyCommand(cfg, "audit verify-anchor"); err != nil {
 				return err
 			}
 			if err := hardenSecretHandlingCommand(); err != nil {
@@ -1598,7 +1598,11 @@ func run(arguments []string, logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
-		if err := rejectReplicationMutation(cfg, "ledger "+arguments[1]); err != nil {
+		guard := rejectReplicationMutation
+		if arguments[1] == "verify" {
+			guard = guardReadOnlyCommand
+		}
+		if err := guard(cfg, "ledger "+arguments[1]); err != nil {
 			return err
 		}
 		if arguments[1] == "seal" {
@@ -1902,7 +1906,13 @@ func runRuntime(cfg config.Config, configPath string, logger *slog.Logger, print
 }
 
 func rejectReplicationMutation(cfg config.Config, operation string) error {
-	return replication.GuardUnavailableRuntime(cfg.Storage.DataDir, cfg.Replication != nil, operation)
+	return replication.GuardStandaloneAccess(cfg.Storage.DataDir, cfg.Replication != nil, operation)
+}
+
+// guardReadOnlyCommand admits a command that appends nothing on a member as
+// well as on a Standalone instance; see replication.GuardMemberRead.
+func guardReadOnlyCommand(cfg config.Config, operation string) error {
+	return replication.GuardMemberRead(cfg.Storage.DataDir, cfg.Replication != nil, operation)
 }
 
 // watchReloadSignal answers SIGHUP for as long as the returned stop has not

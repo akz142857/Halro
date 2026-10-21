@@ -230,6 +230,23 @@ func VerifyWithVisitor(path string, key []byte, visit func(Record) error) (Summa
 	return summary, nil
 }
 
+// InspectWithVisitor authenticates and visits every complete record, as
+// VerifyWithVisitor does, but reports a torn final record rather than failing
+// on it. That record is what opening the log would cut away; this reads past
+// it without cutting, so a command that only reads can see the same chain an
+// open would without changing the file.
+func InspectWithVisitor(path string, key []byte, visit func(Record) error) (Summary, bool, error) {
+	if len(key) != auditHMACKeySize {
+		return Summary{}, false, fmt.Errorf("audit HMAC key must be %d bytes", auditHMACKeySize)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return Summary{}, false, err
+	}
+	defer file.Close()
+	return scan(file, key, visit)
+}
+
 func (l *Log) Append(ctx context.Context, event Event) (Record, error) {
 	records, err := l.AppendBatch(ctx, []Event{event})
 	if err != nil {

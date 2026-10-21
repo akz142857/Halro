@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -230,6 +231,15 @@ func TestVerifyAuditAnchorsDetectsARewrittenChainWithARecomputedTail(t *testing.
 	}
 	if len(verdicts) != 1 || verdicts[0].Outcome == AnchorVerdictAgree {
 		t.Fatalf("verdicts=%#v — a shortened chain must not agree with a pre-shortening anchor", verdicts)
+	}
+	// A verify command reads. The torn tail is left for the next start to
+	// cut, which on an HA member is the replication order's call.
+	after, err := os.ReadFile(cfg.AuditPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, raw[:cut]) {
+		t.Fatal("verifying anchors changed the audit log")
 	}
 }
 

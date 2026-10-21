@@ -11,8 +11,13 @@ semantic versioning.
 - High-availability members are back on the current release line: the
   Primary/Replica replication runtime, `halro cluster` (establish, seed,
   status, promote, stepdown, maintenance, leave), Replica backups, the HA
-  runbooks and the read-only Cluster status page in the Admin console, as they
-  were verified on the `ha` branch. A Replica now opens its accounting state
+  runbooks, the read-only Cluster status page in the Admin console, and the
+  independent `halro-ha-health` service with its HA alert rules, as they were
+  verified on the `ha` branch. On a member, the offline commands that append
+  nothing (`ledger verify`, `audit verify`, `audit verify-anchor`,
+  `route suspensions`) now run instead of being refused; the ones that write
+  are still refused, with a message that no longer claims the build lacks a
+  replication runtime. A Replica now opens its accounting state
   the way a Standalone start does — state snapshot, archive, replay of the
   suffix — through the prefix it has applied, keeps its usage history from the
   records it applies, and writes snapshots while it runs, so its memory stays

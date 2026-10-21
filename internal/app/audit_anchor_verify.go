@@ -148,11 +148,6 @@ func VerifyAuditAnchors(ctx context.Context, cfg config.Config, anchors []boltst
 		return nil, err
 	}
 	defer clear(auditKey)
-	log, err := audit.Open(cfg.AuditPath(), auditKey)
-	if err != nil {
-		return nil, fmt.Errorf("open local audit chain: %w", err)
-	}
-	defer log.Close()
 	// Keep only the record hashes the anchors actually name. Retaining one
 	// entry per record made the memory a function of the audit log's length —
 	// unbounded, since the log has no cap but the disk — for a check whose
@@ -162,14 +157,18 @@ func VerifyAuditAnchors(ctx context.Context, cfg config.Config, anchors []boltst
 		wanted[anchor.Records] = struct{}{}
 	}
 	hashBySequence := make(map[uint64][32]byte, len(wanted))
-	summary, err := log.Replay(func(record audit.Record) error {
+	// Read and authenticated, never opened for writing: opening the log would
+	// cut a torn tail away, and on an HA member that tail belongs to the
+	// replication order, not to a verify command. The torn record is left out
+	// of the chain compared here, as an open would leave it out.
+	summary, _, err := audit.InspectWithVisitor(cfg.AuditPath(), auditKey, func(record audit.Record) error {
 		if _, ok := wanted[record.Sequence]; ok {
 			hashBySequence[record.Sequence] = record.Hash
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("replay local audit chain: %w", err)
+		return nil, fmt.Errorf("verify local audit chain: %w", err)
 	}
 	verdicts := make([]AnchorVerdict, 0, len(anchors))
 	type tenurePosition struct {

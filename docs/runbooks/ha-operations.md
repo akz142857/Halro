@@ -14,6 +14,17 @@ authorize a production rollout: the admission evidence in
 - Never edit or copy `cluster/state.json` or `cluster/ordering.journal`.
 - Keep the same Master Key on every member, but use a distinct node
   certificate and the configured SPKI pin for every peer.
+- On a stopped (or maintenance-mode) member, the offline commands that append
+  nothing run as on a Standalone instance: `halro doctor`, `ledger verify`,
+  `audit verify`, `audit verify-anchor`, `usage verify` and
+  `route suspensions`. On a member `audit verify` accepts an audit checkpoint
+  that lags the chain, because a Replica never advances that node-local
+  checkpoint; it still fails if the checkpoint lies past the chain or
+  disagrees with it. Every other offline command that writes — `init`,
+  `bootstrap`, `admin`, `key`, `ledger seal`, `usage
+  compact|prune|rebuild-summary`, `route clear-suspension`, plain `backup
+  create`, `pricing migrate --apply` — is refused, because its writes would
+  never enter the replication order.
 
 ## Inspect member status
 

@@ -1,6 +1,6 @@
 # HA 移植到当前 `main` 的设计
 
-- 状态：owner 已确认 §7 的四项建议（2026-10-21），按 §5 分阶段实施。0a 已合入（#445）；0b–2 的实现见 §8
+- 状态：owner 已确认 §7 的四项建议（2026-10-21），按 §5 分阶段实施。0a 已合入（#445）；0b–2 的实现见 §8（#446）；阶段 3 见 §9
 - 依据：[`halro-ha-architecture.zh-CN.md`](halro-ha-architecture.zh-CN.md)（下称"HA 设计"，代码在 `ha` 分支）、
   [`memory-bounded-redesign.zh-CN.md`](memory-bounded-redesign.zh-CN.md)（下称"内存有界设计"，已随 v0.9.0 发布）
 - 范围：把 `ha` 分支上已实现、已在本地三节点演练通过的 HA，搬到 v0.9.2 之后的 `main` 上。
@@ -17,7 +17,7 @@
 2026-10-21 在 `ha` 上的核对：`make full-check` 通过；本地三进程演练通过（复制、单/双 Replica 断开、
 stepdown、promote 与 fencing、未确认尾部的 reseed、Replica 维护与备份、三份日志逐字节一致）。
 两个发现：(1) 撤销返回 503 后内存鉴权快照不刷新——#439 已修；(2) HA 成员上 `ledger verify` /
-`audit verify` 被 `GuardUnavailableRuntime` 拒绝，且提示文案过时——未修，随移植一起修（§6 阶段 3）。
+`audit verify` 被 `GuardUnavailableRuntime` 拒绝，且提示文案过时——随阶段 3 修复（§9）。
 
 ## 2. 移植不改变的东西
 
@@ -234,3 +234,34 @@ HA 设计 §1.3 的进入条件（kind、Linux、相邻版本、生产演练）�
 | 热状态上限附近切换（§4.7） | 未跑 |
 
 演练中再次遇到 `route suspensions` 在 HA 成员上的过时提示（"this build has no replication runtime"），即 §1 的发现 (2)，留在阶段 3。
+
+## 9. 阶段 3 的实现记录
+
+从 `716ac18c`（#386 HA 健康系统）的回退开始。冲突只有三处：#439 的元数据确认失败上报保留，并按 `ha`
+的写法经 `waitRequiredConfirmation` 计数；`runtimeFieldBudget` 79 → 81；CI 的 govulncheck 保持 main 的
+go1.26.10。`ha` 上后来把 ha-health 镜像升到 golang:1.26.10，一并带上。控制台 bundle 重建，不手工合并。
+
+**§1 的发现 (2)。** `GuardUnavailableRuntime` 的名字和文案都停留在"运行时还没写出来"的时候；它现在的
+职责是拒绝在 HA 成员上走 Standalone 路径的离线写。改名为 `GuardStandaloneAccess`，文案改为"refusing X on
+an HA member: it would mutate member state … outside the replication order"。不追加任何帧的命令
+（HA 设计 §12 对"只读"的定义）改走新的 `GuardMemberRead`：`ledger verify`、`audit verify`、
+`audit verify-anchor`、`route suspensions`（`usage verify` 本来就放行）。放行之前先在演练数据的副本上
+用真实二进制跑过：
+
+- `ledger verify`、`route suspensions` 在 Primary 与两个 Replica 上都通过——Ledger 的 checkpoint 检查
+  本来就容许 checkpoint 落后。
+- `audit verify` 在 Primary 上通过、在两个 Replica 上失败（"audit log does not match its trusted
+  checkpoint"）：它要求 checkpoint 与链尾完全相等，而 `audit_checkpoint` 是 C 类、Replica 从不推进。
+  成员上改为要求 checkpoint 是已认证链上的一点（不越过链尾，同一位置哈希与长度相同）；Standalone
+  仍是完全相等。
+- `audit verify-anchor` 原来用可写的 `audit.Open`，会就地截掉半帧尾部；在成员上那是排序权威的事。
+  改用新的只读 `audit.InspectWithVisitor`：认证完整记录、报告但不截掉半帧，判定与原来相同
+  （`TestVerifyAuditAnchorsDetectsARewrittenChainWithARecomputedTail` 现在还断言文件字节不变，退回旧
+  实现时失败）。
+
+修复后在同一份副本上：四个命令在三个成员上都通过，三份 `audit.log` 字节不变，`ledger seal` 仍被拒绝
+且文案已更正；之后三个成员照常启动并收敛。
+
+**HA 健康系统的本地验收**（§6）没有按 2026-09-28 的 kind 规模重跑（那是一整天的人工长跑与 72 小时采样）。
+本阶段做的是仓库门禁（含 `cmd/halro-ha-health` 的测试与 Prometheus 规则测试）和一次主机进程 smoke，
+结果见 PR。

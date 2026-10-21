@@ -191,7 +191,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 
 func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger, options OpenOptions) (*Runtime, error) {
 	member := cfg.Replication != nil
-	guard := replication.GuardUnavailableRuntime
+	guard := replication.GuardStandaloneAccess
 	if member {
 		guard = replication.RequireMemberRuntime
 	}

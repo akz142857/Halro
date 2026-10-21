@@ -7,35 +7,35 @@ import (
 	"testing"
 )
 
-func TestUnavailableRuntimeGuardKeepsClusterStateOutOfStandalone(t *testing.T) {
+func TestStandaloneAccessGuardKeepsClusterStateOutOfStandalone(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "data")
 	if err := os.MkdirAll(filepath.Join(dataDir, ClusterDirectoryName), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	err := GuardUnavailableRuntime(dataDir, false, "serve")
+	err := GuardStandaloneAccess(dataDir, false, "serve")
 	if err == nil || !strings.Contains(err.Error(), "cannot downgrade") || !strings.Contains(err.Error(), "refusing serve") {
 		t.Fatalf("missing downgrade refusal: %v", err)
 	}
 }
 
-func TestUnavailableRuntimeGuardDistinguishesStandaloneJoinAndMember(t *testing.T) {
+func TestStandaloneAccessGuardDistinguishesStandaloneJoinAndMember(t *testing.T) {
 	root := t.TempDir()
 	dataDir := filepath.Join(root, "data")
-	if err := GuardUnavailableRuntime(dataDir, false, "serve"); err != nil {
+	if err := GuardStandaloneAccess(dataDir, false, "serve"); err != nil {
 		t.Fatalf("fresh Standalone refused: %v", err)
 	}
-	if err := GuardUnavailableRuntime(dataDir, true, "serve"); err == nil || !strings.Contains(err.Error(), "join or re-seed") {
+	if err := GuardStandaloneAccess(dataDir, true, "serve"); err == nil || !strings.Contains(err.Error(), "join or re-seed") {
 		t.Fatalf("configured member without state error=%v", err)
 	}
 	if err := os.MkdirAll(filepath.Join(dataDir, ClusterDirectoryName), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := GuardUnavailableRuntime(dataDir, true, "serve"); err == nil || !strings.Contains(err.Error(), "outside the replication order") {
+	if err := GuardStandaloneAccess(dataDir, true, "serve"); err == nil || !strings.Contains(err.Error(), "outside the replication order") {
 		t.Fatalf("configured member with state error=%v", err)
 	}
 }
 
-func TestUnavailableRuntimeGuardRefusesNonDirectorySentinel(t *testing.T) {
+func TestStandaloneAccessGuardRefusesNonDirectorySentinel(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "data")
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -43,7 +43,7 @@ func TestUnavailableRuntimeGuardRefusesNonDirectorySentinel(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dataDir, ClusterDirectoryName), []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := GuardUnavailableRuntime(dataDir, false, "init"); err == nil || !strings.Contains(err.Error(), "not a directory") {
+	if err := GuardStandaloneAccess(dataDir, false, "init"); err == nil || !strings.Contains(err.Error(), "not a directory") {
 		t.Fatalf("non-directory sentinel error=%v", err)
 	}
 }
@@ -69,5 +69,32 @@ func TestRequireMemberRuntimeAcceptsOnlyConfiguredSeededMember(t *testing.T) {
 	}
 	if err := RequireMemberRuntime(root, false, "start"); err == nil || !strings.Contains(err.Error(), "cannot downgrade") {
 		t.Fatalf("unconfigured member error=%v", err)
+	}
+}
+
+func TestMemberReadGuardAdmitsStandaloneAndSeededMembersOnly(t *testing.T) {
+	root := t.TempDir()
+	if err := GuardMemberRead(root, false, "ledger verify"); err != nil {
+		t.Fatalf("Standalone read refused: %v", err)
+	}
+	if err := GuardMemberRead(root, true, "ledger verify"); err == nil || !strings.Contains(err.Error(), "join or re-seed") {
+		t.Fatalf("configured member without state error=%v", err)
+	}
+	cluster := filepath.Join(root, ClusterDirectoryName)
+	if err := os.Mkdir(cluster, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cluster, "state.json"), []byte("seeded"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := GuardMemberRead(root, true, "ledger verify"); err != nil {
+		t.Fatalf("seeded member read refused: %v", err)
+	}
+	if err := GuardMemberRead(root, false, "ledger verify"); err == nil || !strings.Contains(err.Error(), "cannot downgrade") {
+		t.Fatalf("member state without configuration error=%v", err)
+	}
+	if err := GuardStandaloneAccess(root, true, "ledger seal"); err == nil || strings.Contains(err.Error(), "no replication runtime") ||
+		!strings.Contains(err.Error(), "refusing ledger seal on an HA member") {
+		t.Fatalf("member write error=%v", err)
 	}
 }
