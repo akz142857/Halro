@@ -209,6 +209,12 @@ gh release view v0.8.0 --repo akz142857/Halro  # must report not found
 Do not continue until the `main` CI for that commit is green. Avoid merging
 anything else to `main` between the dry run and the formal release.
 
+Ordinary CI does not scan the Halro image; the daily `image-scan` workflow runs
+the release's Trivy scan of both images on `main`. Check its latest run, or
+start one with `gh workflow run image-scan.yml --ref main`, before preparing the
+release: a red run is an advisory the rehearsal will refuse, as v0.9.2's first
+rehearsal did.
+
 ### 2. Verify the one-time package automation setup
 
 The same least-privilege GitHub App must be installed on all four repositories:
