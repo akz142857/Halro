@@ -604,6 +604,57 @@ func TestBatchedWritesShareOneFrame(t *testing.T) {
 	}
 }
 
+// TestCallersQueuedBehindACommitShareTheNextOne pins the group commit. Callers
+// that arrive while a transaction is committing, each far enough apart to get
+// a delay timer of its own, must all go into the next transaction. Taking the
+// queue before the commit turn put each of them in a transaction of its own,
+// lined up behind the writer — the convoy that halved throughput at 64
+// workers.
+func TestCallersQueuedBehindACommitShareTheNextOne(t *testing.T) {
+	store := openJournalledStore(t, filepath.Join(t.TempDir(), "metadata.db"))
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	first := make(chan error, 1)
+	go func() {
+		first <- store.batch(func(tx *Tx) error {
+			close(entered)
+			<-release
+			return tx.Bucket(bucketRedactionPolicies).Put([]byte("first"), []byte("policy"))
+		})
+	}()
+	<-entered
+	before := store.batchTransactions.Load()
+	const queued = 6
+	var group sync.WaitGroup
+	errs := make([]error, queued)
+	for index := range errs {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			errs[index] = store.batch(func(tx *Tx) error {
+				return tx.Bucket(bucketRedactionPolicies).Put([]byte{byte(index)}, []byte("policy"))
+			})
+		}()
+		// Well past the delay, so each caller's timer fires on its own while
+		// the first transaction is still holding the writer.
+		time.Sleep(10 * store.batches.delay)
+	}
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	group.Wait()
+	for index, err := range errs {
+		if err != nil {
+			t.Fatalf("queued write %d failed: %v", index, err)
+		}
+	}
+	// The first transaction, then one for everything that queued behind it.
+	if got := store.batchTransactions.Load() - before; got != 2 {
+		t.Fatalf("%d callers queued behind a commit took %d transactions, want 2 (the held one and one more)", queued, got)
+	}
+}
+
 // TestAFailingBatchSiblingDoesNotReachTheJournal.
 //
 // The property db.Batch had and this layer has to keep: one caller's error
