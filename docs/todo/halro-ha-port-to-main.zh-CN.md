@@ -231,7 +231,7 @@ HA 设计 §1.3 的进入条件（kind、Linux、相邻版本、生产演练）�
 | 停机后三个节点的 Ledger、Audit、Governance、metadata journal 逐字节一致；三个节点 `doctor` 通过 | 通过 |
 | Replica 维护模式 → `backup create --replica` → `backup verify` → 退出维护 | 通过 |
 | Primary 封存、Replica 应用封存与压缩 | **未跑**：封存阈值下限 16 MiB，本地失败请求经路由挂起后只能写约 0.3 MB/分钟；由单元测试覆盖，Replica 应用 Roll 的代码与 `ha` 相同 |
-| 热状态上限附近切换（§4.7） | 通过（2026-10-22，`main` 871d5f3f）：16 MiB 上限，约 4950 个未关闭 Work Unit 把估算值推到 16,777,760；请求、Work Unit、Run 三条准入都 503 `accounting_capacity_exhausted`。stepdown 后新 Primary 估算值逐字节相同、同样拒绝，拒绝计数从 0 起（进程内）。关闭 Work Unit 后估算值先**升**（进归档队列，每个 2 KiB）、快照循环约 20 s 后回落，准入恢复。两点发现：Replica 不输出 `halro_ledger_hot_state_*`，切换前看不出要接手的状态已顶满；老 Primary 落后 515 帧重新加入后永远追不上——见下 |
+| 热状态上限附近切换（§4.7） | 通过（2026-10-22，`main` 871d5f3f）：16 MiB 上限，约 4950 个未关闭 Work Unit 把估算值推到 16,777,760；请求、Work Unit、Run 三条准入都 503 `accounting_capacity_exhausted`。stepdown 后新 Primary 估算值逐字节相同、同样拒绝，拒绝计数从 0 起（进程内）。关闭 Work Unit 后估算值先**升**（进归档队列，每个 2 KiB）、快照循环约 20 s 后回落，准入恢复。两点发现：Replica 不输出 `halro_ledger_hot_state_*`，切换前看不出要接手的状态已顶满（已修：Replica 输出估算值与它自己的上限，不输出拒绝计数，`HalroLedgerHotStateHigh` 因此也覆盖 Replica）；老 Primary 落后 515 帧重新加入后永远追不上——见下 |
 | Replica 落后超过一个会话队列（64 条）后追赶 | **缺陷，已修**：追赶在会话写协程启动前把整段缺口塞进 64 槽队列，第 65 条必然 `queue is full`，会话关闭，每次重连停在同一索引；Replica 仍报 ready。`ha` 上同样存在，不是移植引入。改为每个 Primary→Replica 会话按索引顺序发送、追赶从 journal 读并在队列满时等待写协程（ADR 0027 §3）。真实二进制：卡住的数据目录换新二进制后 5232→5753 追平；停 n2 写 300 帧、边写 300 帧边重启 n2，追平且五份日志逐字节一致 |
 
 演练中再次遇到 `route suspensions` 在 HA 成员上的过时提示（"this build has no replication runtime"），即 §1 的发现 (2)，留在阶段 3。

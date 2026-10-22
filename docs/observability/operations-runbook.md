@@ -248,6 +248,7 @@ This root probe does not perform a write or establish client-final success.
 - Trigger: the accounting state held in memory stays above 80 percent of `ledger.max_hot_state_bytes` for ten minutes.
 - Immediate: see what holds it — requests in flight (`halro_active_requests`, `halro_accounting_pending_leases`), open Work Units and live Runs per project (Admin console, Run Governance), and whether snapshots are being written, since they drain the archive queue (`halro_ledger_state_snapshot_failures_total`). Normal traffic sits far below the limit; growth usually means requests that never finish or Run Governance near its per-project caps on many projects.
 - Escalate: raise `ledger.max_hot_state_bytes` within the memory the host has, or reduce in-flight work, before new requests start being refused.
+- On an HA Replica: nothing is refused there, but the state it has applied is measured against its own limit, and that is what a promotion would admit against. Fix the Primary's state as above, or give the Replica the Primary's limit, before any stepdown or promotion.
 
 ### HalroLedgerHotStateRejecting
 

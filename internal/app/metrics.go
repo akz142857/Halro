@@ -246,12 +246,7 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 		"Size of the last accounting state snapshot, which is the size of the accounting state.")
 	fmt.Fprintf(output, "halro_ledger_state_snapshot_bytes %d\n", r.accountingState.snapshots.bytes.Load())
 	hotState := r.accounting.HotStateStats()
-	metricHeader(output, "halro_ledger_hot_state_estimated_bytes", "gauge",
-		"Estimated heap the accounting state holds, counted from its entries.")
-	fmt.Fprintf(output, "halro_ledger_hot_state_estimated_bytes %d\n", hotState.Bytes)
-	metricHeader(output, "halro_ledger_hot_state_limit_bytes", "gauge",
-		"Accounting state size beyond which new requests, Work Units and Runs are refused.")
-	fmt.Fprintf(output, "halro_ledger_hot_state_limit_bytes %d\n", hotState.Limit)
+	writeHotStateGauges(output, hotState.Bytes, hotState.Limit)
 	metricHeader(output, "halro_ledger_hot_state_rejections_total", "counter",
 		"New requests, Work Units and Runs refused because the accounting state was at its limit.")
 	fmt.Fprintf(output, "halro_ledger_hot_state_rejections_total{operation=\"request\"} %d\n", hotState.RequestRejections)
@@ -670,6 +665,19 @@ func (r *Runtime) writeKMSMetrics(output *bufio.Writer) {
 
 // boolMetric renders a condition the way Prometheus expects one: a gauge that is
 // 1 or 0, so an alert can be written against it without a recording rule.
+// writeHotStateGauges is the accounting state's size against its limit. A
+// Replica writes them too: it admits nothing, but the state it applies is the
+// one it takes over on promotion, measured against its own limit, so a
+// Replica that would refuse work the moment it is promoted shows it before.
+func writeHotStateGauges(output *bufio.Writer, estimated, limit int64) {
+	metricHeader(output, "halro_ledger_hot_state_estimated_bytes", "gauge",
+		"Estimated heap the accounting state holds, counted from its entries.")
+	fmt.Fprintf(output, "halro_ledger_hot_state_estimated_bytes %d\n", estimated)
+	metricHeader(output, "halro_ledger_hot_state_limit_bytes", "gauge",
+		"Accounting state size beyond which new requests, Work Units and Runs are refused.")
+	fmt.Fprintf(output, "halro_ledger_hot_state_limit_bytes %d\n", limit)
+}
+
 func boolMetric(condition bool) int {
 	if condition {
 		return 1

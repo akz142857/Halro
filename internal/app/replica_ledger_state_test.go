@@ -2,10 +2,14 @@ package app
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/ledger"
@@ -243,5 +247,35 @@ func TestReplicaRuntimeNeverRollsItsLedger(t *testing.T) {
 		if rolled != (role == replication.RolePrimary) {
 			t.Fatalf("%s: rolled=%t", role, rolled)
 		}
+	}
+}
+
+// A Replica admits nothing, but its state is what it takes over on promotion,
+// so its scrape carries the size against its own limit — and no rejection
+// counter, which only an admitting member can move.
+func TestReplicaMetricsReportTheHotStateItWouldTakeOver(t *testing.T) {
+	f := newAccountingFixture(t)
+	f.bill(3)
+	defer f.log.Close()
+	state := replication.MemberState{Version: replication.StateVersion, ClusterID: "ha", Incarnation: "inc_01", NodeID: "halro-1",
+		Role: replication.RoleReplica, Term: 1, PromisedTerm: 1,
+		Peers: []replication.StatePeer{{Name: "halro-0", Address: "private.invalid:9910", SPKISHA256: "sha256:" + strings.Repeat("a", 64)}}}
+	publisher, err := replication.NewStatePublisher(filepath.Join(t.TempDir(), "state.json"), make([]byte, 32), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(publisher.Close)
+	runtime := &Runtime{state: f.state, replication: &replicationRuntime{role: replication.RoleReplica, publisher: publisher}}
+	runtime.config.Ledger.MaxHotStateBytes = 64 << 20
+	response := httptest.NewRecorder()
+	runtime.metricsRouter().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := response.Body.String()
+	estimated := f.state.HotStateBytes(0)
+	if !strings.Contains(body, fmt.Sprintf("halro_ledger_hot_state_estimated_bytes %d\n", estimated)) ||
+		!strings.Contains(body, fmt.Sprintf("halro_ledger_hot_state_limit_bytes %d\n", 64<<20)) {
+		t.Fatalf("Replica scrape lacks its hot state (estimate %d):\n%s", estimated, body)
+	}
+	if strings.Contains(body, "halro_ledger_hot_state_rejections_total") {
+		t.Fatalf("Replica scrape carries a rejection counter it cannot move:\n%s", body)
 	}
 }

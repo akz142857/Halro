@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -188,5 +189,79 @@ func TestPeerSessionBoundsQueuedBytesAndKeepsSameRoleHelloControlOnly(t *testing
 	}
 	if err := control.Send(frame); err == nil || !strings.Contains(err.Error(), "control-only") {
 		t.Fatalf("control-only send error=%v", err)
+	}
+}
+
+// A peer that is already gone cannot be told the session is ending: the
+// close_notify write meets a reset or a broken pipe. The socket is closed
+// regardless, so Close reports success — the same as when that alert times
+// out — rather than turning a stopped peer into a shutdown failure.
+func TestPeerSessionCloseAfterThePeerResetSucceeds(t *testing.T) {
+	files, leaf := writeTestCertificateChain(t)
+	serverTLS, err := LoadServerTLSConfig(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientTLS, err := LoadClientTLSConfig(files, "halro-1.internal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
+	key := []byte("0123456789abcdef0123456789abcdef")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	type result struct {
+		raw     net.Conn
+		session *PeerSession
+		err     error
+	}
+	accepted := make(chan result, 1)
+	go func() {
+		raw, err := listener.Accept()
+		if err != nil {
+			accepted <- result{err: err}
+			return
+		}
+		session, err := AcceptPeerSession(ctx, raw, serverTLS, testHello("halro-1", RoleReplica, 0), key,
+			map[string]string{"halro-0": digestText(pin)}, NewNonceCache(16), PeerSessionOptions{})
+		accepted <- result{raw, session, err}
+	}()
+	clientRaw, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := DialPeerSession(ctx, clientRaw, clientTLS, testHello("halro-0", RolePrimary, 0), key,
+		"halro-1", digestText(pin), NewNonceCache(16), PeerSessionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := <-accepted
+	if server.err != nil {
+		t.Fatal(server.err)
+	}
+	// An abortive close: the peer's kernel answers with a reset.
+	if err := server.raw.(*net.TCPConn).SetLinger(0); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Read beneath TLS until the reset arrives — nothing was sent, so no
+	// record is consumed — and the close_notify below is written to a socket
+	// the kernel already knows is dead. Run is not used: it closes the
+	// session itself on a read error, and that close's result is not Close's.
+	if err := clientRaw.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := clientRaw.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("peer abort read=%v, want a reset", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close after the peer reset: %v", err)
 	}
 }

@@ -234,6 +234,13 @@ after observing a schema, key-challenge, or SPKI failure; it does not prove the
 current connection is still incompatible. Missing HA series mean absent or
 unobserved, never zero or healthy.
 
+A Replica's scrape is the HA families plus `halro_ledger_hot_state_estimated_bytes`
+and `halro_ledger_hot_state_limit_bytes`. A Replica admits nothing, so it has no
+`halro_ledger_hot_state_rejections_total`; the estimate is the state it has
+applied, which is what it takes over on promotion, and the limit is its own
+`ledger.max_hot_state_bytes`, which is what that state is admitted against
+after promotion.
+
 `halro_replication_durable_to_confirm_seconds` is emitted only by a Primary.
 It observes each frame that was locally durable in this process and whose
 quorum confirmation was later durably published to member state; it includes
