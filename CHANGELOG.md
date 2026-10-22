@@ -44,6 +44,15 @@ semantic versioning.
   writes them out; raise those three keys, and a Kubernetes grace period,
   yourself to get the new behaviour. A longer route also means a restart may
   wait up to `shutdown_timeout` for requests in flight to drain.
+- A Project's `max_stream_duration_seconds` is now enforced. It was accepted by
+  the Admin API, stored, and read by nothing, so it limited no stream. A stream
+  on a Project that sets it now ends at that limit or at
+  `gateway.stream_max_duration`, whichever is shorter; zero follows the
+  instance limit alone. The console form now shows it ("Stream duration limit"),
+  and a project created there starts at zero rather than the `600` it used to
+  write without showing it. **Projects created in the console before this
+  carry that `600`**, which now applies: if `gateway.stream_max_duration` is
+  above ten minutes, edit those projects to `0` or to the limit you want.
 - `halro.db` is now a projection of `data/metadata.journal`: every metadata
   write is appended to the journal and made durable before the bbolt commit,
   and a start replays any frame the database has not applied. This is the

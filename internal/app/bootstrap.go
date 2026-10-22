@@ -200,7 +200,9 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 			ID: projectID, Name: options.ProjectName, Enabled: true,
 			AllowedModels: []string{options.PublicModel}, DailyBudgetMicrosUSD: options.DailyBudgetMicrosUSD,
 			MaxInputTokens: 128_000, MaxOutputTokens: 16_384, MaxRequestBytes: cfg.Server.MaxRequestBytes,
-			MaxStreamDuration: cfg.Gateway.StreamMaxDuration.Value(), CreatedAt: now, UpdatedAt: now,
+			// No stream limit of its own: zero follows gateway.stream_max_duration,
+			// where a copy of today's value would outlast the next change to it.
+			CreatedAt: now, UpdatedAt: now,
 		},
 		GatewayKey: gatewayKey,
 	}

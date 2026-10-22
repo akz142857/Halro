@@ -40,6 +40,9 @@ type nativeMessagesFake struct {
 	// exercise a usage shape the default script does not produce.
 	response    []byte
 	streamUsage *anthropicapi.Usage
+	// holdStream keeps the stream open after its events until its context
+	// ends, as an upstream still generating does.
+	holdStream bool
 }
 
 func (fake *nativeMessagesFake) Type() string {
@@ -65,7 +68,7 @@ func (fake *nativeMessagesFake) MessagesNative(_ context.Context, call provider.
 	}
 	return provider.NativeMessageResult{Payload: []byte(`{"id":"msg_provider","type":"message","role":"assistant","content":[{"type":"thinking","thinking":"hidden","signature":"opaque-sig"},{"type":"text","text":"ok"}],"model":"claude-provider","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":1}}`)}, nil
 }
-func (fake *nativeMessagesFake) MessagesNativeStream(_ context.Context, call provider.NativeMessageCall, emit func(anthropicapi.RawStreamEvent) error) (*anthropicapi.Usage, error) {
+func (fake *nativeMessagesFake) MessagesNativeStream(ctx context.Context, call provider.NativeMessageCall, emit func(anthropicapi.RawStreamEvent) error) (*anthropicapi.Usage, error) {
 	fake.payload = append([]byte(nil), call.Payload...)
 	events := fake.streamEvents
 	if events == nil {
@@ -82,6 +85,10 @@ func (fake *nativeMessagesFake) MessagesNativeStream(_ context.Context, call pro
 		if err := emit(event); err != nil {
 			return nil, err
 		}
+	}
+	if fake.holdStream {
+		<-ctx.Done()
+		return nil, ctx.Err()
 	}
 	if fake.streamUsage != nil {
 		return fake.streamUsage, nil
@@ -730,5 +737,33 @@ func TestNativeMessagesKeepFatalPreProviderErrorStatus(t *testing.T) {
 				t.Fatal("a request that failed accounting reached the provider")
 			}
 		})
+	}
+}
+
+// The native Messages stream does not pass through generateStream, so it is
+// held to the Project's max_stream_duration on its own.
+func TestNativeMessagesStreamEndsAtTheProjectsMaxStreamDuration(t *testing.T) {
+	service, fake, _, closeFixture := newNativeMessagesFixture(t)
+	defer closeFixture()
+	fake.holdStream = true
+	project := domain.Project{ID: "project_native", Name: "Native", Enabled: true, AllowedModels: []string{"claude"},
+		DailyBudgetMicrosUSD: 1000000, MaxInputTokens: 10000, MaxOutputTokens: 1000, MaxStreamDuration: 100 * time.Millisecond}
+	plaintext, key, err := auth.GenerateGatewayKey(project.ID, "stream-limit", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.auth.Refresh(context.Background(), source{keys: []domain.GatewayKey{key}, projects: []domain.Project{project}}); err != nil {
+		t.Fatal(err)
+	}
+	request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(`{"model":"claude","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	started := time.Now()
+	err = service.MessagesNativeStream(ctx, plaintext, anthropicapi.SupportedVersion, nil, request, func(anthropicapi.RawStreamEvent) error { return nil })
+	if took := time.Since(started); err == nil || took > 5*time.Second {
+		t.Fatalf("a native stream past its Project's 100ms limit ran %s and ended with %v", took, err)
 	}
 }

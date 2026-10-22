@@ -1516,6 +1516,7 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存",  saveDisable
     created: "创建于 {{date}}", keyDisableTitle: "禁用网关密钥？", keyDisableConfirm: "确认禁用网关密钥“{{name}}”？使用该密钥的新请求将立即被拒绝。", keyDeleteConfirm: "确认永久停用密钥“{{name}}”？此操作不能恢复。",
     edit: "编辑项目", createTitle: "创建项目", name: "名称", aliases: "允许的公共模型别名", aliasesHint: "选择项目可以调用的公共模型别名。每个别名由一个或多个模型路由提供；项目不会绑定具体路由或上游模型。", loadingModels: "正在读取路由入口", unavailableAlias: "没有已启用路由", noConfiguredModels: "还没有可选路由入口", noConfiguredModelsDescription: "请先在路由页面配置并启用至少一个公共模型别名。", openRoutes: "前往路由配置 →", selectedAliases: "已选择 {{count}} 个", maxConcurrency: "最大并发",
     maxRequestKB: "单请求体上限（KB）", maxRequestKBHint: "0 表示跟随实例上限。图片以 base64 随请求发送时，体积约为原图的 1.37 倍。",
+    maxStreamSeconds: "流式请求时长上限（秒）", maxStreamSecondsHint: "0 表示跟随实例上限。流式请求超过这个时长仍未结束就会被终止；与实例上限取较短的一个。",
     deferredResponses: "延迟取回",
     deferredResponsesDescription: "允许该项目用 background: true 提交生成请求，稍后凭 id 取回结果。开启后，成功的回答会以密封形式写入本实例的数据目录，最长保留 24 小时。",
     deferredResponsesEnable: "允许异步提交",

@@ -50,6 +50,7 @@ const projectSchema = (t: TFunction) => z.object({
   concurrency: z.coerce.number().int().min(0),
   budget: z.coerce.number().min(0),
   requestKB: z.coerce.number().min(0),
+  streamSeconds: z.coerce.number().int().min(0),
   deferredResponses: z.boolean(),
   deferredQueue: z.coerce.number().int().min(0).max(MAX_DEFERRED_QUEUE),
   runGovernance: z.boolean(),
@@ -508,6 +509,8 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
       // one, and inventing a tighter number the operator never chose is how a
       // limit surprises them.
       requestKB: (current?.max_request_bytes ?? 0) / 1024,
+      // The same rule for streams: zero follows gateway.stream_max_duration.
+      streamSeconds: Math.round((current?.max_stream_duration ?? 0) / 1_000_000_000),
       deferredResponses: current?.deferred_responses ?? false,
       deferredQueue: current?.max_deferred_queue ?? 0,
       runGovernance: current?.run_governance?.enabled ?? false,
@@ -546,7 +549,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
       max_input_tokens: current?.max_input_tokens ?? 128_000,
       max_output_tokens: current?.max_output_tokens ?? 16_384,
       max_request_bytes: Math.round(value.requestKB * 1024),
-      max_stream_duration_seconds: current ? Math.round(current.max_stream_duration / 1_000_000_000) : 600,
+      max_stream_duration_seconds: value.streamSeconds,
       deferred_responses: value.deferredResponses,
       max_deferred_queue: value.deferredQueue,
       allowed_cidrs: splitValues(value.cidrs),
@@ -648,6 +651,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
             <Field label={t("projects.maxConcurrency")}><input autoComplete="off" type="number" {...register("concurrency")} /></Field>
             <Field label={t("projects.dailyBudgetUSD")}><input autoComplete="off" type="number" step="0.01" {...register("budget")} /></Field>
             <Field label={t("projects.maxRequestKB")} hint={t("projects.maxRequestKBHint")}><input autoComplete="off" type="number" min={0} step="any" {...register("requestKB")} /></Field>
+            <Field label={t("projects.maxStreamSeconds")} hint={t("projects.maxStreamSecondsHint")}><input autoComplete="off" type="number" min={0} step={1} {...register("streamSeconds")} /></Field>
           </div>
         </section>
         <section className="project-form-section" aria-labelledby="project-deferred-title">
