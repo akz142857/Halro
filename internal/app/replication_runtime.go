@@ -1156,6 +1156,8 @@ func (r *Runtime) replicaMetricsRouter() http.Handler {
 		writer.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		output := bufio.NewWriter(writer)
 		r.writeReplicationMetrics(output)
+		// No open requests: a Replica admits none.
+		writeHotStateGauges(output, r.state.HotStateBytes(0), r.config.Ledger.MaxHotStateBytes)
 		_ = output.Flush()
 	})
 	return router
