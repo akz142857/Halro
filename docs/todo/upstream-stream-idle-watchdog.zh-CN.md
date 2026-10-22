@@ -130,6 +130,32 @@ Transport 包一层 `provider.StreamIdleTransport`（`internal/provider/stream_i
 Profile 做一次测量：取各家能用的最长推理设置，记录"响应头 → 第一个字节"和"字节之间"的最大
 间隔，默认值取实测最大值的若干倍并写进文档。owner 决定（2026-10-23）：默认打开，先用 120s，实测后再改这个数。
 
+### 5.1 OpenAI 实测（2026-10-23，直连 api.openai.com，按字节到达时间记录）
+
+| 接口 · 模型 · 推理强度 | 推理 token | 响应头到达 | 响应头之后最长空档 | 心跳 |
+| --- | --- | --- | --- | --- |
+| Chat · gpt-5.5 · high | 2,560 | 34.5s | 0.0s | — |
+| Chat · o3 · high | 7,424 | 47.5s | 0.1s | — |
+| Chat · gpt-6-sol · high | 1,455 | 18.2s | 0.0s | — |
+| Responses · gpt-5.5 · high | 2,588 | 2.1s | 26.0s | 无（未到 30s） |
+| Responses · gpt-6-sol · high | 1,247 | 1.8s | 6.2s | 无 |
+| Responses · gpt-5.5 · xhigh（难题） | 57,496 | 1.6s | 30.1s（共 921s） | `event: keepalive`，每 30.0s |
+
+结论：
+
+- **Chat Completions 把响应头压到推理结束才发**，之后内容瞬间到齐。推理期间的沉默在响应头之前，
+  由 `gateway.attempt_response_header_timeout` 管，看门狗看不到，也就不会误杀。
+- **Responses 流**响应头 2 秒内就到，推理期间不发内容，但沉默超过 30 秒就每 30 秒发一次
+  `event: keepalive`。按字节计时，120s 对 OpenAI 有 4 倍余量。
+- Halro 的 OpenAI Responses Profile 目前向上游发的是**非流式**请求（`GenerateSemantic`
+  设 `stream: false`），同样要等推理结束才有响应头，也由响应头超时管。
+- 由此发现的已有问题：响应头超时默认 60 秒，o3 在一道中等难度题上已用 47.5 秒，生产上 Bedrock
+  Mantle 也已 3 次在 60.02 秒被切断（#343）。另在分支 `fix/reasoning-response-header-timeout`
+  处理，不在本方案范围内。
+
+**仍未实测：** Anthropic（有 `event: ping`，间隔未知）、Gemini、Bedrock Mantle 的流式接口在长推理
+期间的心跳。它们是 Halro 里响应头之后还可能长时间沉默的路径；120s 对它们是否足够，要等有 key 时再测。
+
 ## 6. 不做的事
 
 - 不做对冲请求（Respan 的 hedge）：输家在 Halro 里是模糊尝试，要保守计费，等于有意花双份钱，
@@ -195,5 +221,5 @@ Bedrock 测试失败（报 `malformed_response`）。两次都先确认改动确
 结束前一个字节都收不到。所以前两种情况里卡住时都还在交付边界之前，客户端拿到的是 504 而不是流内
 错误事件。
 
-**未完成：** §5 的实测，需要真实平台账号。
+**未完成：** §5 中 Anthropic、Gemini、Bedrock Mantle 的实测，需要对应平台账号。OpenAI 已测，见 §5.1。
 
