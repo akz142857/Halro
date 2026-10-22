@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -245,8 +246,8 @@ func TestRollupCountsLatencyAboveTheLastBucket(t *testing.T) {
 	slow := ledger.Event{EventID: "slow", Kind: ledger.EventAttemptSettled, RequestID: "req_slow",
 		AttemptID: "att_slow", ProjectID: "prj_a", PeriodID: rollupDay, PeriodTimezoneVersion: rollupVersion,
 		OccurredAt: time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC),
-		// Above LatencyBucketsMillis' last bound of 120s.
-		LatencyMillis: 200_000, CommittedMicrosUSD: ledger.MicrosUSD(1), Outcome: "success"}
+		// Just above LatencyBucketsMillis' last bound.
+		LatencyMillis: int64(LatencyBucketsMillis[len(LatencyBucketsMillis)-1]) + 1, CommittedMicrosUSD: ledger.MicrosUSD(1), Outcome: "success"}
 	if err := aggregate.Apply(ledger.Record{Generation: 1, Sequence: 1, Offset: 100, Event: slow}); err != nil {
 		t.Fatal(err)
 	}
@@ -408,5 +409,29 @@ func TestApproximateP95StaysInsideItsBucket(t *testing.T) {
 			t.Fatalf("%v: approximate=%d exact=%d differ by more than the %dms bucket",
 				latencies, approximate, exact, width)
 		}
+	}
+}
+
+// A reasoning request between two minutes and the request deadline used to be
+// indistinguishable from one the deadline cut: all of them overflowed. They are
+// counted now, and the header and request deadlines are bucket bounds.
+func TestLatencyBucketsReachTheRequestDeadline(t *testing.T) {
+	bounds := LatencyBucketsMillis[:]
+	for _, deadline := range []uint64{300_000, 600_000} {
+		if !slices.Contains(bounds, deadline) {
+			t.Fatalf("%dms is not a bucket bound: %v", deadline, bounds)
+		}
+	}
+	aggregate := newTestAggregate(t)
+	reasoning := ledger.Event{EventID: "think", Kind: ledger.EventAttemptSettled, RequestID: "req_think",
+		AttemptID: "att_think", ProjectID: "prj_a", PeriodID: rollupDay, PeriodTimezoneVersion: rollupVersion,
+		OccurredAt:    time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC),
+		LatencyMillis: 200_000, CommittedMicrosUSD: ledger.MicrosUSD(1), Outcome: "success"}
+	if err := aggregate.Apply(ledger.Record{Generation: 1, Sequence: 1, Offset: 100, Event: reasoning}); err != nil {
+		t.Fatal(err)
+	}
+	total := rollupRow(t, rollupRows(t, aggregate), domain.RollupDimensionTotal, domain.RollupTotalKey)
+	if total.AttemptLatencyOverflow != 0 || total.AttemptLatencyBuckets[slices.Index(bounds, 300_000)] != 1 {
+		t.Fatalf("a 200s attempt: overflow=%d buckets=%v", total.AttemptLatencyOverflow, total.AttemptLatencyBuckets)
 	}
 }

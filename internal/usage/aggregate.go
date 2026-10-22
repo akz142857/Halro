@@ -20,7 +20,7 @@ import (
 // still be absent after a restart.
 const maxTrackedEventIDs = 4096
 
-const latencyBucketCount = 15
+const latencyBucketCount = 18
 
 // LatencyBucketsMillis are the upper bounds a latency histogram counts into.
 //
@@ -36,13 +36,23 @@ const latencyBucketCount = 15
 // from the request deadline; 45000 keeps the step from 30000 comparable to the
 // rest of the ladder.
 //
-// Changing this changes what a stored histogram means, so both derivative
-// formats that carry one are versioned past it: usage.checkpointVersion and
-// domain.RollupVersion. An existing instance rebuilds them from the Ledger,
-// which is the authority; a Prometheus server keeps the old `le` series and
-// starts a new set, the ordinary consequence of re-cutting a histogram.
+// The three above 120s follow the deadlines up. A reasoning model sends no
+// header until it has finished reasoning, so attempt_response_header_timeout
+// became 5m and route_total_timeout 10m; with the ladder ending at 120000,
+// everything between two minutes and the request deadline fell into the
+// overflow, the same blindness the 30s–120s bucket used to cause. 300000 is
+// the header deadline, 600000 the request deadline, 180000 keeps the step
+// from 120000 comparable.
+//
+// Changing this changes what a stored histogram means, so the derivatives
+// that carry one are versioned past it: the usage history (historyFormatVersion,
+// which holds the request rows and the daily rollups) and domain.RollupVersion.
+// An existing instance rebuilds them from the Ledger, which is the authority;
+// a Prometheus server keeps the old `le` series and starts a new set, the
+// ordinary consequence of re-cutting a histogram.
 var LatencyBucketsMillis = [latencyBucketCount]uint64{
 	10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 45000, 60000, 90000, 120000,
+	180000, 300000, 600000,
 }
 
 type AttemptEvent struct {

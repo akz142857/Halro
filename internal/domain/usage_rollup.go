@@ -17,12 +17,14 @@ import (
 // deadlines cut it. See usage.LatencyBucketsMillis.
 // Version 3 added the offering dimension, which the dashboard's breakdowns read
 // now that they come from the rollup rather than from a scan of attempts.
-const RollupVersion = 3
+// Version 4 extended the latency histogram past 120s, to the 5m header and
+// 10m request deadlines. See usage.LatencyBucketsMillis.
+const RollupVersion = 4
 
 // RollupLatencyBuckets is the number of latency histogram buckets a rollup row
 // carries. It mirrors usage.LatencyBucketsMillis; usage asserts the two agree
 // at compile time.
-const RollupLatencyBuckets = 15
+const RollupLatencyBuckets = 18
 
 // Rollup dimensions. A row holds one dimension's one value — the rollup is a
 // marginal aggregate and deliberately stores no cross terms (D7-a), so a
