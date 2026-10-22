@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/big"
@@ -29,7 +30,19 @@ import (
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
-func TestPrimaryAndReplicaRuntimesReplicateAndApplyAnAuditFrame(t *testing.T) {
+// replicationPair is a Primary and one Replica opened over loopback TLS,
+// with neither replication transport serving yet.
+type replicationPair struct {
+	primaryConfig, replicaConfig     config.Config
+	primary, replica                 *Runtime
+	listenerPrimary, listenerReplica net.Listener
+	bootstrap                        BootstrapResult
+	adminPassword                    []byte
+	logger                           *slog.Logger
+}
+
+func openReplicationPair(t *testing.T) *replicationPair {
+	t.Helper()
 	primaryConfig := testConfig(t)
 	adminPassword := []byte("correct horse battery staple")
 	if err := Initialize(primaryConfig); err != nil {
@@ -95,7 +108,7 @@ func TestPrimaryAndReplicaRuntimesReplicateAndApplyAnAuditFrame(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer primary.Close()
+	t.Cleanup(func() { primary.Close() })
 	// This harness serves only the replication listeners; no HTTP listener can
 	// own an admitted request. Production installs the real net/http drain in
 	// RunWithReady before starting this same replication transport.
@@ -104,7 +117,20 @@ func TestPrimaryAndReplicaRuntimesReplicateAndApplyAnAuditFrame(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer replica.Close()
+	t.Cleanup(func() { replica.Close() })
+	return &replicationPair{
+		primaryConfig: primaryConfig, replicaConfig: replicaConfig, primary: primary, replica: replica,
+		listenerPrimary: listenerPrimary, listenerReplica: listenerReplica, bootstrap: bootstrap,
+		adminPassword: adminPassword, logger: logger,
+	}
+}
+
+func TestPrimaryAndReplicaRuntimesReplicateAndApplyAnAuditFrame(t *testing.T) {
+	pair := openReplicationPair(t)
+	primaryConfig, replicaConfig := pair.primaryConfig, pair.replicaConfig
+	primary, replica := pair.primary, pair.replica
+	listenerPrimary, listenerReplica := pair.listenerPrimary, pair.listenerReplica
+	bootstrap, adminPassword, logger := pair.bootstrap, pair.adminPassword, pair.logger
 	beforeReplicaMetadata, err := os.ReadFile(replicaConfig.MetadataPath())
 	if err != nil {
 		t.Fatal(err)
@@ -376,6 +402,120 @@ func TestPrimaryAndReplicaRuntimesReplicateAndApplyAnAuditFrame(t *testing.T) {
 	}
 	if err := rejoined.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A Replica that returns further behind than one session queue holds must
+// still catch up. The Primary used to push the whole gap into the session's
+// bounded queue before its writer ran, so the record past the queue capacity
+// failed, the session closed, and every retry stopped at the same index.
+// Writes keep arriving during the catch-up so the frames committed meanwhile
+// have to be ordered after the gap rather than ahead of it.
+func TestReplicaFurtherBehindThanTheSessionQueueCatchesUp(t *testing.T) {
+	pair := openReplicationPair(t)
+	primary, replica := pair.primary, pair.replica
+	primaryContext, primaryCancel := context.WithCancel(context.Background())
+	defer primaryCancel()
+	primaryError := make(chan error, 1)
+	go func() { primaryError <- primary.replication.serve(primaryContext, pair.listenerPrimary) }()
+	replicaContext, replicaCancel := context.WithCancel(context.Background())
+	replicaError := make(chan error, 1)
+	go func() { replicaError <- replica.replication.serve(replicaContext, pair.listenerReplica) }()
+	deadline := time.Now().Add(8 * time.Second)
+	for !primary.replication.startupReady.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("Primary did not complete startup peer adjudication")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	replicaCancel()
+	if err := <-replicaError; err != nil {
+		t.Fatalf("Replica replication serve shutdown: %v", err)
+	}
+	if err := replica.Close(); err != nil {
+		t.Fatal(err)
+	}
+	appendAudit := func(name string) {
+		t.Helper()
+		if _, err := primary.audit.Append(context.Background(), audit.Event{
+			EventID: name, OccurredAt: time.Now().UTC(), ActorType: "system",
+			Action: "replication.catch_up", Outcome: "success",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Twice the default session queue capacity of 64 records.
+	for i := range 128 {
+		appendAudit(fmt.Sprintf("evt_gap_%03d", i))
+	}
+	replica, err := OpenWithOptions(context.Background(), pair.replicaConfig, pair.logger, OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replica.Close()
+	behind := replica.replication.publisher.Snapshot().DurableIndex
+	if head := primary.replication.publisher.Snapshot().DurableIndex; head < behind+128 {
+		t.Fatalf("Primary head %d is not 128 frames past the Replica's %d", head, behind)
+	}
+	listener, err := net.Listen("tcp", pair.replicaConfig.Replication.Listen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replicaContext, replicaCancel = context.WithCancel(context.Background())
+	defer replicaCancel()
+	go func() { replicaError <- replica.replication.serve(replicaContext, listener) }()
+	stopWriting := make(chan struct{})
+	written := make(chan int, 1)
+	go func() {
+		count := 0
+		defer func() { written <- count }()
+		for {
+			select {
+			case <-stopWriting:
+				return
+			case <-time.After(2 * time.Millisecond):
+			}
+			if _, err := primary.audit.Append(context.Background(), audit.Event{
+				EventID: fmt.Sprintf("evt_live_%04d", count), OccurredAt: time.Now().UTC(), ActorType: "system",
+				Action: "replication.catch_up", Outcome: "success",
+			}); err != nil {
+				return
+			}
+			count++
+		}
+	}()
+	time.Sleep(300 * time.Millisecond)
+	close(stopWriting)
+	if count := <-written; count == 0 {
+		t.Fatal("no write landed while the Replica was catching up")
+	}
+	// Each replicated frame costs the Replica several fsyncs, so the bound is
+	// on progress stopping rather than on the whole catch-up.
+	progress, progressedAt := behind, time.Now()
+	for {
+		primaryState := primary.replication.publisher.Snapshot()
+		replicaState := replica.replication.publisher.Snapshot()
+		if replicaState.DurableIndex == primaryState.DurableIndex && replicaState.AppliedIndex == primaryState.DurableIndex &&
+			replica.audit.Summary().Records == primary.audit.Summary().Records {
+			break
+		}
+		if replicaState.DurableIndex > progress {
+			progress, progressedAt = replicaState.DurableIndex, time.Now()
+		}
+		if time.Since(progressedAt) > 5*time.Second {
+			t.Fatalf("Replica did not catch up: primary durable=%d replica durable=%d applied=%d (was %d) audit=%d/%d",
+				primaryState.DurableIndex, replicaState.DurableIndex, replicaState.AppliedIndex, behind,
+				primary.audit.Summary().Records, replica.audit.Summary().Records)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	replicaCancel()
+	if err := <-replicaError; err != nil {
+		t.Fatalf("Replica replication serve shutdown: %v", err)
+	}
+	primaryCancel()
+	if err := <-primaryError; err != nil {
+		t.Fatalf("Primary replication serve shutdown: %v", err)
 	}
 }
 

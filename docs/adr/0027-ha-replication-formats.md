@@ -164,6 +164,18 @@ term's latest confirmed notice. A disconnected Replica therefore cannot lose
 the only notice that makes a final frame applicable. A notice beyond the
 Replica's durable prefix is refused; duplicate or older notices are idempotent.
 
+Because a Replica refuses a frame that skips an index, each Primary session to a
+Replica carries the ordering prefix strictly in index order, starting after the
+durable index in the Replica's Hello. A live frame or notice is enqueued only
+when the session has already carried everything before it; one that is ahead,
+or that meets a full session queue, is refused for that peer and left to the
+session's catch-up, which reads the missing frames back from the ordering
+journal and its sources and waits for the session writer when the queue is
+full. The gap a Replica may return with is therefore not bounded by the queue:
+before this, catch-up pushed the whole gap into the queue before the writer
+started, so a Replica more than one queue (64 records) behind failed at the
+same index on every reconnect and never caught up.
+
 ### 3.1. Optional idle-session heartbeat
 
 An authenticated post-handshake connection may carry a fixed 16-byte heartbeat

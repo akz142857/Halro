@@ -88,7 +88,7 @@ func TestConnectionManagersDialAuthenticateExchangeAndShutdown(t *testing.T) {
 	retry := time.NewTicker(10 * time.Millisecond)
 	defer retry.Stop()
 	for {
-		err = managerA.Send("halro-1", frame)
+		err = managerA.SendFrame("halro-1", 1, frame)
 		if err == nil {
 			break
 		}
@@ -123,7 +123,7 @@ func TestConnectionManagersDialAuthenticateExchangeAndShutdown(t *testing.T) {
 			t.Fatalf("connection manager shutdown error=%v", err)
 		}
 	}
-	if err := managerA.Send("halro-1", frame); !errors.Is(err, ErrPeerNotConnected) {
+	if err := managerA.SendFrame("halro-1", 1, frame); !errors.Is(err, ErrPeerNotConnected) {
 		t.Fatalf("send after shutdown error=%v", err)
 	}
 }

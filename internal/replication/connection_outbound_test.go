@@ -12,7 +12,15 @@ type outboundTestSender struct {
 	values [][]byte
 }
 
-func (s *outboundTestSender) Send(peer string, encoded []byte) error {
+func (s *outboundTestSender) SendFrame(peer string, _ uint64, encoded []byte) error {
+	return s.send(peer, encoded)
+}
+
+func (s *outboundTestSender) SendCommitNotice(peer string, _ uint64, encoded []byte) error {
+	return s.send(peer, encoded)
+}
+
+func (s *outboundTestSender) send(peer string, encoded []byte) error {
 	s.peers = append(s.peers, peer)
 	s.values = append(s.values, append([]byte(nil), encoded...))
 	return s.errors[peer]

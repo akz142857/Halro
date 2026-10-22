@@ -320,7 +320,13 @@ func PromoteMember(ctx context.Context, cfg config.Config, options PromoteMember
 
 type offlinePeerSender struct{}
 
-func (offlinePeerSender) Send(string, []byte) error { return replication.ErrPeerNotConnected }
+func (offlinePeerSender) SendFrame(string, uint64, []byte) error {
+	return replication.ErrPeerNotConnected
+}
+
+func (offlinePeerSender) SendCommitNotice(string, uint64, []byte) error {
+	return replication.ErrPeerNotConnected
+}
 
 func appendOfflinePromotionAudit(
 	ctx context.Context,

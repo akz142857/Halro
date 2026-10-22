@@ -429,14 +429,26 @@ func (s *deferredPeerSender) Set(sender replication.PeerRecordSender) {
 	s.sender = sender
 }
 
-func (s *deferredPeerSender) Send(peer string, encoded []byte) error {
-	s.mu.RLock()
-	sender := s.sender
-	s.mu.RUnlock()
+func (s *deferredPeerSender) SendFrame(peer string, index uint64, encoded []byte) error {
+	sender := s.current()
 	if sender == nil {
 		return replication.ErrPeerNotConnected
 	}
-	return sender.Send(peer, encoded)
+	return sender.SendFrame(peer, index, encoded)
+}
+
+func (s *deferredPeerSender) SendCommitNotice(peer string, confirmedIndex uint64, encoded []byte) error {
+	sender := s.current()
+	if sender == nil {
+		return replication.ErrPeerNotConnected
+	}
+	return sender.SendCommitNotice(peer, confirmedIndex, encoded)
+}
+
+func (s *deferredPeerSender) current() replication.PeerRecordSender {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.sender
 }
 
 func readMemberState(cfg config.Config, masterKey []byte) (replication.MemberState, [32]byte, error) {
@@ -544,6 +556,7 @@ func openPrimaryReplication(
 		OnAuthenticatedHello: runtime.authorizePrimaryHello,
 		Handle:               runtime.handleRecords(handler.Handle),
 		OnDataSessionReady:   runtime.catchUpPrimaryPeer,
+		Frames:               primaryFrameSource{runtime: runtime},
 		OnSessionError: func(peer string, sessionErr error) {
 			runtime.noteSessionError(sessionErr)
 			logger.Warn("replication peer session failed", "peer", peer, "error", sessionErr)
@@ -913,27 +926,37 @@ func (r *Runtime) requireMemberStartup(next http.Handler) http.Handler {
 	})
 }
 
+// primaryFrameSource reads any frame of the Primary's authenticated ordering
+// prefix back from the ordering journal and the stores it orders.
+type primaryFrameSource struct{ runtime *replicationRuntime }
+
+func (s primaryFrameSource) OrderingHead() uint64 {
+	head, _, _ := s.runtime.journal.Head()
+	return head
+}
+
+func (s primaryFrameSource) EncodedFrame(index uint64) ([]byte, error) {
+	state := s.runtime.publisher.Snapshot()
+	var encoded []byte
+	err := replication.ReconstructRangeEach(state.ClusterID, state.Incarnation, index, index, s.runtime.journal, s.runtime.source,
+		func(commit replication.LocalCommit) error {
+			encoded = commit.Encoded
+			return nil
+		})
+	return encoded, err
+}
+
 func (r *replicationRuntime) catchUpPrimaryPeer(peer string, hello replication.Hello) error {
 	head, _, _ := r.journal.Head()
 	if hello.DurableIndex > head {
 		return errors.New("Replica durable index exceeds Primary ordering head")
 	}
-	if hello.DurableIndex < head {
-		first := hello.DurableIndex + 1
-		if err := replication.ReconstructRangeEach(
-			hello.ClusterID, hello.Incarnation, first, head, r.journal, r.source,
-			func(commit replication.LocalCommit) error { return r.manager.Send(peer, commit.Encoded) },
-		); err != nil {
-			return fmt.Errorf("catch up Replica %s: %w", peer, err)
-		}
-	}
-	if notice := r.coordinator.PendingCommitNotice(); len(notice) > 0 {
-		if err := r.manager.Send(peer, notice); err != nil {
-			return fmt.Errorf("send current commit notice to Replica %s: %w", peer, err)
-		}
-	}
-	if err := r.coordinator.RetryPending(); err != nil {
-		return fmt.Errorf("retry pending replication after %s catch-up: %w", peer, err)
+	// The session itself carries the Replica from its durable index to the
+	// head (replication.peerStream). A Replica that is behind refuses what it
+	// cannot take yet, which leaves those frames to that catch-up; it is not a
+	// reason to drop the session.
+	if err := r.coordinator.RetryPending(); err != nil && !errors.Is(err, replication.ErrPeerCatchingUp) {
+		return fmt.Errorf("retry pending replication after %s connected: %w", peer, err)
 	}
 	r.helloMu.Lock()
 	requiredPeers := r.startupPeerQuorum

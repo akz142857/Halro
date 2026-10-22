@@ -7,7 +7,8 @@ import (
 )
 
 type PeerRecordSender interface {
-	Send(peer string, encoded []byte) error
+	SendFrame(peer string, index uint64, encoded []byte) error
+	SendCommitNotice(peer string, confirmedIndex uint64, encoded []byte) error
 }
 
 // ConnectionOutbound fans each frame/notice to every configured Replica while
@@ -34,24 +35,26 @@ func NewConnectionOutbound(peers []string, sender PeerRecordSender) (*Connection
 	return &ConnectionOutbound{peers: peers, sender: sender}, nil
 }
 
-func (o *ConnectionOutbound) QueueFrame(_ uint64, encoded []byte) error {
-	return o.broadcast(encoded)
+func (o *ConnectionOutbound) QueueFrame(index uint64, encoded []byte) error {
+	return o.broadcast(encoded, func(peer string, encoded []byte) error { return o.sender.SendFrame(peer, index, encoded) })
 }
 
-func (o *ConnectionOutbound) QueueCommitNotice(_ uint64, encoded []byte) error {
-	return o.broadcast(encoded)
+func (o *ConnectionOutbound) QueueCommitNotice(confirmedIndex uint64, encoded []byte) error {
+	return o.broadcast(encoded, func(peer string, encoded []byte) error {
+		return o.sender.SendCommitNotice(peer, confirmedIndex, encoded)
+	})
 }
 
 func (o *ConnectionOutbound) Acknowledge(string, uint64, uint64) {}
 
-func (o *ConnectionOutbound) broadcast(encoded []byte) error {
+func (o *ConnectionOutbound) broadcast(encoded []byte, send func(peer string, encoded []byte) error) error {
 	if len(encoded) == 0 {
 		return errors.New("connection outbound record is empty")
 	}
 	var failures []error
 	succeeded := 0
 	for _, peer := range o.peers {
-		if err := o.sender.Send(peer, append([]byte(nil), encoded...)); err != nil {
+		if err := send(peer, append([]byte(nil), encoded...)); err != nil {
 			failures = append(failures, fmt.Errorf("queue replication record for %s: %w", peer, err))
 			continue
 		}
