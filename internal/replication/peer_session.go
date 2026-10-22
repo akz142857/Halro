@@ -85,8 +85,13 @@ type PeerSession struct {
 	closeOnce      sync.Once
 	closed         atomic.Bool
 	closedSignal   chan struct{}
-	runMu          sync.Mutex
-	running        bool
+	// drained is signalled each time the writer takes a record off the queue.
+	drained chan struct{}
+	// stream orders frames and commit notices on a Primary's session to a
+	// Replica; nil on every other session.
+	stream  *peerStream
+	runMu   sync.Mutex
+	running bool
 }
 
 func DialPeerSession(ctx context.Context, raw net.Conn, tlsConfig *tls.Config, local Hello, key []byte, expectedNode, expectedPin string, nonces *NonceCache, options PeerSessionOptions) (*PeerSession, error) {
@@ -173,7 +178,7 @@ func newPeerSession(connection *tls.Conn, local, peer Hello, options PeerSession
 		heartbeats:     local.Protocol.Maximum >= HeartbeatProtocolVersion && peer.Protocol.Maximum >= HeartbeatProtocolVersion,
 		queue:          make(chan outboundRecord, options.QueueCapacity), maxQueued: options.MaxQueuedBytes,
 		maxReadBytes: options.MaxReadBytesPerSecond, maxReadRecords: options.MaxReadRecordsPerSecond,
-		closedSignal: make(chan struct{}),
+		closedSignal: make(chan struct{}), drained: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -376,6 +381,10 @@ func (s *PeerSession) writeLoop(ctx context.Context) error {
 			size := int64(len(record.encoded))
 			err := s.writeRecord(record.encoded)
 			s.queued.Add(-size)
+			select {
+			case s.drained <- struct{}{}:
+			default:
+			}
 			if record.done != nil {
 				record.done <- err
 			}

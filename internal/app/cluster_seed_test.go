@@ -357,7 +357,8 @@ func TestSeedTreeRejectsNestedSymlinkAndForcesExactPrivateModes(t *testing.T) {
 
 type seedPeerSender struct{}
 
-func (seedPeerSender) Send(string, []byte) error { return nil }
+func (seedPeerSender) SendFrame(string, uint64, []byte) error        { return nil }
+func (seedPeerSender) SendCommitNotice(string, uint64, []byte) error { return nil }
 
 func TestSeedManifestDecoderRejectsTrailingJSON(t *testing.T) {
 	decoder := json.NewDecoder(strings.NewReader(`{} {}`))

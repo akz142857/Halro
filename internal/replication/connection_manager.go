@@ -38,10 +38,15 @@ type ConnectionManagerOptions struct {
 	OnAuthenticatedHello AuthenticatedHelloHandler
 	Handle               ConnectionRecordHandler
 	// OnDataSessionReady runs after the authenticated session is registered but
-	// before its read loop starts. The peer Hello is retained here because its
-	// durable/applied watermarks decide which authenticated ordering prefix must
-	// be replayed on reconnect; a node ID alone cannot drive catch-up safely.
-	OnDataSessionReady    func(peer string, hello Hello) error
+	// before its read loop starts. Catch-up itself is the session's: with
+	// Frames set, the session carries the ordering prefix from the durable
+	// index in the peer's Hello.
+	OnDataSessionReady func(peer string, hello Hello) error
+	// Frames is set on a Primary. Each session to a Replica then carries the
+	// ordering prefix from the Replica's durable index in index order,
+	// reading what the Replica lacks from here while live commits wait their
+	// turn (see peerStream).
+	Frames                FrameSource
 	OnSessionError        func(peer string, err error)
 	Session               PeerSessionOptions
 	DialTimeout           time.Duration
@@ -200,16 +205,42 @@ func (m *ConnectionManager) Serve(ctx context.Context, listener net.Listener) er
 	return errors.Join(runErr, closeErr)
 }
 
-func (m *ConnectionManager) Send(peer string, encoded []byte) error {
+// SendFrame enqueues the frame at ordering index for peer. A session that has
+// not yet carried every earlier index refuses it with ErrPeerCatchingUp.
+func (m *ConnectionManager) SendFrame(peer string, index uint64, encoded []byte) error {
+	session, err := m.currentSession(peer)
+	if err != nil {
+		return err
+	}
+	if session.stream == nil {
+		return session.Send(encoded)
+	}
+	return session.stream.offerFrame(index, encoded)
+}
+
+// SendCommitNotice enqueues a notice confirming confirmedIndex for peer, once
+// the peer's session has carried that index.
+func (m *ConnectionManager) SendCommitNotice(peer string, confirmedIndex uint64, encoded []byte) error {
+	session, err := m.currentSession(peer)
+	if err != nil {
+		return err
+	}
+	if session.stream == nil {
+		return session.Send(encoded)
+	}
+	return session.stream.offerCommitNotice(confirmedIndex, encoded)
+}
+
+func (m *ConnectionManager) currentSession(peer string) (*PeerSession, error) {
 	managed, _, ok := m.registry.Current(peer)
 	if !ok {
-		return ErrPeerNotConnected
+		return nil, ErrPeerNotConnected
 	}
 	session, ok := managed.(*PeerSession)
 	if !ok {
-		return errors.New("replication registry contains an unexpected session type")
+		return nil, errors.New("replication registry contains an unexpected session type")
 	}
-	return session.Send(encoded)
+	return session, nil
 }
 
 func (m *ConnectionManager) PeerConnections() map[string]bool {
@@ -351,6 +382,9 @@ func (m *ConnectionManager) authorizeSession(ctx context.Context, session *PeerS
 
 func (m *ConnectionManager) runRegistered(ctx context.Context, peer string, outbound bool, session *PeerSession) (time.Duration, error) {
 	started := time.Now()
+	if m.options.Frames != nil && session.outgoing == StreamPrimaryToReplica {
+		session.stream = newPeerStream(session, m.options.Frames, session.Peer().DurableIndex)
+	}
 	generation, err := m.registry.Register(peer, outbound, session)
 	if err != nil {
 		return time.Since(started), err
@@ -362,11 +396,28 @@ func (m *ConnectionManager) runRegistered(ctx context.Context, peer string, outb
 			return time.Since(started), fmt.Errorf("prepare replication data session for %s: %w", peer, err)
 		}
 	}
+	streamCtx, stopStream := context.WithCancel(ctx)
+	streamDone := make(chan error, 1)
+	if session.stream != nil {
+		go func() {
+			streamErr := session.stream.run(streamCtx)
+			if streamErr != nil {
+				_ = session.Close()
+			}
+			streamDone <- streamErr
+		}()
+	} else {
+		streamDone <- nil
+	}
 	err = session.Run(ctx, func(handlerCtx context.Context, hello Hello, record StreamRecord) error {
 		return m.registry.Deliver(peer, generation, func() error {
 			return m.options.Handle(handlerCtx, hello, record, session.sendFromHandler)
 		})
 	})
+	stopStream()
+	if streamErr := <-streamDone; streamErr != nil && ctx.Err() == nil {
+		err = fmt.Errorf("replication session to %s: %w", peer, streamErr)
+	}
 	m.registry.Remove(peer, generation)
 	return time.Since(started), err
 }
