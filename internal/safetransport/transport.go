@@ -158,7 +158,17 @@ func PolicyOf(client *http.Client) (Policy, bool) {
 	if client == nil {
 		return Policy{}, false
 	}
-	pinned, ok := client.Transport.(*pinnedTransport)
+	transport := client.Transport
+	// A wrapper that bounds what the pinned transport returns — the Provider
+	// stream idle limit — says what it wraps.
+	for {
+		wrapper, ok := transport.(interface{ Unwrap() http.RoundTripper })
+		if !ok {
+			break
+		}
+		transport = wrapper.Unwrap()
+	}
+	pinned, ok := transport.(*pinnedTransport)
 	if !ok {
 		return Policy{}, false
 	}

@@ -109,6 +109,41 @@ func TestConverseStreamNormalizesAWSFramesAndUsage(t *testing.T) {
 	}
 }
 
+// The Runtime profiles are withheld, so the app-level walk over streaming
+// profiles skips them; the converse-stream reader is held to the idle limit
+// here, so offering a Runtime profile again needs no edit to keep it bounded.
+// It stalls inside a frame, after one whole one, which is the case a framed
+// reader is likeliest to report as something else.
+func TestConverseStreamEndsAStalledStreamAsAnAmbiguousTimeout(t *testing.T) {
+	var first bytes.Buffer
+	writeEventFrame(t, &first, "messageStart", `{"role":"assistant"}`)
+	stalled := make(chan struct{})
+	defer close(stalled)
+	client := &http.Client{Transport: provider.StreamIdleTransport{Idle: 50 * time.Millisecond, Next: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		reader, writer := io.Pipe()
+		go func() {
+			_, _ = writer.Write(first.Bytes())
+			_, _ = writer.Write([]byte{0, 0})
+			<-stalled
+			_ = writer.Close()
+		}()
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/vnd.amazon.eventstream"}}, Body: reader}, nil
+	})}}
+	adapter := newTestAdapter(t, client)
+	defer adapter.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := adapter.ChatStream(ctx, provider.ChatCall{
+		RequestID: "req_stall", ProviderModel: "anthropic.claude-test-v1:0",
+		Request: openaiapi.ChatCompletionRequest{Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}}},
+	}, func(semantic.Event) error { return nil })
+	var classified *provider.Error
+	if !errors.As(err, &classified) || classified.Class != provider.ErrorTimeout || !classified.Ambiguous ||
+		!errors.Is(err, provider.ErrStreamIdle) {
+		t.Fatalf("stalled converse stream ended with %#v (%v), want an ambiguous timeout from the idle limit", classified, err)
+	}
+}
+
 func TestCredentialRegionErrorsAndProviderErrorsAreSafe(t *testing.T) {
 	endpoint, _ := url.Parse("https://bedrock-runtime.us-west-2.amazonaws.com")
 	if _, err := New(Options{Endpoint: endpoint, CredentialJSON: []byte(testCredential), Client: &http.Client{}}); err == nil {

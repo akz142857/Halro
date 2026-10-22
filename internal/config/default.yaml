@@ -231,6 +231,10 @@ gateway:
   # per write, so it bounds a stalled reader without cutting a long stream.
   downstream_write_timeout: 15s
   stream_max_duration: 10m0s
+  # How long a Provider stream may send nothing after its headers before it is
+  # ended as a stalled, ambiguous attempt. Any byte, a keep-alive comment
+  # included, restarts it.
+  upstream_stream_idle_timeout: 2m0s
   # Shared by the whole request, across retries and fallbacks. The number of
   # distinct candidates a request can reach is ceil(max_total_attempts /
   # retry.max_attempts_per_target), so this has to be at least as large as the

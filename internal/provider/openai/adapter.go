@@ -879,6 +879,9 @@ func (a *Adapter) ChatStream(
 					Message: "provider stream ended before [DONE]",
 				}
 			}
+			if idle := provider.StreamIdleFailure(err); idle != nil {
+				return usage, idle
+			}
 			return usage, &provider.Error{
 				Class: provider.ErrorMalformed, Ambiguous: true,
 				Message: "decode provider stream", Cause: err,

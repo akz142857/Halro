@@ -84,7 +84,10 @@ The handler is the sole stream owner. `Close` is idempotent. Frame, semantic eve
 - header/body read deadline;
 - non-stream route total or stream-establishment deadline;
 - per-attempt connect/TLS/response-header deadline;
-- stream idle deadline;
+- upstream stream idle deadline (`gateway.upstream_stream_idle_timeout`): no
+  byte from the Provider for that long after its headers ends the attempt as an
+  ambiguous timeout — not retried, not sent to a fallback, settled
+  conservatively;
 - downstream per-write deadline;
 - maximum stream duration.
 

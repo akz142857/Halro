@@ -112,6 +112,12 @@ func (s *Service) ProviderFailureReasons() ProviderFailureReasons {
 	return s.failureReasons.snapshot()
 }
 
+// StreamIdleAborts is how many attempts had their Provider stream ended by
+// gateway.upstream_stream_idle_timeout.
+func (s *Service) StreamIdleAborts() uint64 {
+	return s.streamIdleAborts.Load()
+}
+
 // KnownFailureReasons is every label this metric can emit for a classified
 // refusal, so the endpoint can publish a zero rather than leaving a reason
 // absent until the first time it happens. A missing series and a series at zero

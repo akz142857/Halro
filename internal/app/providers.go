@@ -868,11 +868,19 @@ func newBindingClientWithEgress(cfg config.Config, binding domain.ProviderProfil
 	if !available {
 		return nil, fmt.Errorf("Provider egress proxy %q is unavailable", proxyID)
 	}
-	return safetransport.NewClient(safetransport.Options{
+	client, err := safetransport.NewClient(safetransport.Options{
 		Policy: policy, ConnectTimeout: cfg.Gateway.AttemptConnectTimeout.Value(),
 		ResponseHeaderTimeout: cfg.Gateway.AttemptResponseHeaderTimeout.Value(),
 		Dialer:                dialer,
 	})
+	if err != nil {
+		return nil, err
+	}
+	// Every adapter reads its stream through this client, so one wrapper bounds
+	// the gap between bytes on all of them; the alert and catalogue clients are
+	// built elsewhere and are not Provider streams.
+	client.Transport = provider.StreamIdleTransport{Next: client.Transport, Idle: cfg.Gateway.UpstreamStreamIdleTimeout.Value()}
+	return client, nil
 }
 
 // newProviderBindingAdapterWithClient is the wiring itself, separated from the

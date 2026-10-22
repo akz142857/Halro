@@ -136,6 +136,7 @@ an authentication boundary.
 | `halro_provider_up` | gauge | `provider_type` |
 | `halro_policy_rejections_total` | counter | `reason` |
 | `halro_provider_failure_reason_total` | counter | `reason`, `provider_status` |
+| `halro_upstream_stream_idle_aborts_total` | counter | none |
 | `halro_provider_failure_reason_dropped_total` | counter | none |
 | `halro_route_suspended` | gauge | `scope_kind`, `reason` |
 | `halro_route_suspension_transitions_total` | counter | `reason` |

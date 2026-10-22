@@ -354,6 +354,9 @@ func (a *Adapter) ChatStream(ctx context.Context, call provider.ChatCall, emit f
 			return usage, nil
 		}
 		if err != nil {
+			if idle := provider.StreamIdleFailure(err); idle != nil {
+				return usage, idle
+			}
 			return usage, malformed("decode Gemini stream", err)
 		}
 		if len(event.Data) == 0 {

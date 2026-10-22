@@ -81,6 +81,7 @@ type Service struct {
 	redactor              *redaction.Engine
 	routes                *routegate.Gate
 	failureReasons        failureReasonCounters
+	streamIdleAborts      atomic.Uint64
 	maxAttempts           int
 	maxAttemptsPerTarget  int
 	retryBaseDelay        time.Duration
@@ -909,6 +910,9 @@ func (attempt *activeAttempt) logProviderFailure(providerErr error) {
 	// Counted from the same descriptor the log is written from, so the metric
 	// and the record can never disagree about how one failure classified.
 	attempt.service.failureReasons.observe(descriptor)
+	if errors.Is(providerErr, provider.ErrStreamIdle) {
+		attempt.service.streamIdleAborts.Add(1)
+	}
 	attributes := append([]any{"request_id", attempt.run.requestID}, descriptor.attributes()...)
 	attributes = append(attributes, "retryable", descriptor.Retryable)
 	if descriptor.Ambiguous {

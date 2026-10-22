@@ -623,6 +623,9 @@ func (adapter *Adapter) MessagesNativeStream(ctx context.Context, call provider.
 			break
 		}
 		if nextErr != nil {
+			if idle := provider.StreamIdleFailure(nextErr); idle != nil {
+				return usage, idle
+			}
 			return usage, &provider.Error{Class: provider.ErrorMalformed, Ambiguous: emitted, Message: "read Anthropic stream", Cause: nextErr}
 		}
 		raw := anthropicapi.RawStreamEvent{Type: event.Event, Data: append(json.RawMessage(nil), event.Data...)}

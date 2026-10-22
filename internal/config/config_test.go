@@ -910,6 +910,38 @@ func TestTheErrorFileCannotShareThePlainLogsPath(t *testing.T) {
 	}
 }
 
+// An absent upstream idle limit takes the default, never more than the stream
+// may last, so an install that shortened stream_max_duration still starts; one
+// set explicitly past it, or not positive, is refused.
+func TestUpstreamStreamIdleTimeoutIsDefaultedWithinTheStreamAndBounded(t *testing.T) {
+	var absent Config
+	if err := absent.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if absent.Gateway.UpstreamStreamIdleTimeout != DefaultUpstreamStreamIdleTimeout {
+		t.Fatalf("absent limit resolved to %s", absent.Gateway.UpstreamStreamIdleTimeout.Value())
+	}
+	short := Default()
+	short.Gateway.StreamMaxDuration = Duration(time.Minute)
+	short.Gateway.UpstreamStreamIdleTimeout = 0
+	if err := short.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if short.Gateway.UpstreamStreamIdleTimeout != Duration(time.Minute) {
+		t.Fatalf("absent limit under a one-minute stream resolved to %s", short.Gateway.UpstreamStreamIdleTimeout.Value())
+	}
+	if err := short.Validate(LoadOptions{}); err != nil {
+		t.Fatalf("an install that only shortened its streams was refused: %v", err)
+	}
+	for _, value := range []Duration{-1, Duration(11 * time.Minute)} {
+		candidate := Default()
+		candidate.Gateway.UpstreamStreamIdleTimeout = value
+		if err := candidate.Validate(LoadOptions{}); err == nil || !strings.Contains(err.Error(), "upstream_stream_idle_timeout") {
+			t.Fatalf("limit %s err=%v", value.Value(), err)
+		}
+	}
+}
+
 // An absent hot-state limit takes the §14 default, and one outside its bounds
 // is refused rather than read as no limit.
 func TestLedgerHotStateLimitIsDefaultedAndBounded(t *testing.T) {

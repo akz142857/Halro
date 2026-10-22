@@ -476,6 +476,11 @@ gateway:
   # @description.zh-CN 单个流式请求允许保持活动的最长时间。
   # @description.en-US Maximum lifetime allowed for one streaming request.
   stream_max_duration: 10m
+  # @title.zh-CN 上游流空闲超时
+  # @title.en-US Upstream stream idle timeout
+  # @description.zh-CN 上游在响应头之后多久没有发来任何字节，就把这次流式尝试按模糊超时结束（不重试、不回退）。任何字节都会重新计时，心跳也算。不能超过流最长持续时间。
+  # @description.en-US How long a Provider may send no byte after its headers before the streaming attempt ends as an ambiguous timeout (not retried, not sent to a fallback). Any byte, a keep-alive included, restarts it. Cannot exceed the maximum stream duration.
+  upstream_stream_idle_timeout: 2m
   # @title.zh-CN 最大总尝试次数
   # @title.en-US Maximum total attempts
   # @description.zh-CN 一次请求跨路由目标允许的尝试总数。能触及的候选数是

@@ -461,6 +461,9 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 			strconv.Quote(item.reason), item.value)
 	}
 	writeProviderFailureReasons(output, r.gatewayService.ProviderFailureReasons())
+	metricHeader(output, "halro_upstream_stream_idle_aborts_total", "counter",
+		"Provider attempts ended because their stream sent nothing for gateway.upstream_stream_idle_timeout.")
+	fmt.Fprintf(output, "halro_upstream_stream_idle_aborts_total %d\n", r.gatewayService.StreamIdleAborts())
 	writeRouteSuspensions(output, r.routes.Counts(time.Now()))
 	metricHeader(output, "halro_provider_active_requests", "gauge", "Current in-flight requests by Provider instance.")
 	activeProviders := r.gatewayService.ActiveProviderRequests()

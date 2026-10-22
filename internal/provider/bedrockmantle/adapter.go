@@ -271,6 +271,9 @@ func (adapter *ResponsesAdapter) ChatStream(ctx context.Context, call provider.C
 			break
 		}
 		if nextErr != nil {
+			if idle := provider.StreamIdleFailure(nextErr); idle != nil {
+				return state.usage, idle
+			}
 			return state.usage, malformed("decode Mantle Responses stream", nextErr, state.started)
 		}
 		if len(event.Data) == 0 || string(event.Data) == "[DONE]" {

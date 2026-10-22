@@ -363,6 +363,12 @@ const (
 	MaxLedgerMaxHotStateBytes     = int64(4) << 30
 )
 
+// DefaultUpstreamStreamIdleTimeout ends a Provider stream that sends no byte
+// for this long after its headers. Provisional until measured against each
+// Profile's longest silent reasoning
+// (docs/todo/upstream-stream-idle-watchdog.zh-CN.md §5).
+const DefaultUpstreamStreamIdleTimeout = Duration(2 * time.Minute)
+
 type Admin struct {
 	SessionTTL         Duration  `yaml:"session_ttl"`
 	IdleTimeout        Duration  `yaml:"idle_timeout"`
@@ -488,6 +494,7 @@ type Gateway struct {
 	AttemptResponseHeaderTimeout  Duration        `yaml:"attempt_response_header_timeout"`
 	DownstreamWriteTimeout        Duration        `yaml:"downstream_write_timeout"`
 	StreamMaxDuration             Duration        `yaml:"stream_max_duration"`
+	UpstreamStreamIdleTimeout     Duration        `yaml:"upstream_stream_idle_timeout"`
 	MaxTotalAttempts              int             `yaml:"max_total_attempts"`
 	DeferredResponseWorkers       int             `yaml:"deferred_response_workers"`
 	HealthProbeInterval           Duration        `yaml:"health_probe_interval"`
@@ -993,6 +1000,14 @@ func (c *Config) Normalize() error {
 	if c.Ledger.MaxHotStateBytes == 0 {
 		c.Ledger.MaxHotStateBytes = DefaultLedgerMaxHotStateBytes
 	}
+	if c.Gateway.UpstreamStreamIdleTimeout == 0 {
+		// An install that shortened stream_max_duration below the default
+		// would otherwise be refused at start for a key it never wrote.
+		c.Gateway.UpstreamStreamIdleTimeout = DefaultUpstreamStreamIdleTimeout
+		if c.Gateway.StreamMaxDuration > 0 {
+			c.Gateway.UpstreamStreamIdleTimeout = min(c.Gateway.UpstreamStreamIdleTimeout, c.Gateway.StreamMaxDuration)
+		}
+	}
 	if c.Admin.SessionTTL == 0 {
 		c.Admin.SessionTTL = Duration(8 * time.Hour)
 	}
@@ -1283,11 +1298,15 @@ func (c Config) Validate(opts LoadOptions) error {
 		"gateway.attempt_response_header_timeout": c.Gateway.AttemptResponseHeaderTimeout,
 		"gateway.downstream_write_timeout":        c.Gateway.DownstreamWriteTimeout,
 		"gateway.stream_max_duration":             c.Gateway.StreamMaxDuration,
+		"gateway.upstream_stream_idle_timeout":    c.Gateway.UpstreamStreamIdleTimeout,
 		"gateway.health_probe_interval":           c.Gateway.HealthProbeInterval,
 	} {
 		if value <= 0 {
 			problems = append(problems, fmt.Errorf("%s must be positive", name))
 		}
+	}
+	if c.Gateway.UpstreamStreamIdleTimeout > c.Gateway.StreamMaxDuration {
+		problems = append(problems, errors.New("gateway.upstream_stream_idle_timeout cannot exceed gateway.stream_max_duration, which would bound every stall first"))
 	}
 	if c.Gateway.PricingClockRollbackTolerance.Value() < MinPricingClockRollbackTolerance {
 		problems = append(problems, fmt.Errorf("gateway.pricing_clock_rollback_tolerance must be at least %s, so concurrent price selections cannot be mistaken for a wall-clock rollback", MinPricingClockRollbackTolerance))

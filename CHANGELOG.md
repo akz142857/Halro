@@ -60,6 +60,17 @@ re-initialisation is needed going forward: the upgrade migrates in place.
   block is Standalone and unchanged. HA is still not supported in production
   until the entry conditions in `docs/todo/halro-ha-architecture.zh-CN.md`
   §1.3 are met.
+- `gateway.upstream_stream_idle_timeout` (default `2m`, never more than
+  `gateway.stream_max_duration` when unset) ends a Provider stream that sends
+  no byte for that long after its headers. Until now an upstream that answered
+  and then went quiet held its reservation, concurrency and connection until
+  `stream_max_duration` ran out. Any byte, keep-alive comments included,
+  restarts the clock. The attempt ends as an ambiguous timeout: it is not
+  retried or sent to a fallback, it settles conservatively, and a stream the
+  caller has already received part of ends with an `error` event and no
+  `[DONE]`. `halro_upstream_stream_idle_aborts_total` counts them. The default
+  is provisional until measured against each Profile's longest silent
+  reasoning.
 
 ### Changed
 
