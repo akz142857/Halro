@@ -9,6 +9,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -423,11 +424,14 @@ func (s *PeerSession) Close() error {
 		close(s.closedSignal)
 		err = s.conn.Close()
 		var netErr net.Error
-		if errors.As(err, &netErr) && netErr.Timeout() {
+		if errors.As(err, &netErr) && netErr.Timeout() ||
+			errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
 			// The authenticated stream is already being retired and the socket is
-			// closed even when TLS cannot deliver close_notify before its deadline.
-			// Treating that advisory alert as a manager shutdown failure makes a
-			// healthy peer race look like lost replicated data.
+			// closed even when TLS cannot deliver close_notify: before its
+			// deadline, or at all because the peer has already gone and the write
+			// meets a reset or a broken pipe. Treating that advisory alert as a
+			// manager shutdown failure makes a healthy peer race look like lost
+			// replicated data.
 			err = nil
 		}
 	})
