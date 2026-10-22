@@ -344,8 +344,8 @@ Histogram buckets are 10, 25, 50, 100, 250, and 500 milliseconds, then 1,
 2.5, 5, 10, 30, 45, 60, 90, 120, 180, 300, and 600 seconds plus `+Inf`
 (`usage.LatencyBucketsMillis`; 300 and 600 are the shipped header and request
 deadlines). They are derived from Ledger
-events and persisted in the Usage checkpoint, so replay and catch-up preserve
-the exact distribution.
+events and persisted in the usage history (`history.db`), so replay and
+catch-up preserve the exact distribution.
 
 `halro_policy_rejections_total{reason="key_rate"}` counts requests shed by the
 built-in per-Key ceiling — the bound on what one authenticated caller may ask
