@@ -459,10 +459,7 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 		return
 	}
 	testedRevision := deployment.Revision
-	timeout := r.config.Gateway.AttemptResponseHeaderTimeout.Value()
-	if timeout <= 0 {
-		timeout = 15 * time.Second
-	}
+	timeout := probeTimeout(r.config)
 	ctx, cancel := context.WithTimeout(request.Context(), timeout)
 	defer cancel()
 	started := time.Now()

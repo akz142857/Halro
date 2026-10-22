@@ -628,7 +628,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		RefreshInterval: cfg.ModelCatalog.RefreshInterval.Value(), DataDir: cfg.Storage.DataDir,
 		TrustRoots:          modelcatalog.ProductionTrustRoots(),
 		ConnectTimeout:      cfg.Gateway.AttemptConnectTimeout.Value(),
-		ResponseTimeout:     cfg.Gateway.AttemptResponseHeaderTimeout.Value(),
+		ResponseTimeout:     probeTimeout(cfg),
 		MaxDownloadBytes:    cfg.ModelCatalog.MaxDownloadBytes,
 		MaxDecodedBytes:     cfg.ModelCatalog.MaxDecodedBytes,
 		MaxCompressionRatio: cfg.ModelCatalog.MaxCompressionRatio,

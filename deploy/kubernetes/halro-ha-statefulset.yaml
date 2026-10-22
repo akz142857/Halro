@@ -42,7 +42,8 @@ spec:
       serviceAccountName: halro-ha
       automountServiceAccountToken: false
       enableServiceLinks: false
-      terminationGracePeriodSeconds: 150
+      # server.shutdown_timeout (default 10m) plus cleanup headroom.
+      terminationGracePeriodSeconds: 650
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532

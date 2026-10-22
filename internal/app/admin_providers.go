@@ -595,10 +595,7 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	testedRevision := instance.Revision
-	timeout := r.config.Gateway.AttemptResponseHeaderTimeout.Value()
-	if timeout <= 0 {
-		timeout = 15 * time.Second
-	}
+	timeout := probeTimeout(r.config)
 	testedAt := time.Now().UTC()
 	maxLatencyMS := int64(0)
 	healthyTargets := 0
@@ -1044,10 +1041,7 @@ func (r *Runtime) testAdminRoute(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	testedRevision := route.Revision
-	timeout := r.config.Gateway.AttemptResponseHeaderTimeout.Value()
-	if timeout <= 0 {
-		timeout = 15 * time.Second
-	}
+	timeout := probeTimeout(r.config)
 	ctx, cancel := context.WithTimeout(request.Context(), timeout)
 	started := time.Now()
 	probeErr := prober.Probe(ctx, providerModel)

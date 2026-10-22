@@ -29,6 +29,21 @@ semantic versioning.
 
 ### Changed
 
+- A reasoning model may now think for five minutes. It sends no response header
+  until it has finished reasoning, so `gateway.attempt_response_header_timeout`
+  is how long it may think, and at `1m` Halro cut it off — three times in three
+  days on Bedrock Mantle in production (#343), and o3 at high effort answered a
+  mid-sized problem in 47.5s when measured. The cut is ambiguous, so the
+  upstream still billed it. New defaults: `attempt_response_header_timeout`
+  `5m`, `gateway.route_total_timeout` `10m`, `server.shutdown_timeout` `10m`
+  (it must cover the route), and the Kubernetes manifests'
+  `terminationGracePeriodSeconds` `650`. Connection tests, the deployment
+  health probe, invocation-target lookups, capability detection and the model
+  catalog fetch no longer follow the header timeout: they wait at most a minute.
+  **An existing `config.yaml` keeps the values written into it**, since `init`
+  writes them out; raise those three keys, and a Kubernetes grace period,
+  yourself to get the new behaviour. A longer route also means a restart may
+  wait up to `shutdown_timeout` for requests in flight to drain.
 - `halro.db` is now a projection of `data/metadata.journal`: every metadata
   write is appended to the journal and made durable before the bbolt commit,
   and a start replays any frame the database has not applied. This is the

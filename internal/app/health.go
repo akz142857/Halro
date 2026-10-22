@@ -36,10 +36,7 @@ func (r *Runtime) probeDeployments(ctx context.Context) {
 		r.logger.Warn("active deployment probe skipped", "error", err)
 		return
 	}
-	timeout := r.config.Gateway.AttemptResponseHeaderTimeout.Value()
-	if timeout <= 0 {
-		timeout = 15 * time.Second
-	}
+	timeout := probeTimeout(r.config)
 	// This loop holds the only authoritative list of deployments the registry
 	// ever sees, so it is where a probe result outliving its deployment is
 	// caught. Collected before the probes run and applied after, so a record
