@@ -143,7 +143,10 @@ func decodeUint64(encoded []byte) (uint64, bool) {
 // captured variables must be reset on each entry, and the callback must be
 // idempotent. What changes is only who re-runs it.
 type batchState struct {
-	mu      sync.Mutex
+	mu sync.Mutex
+	// commit is the commit turn: one runBatch at a time takes the queue and
+	// commits it (see runBatch).
+	commit  sync.Mutex
 	pending []*batchCall
 	timer   *time.Timer
 	// delay and size are the tunables, held per store rather than read from
@@ -185,16 +188,38 @@ func (s *Store) batch(fn func(*Tx) error) error {
 	return <-call.done
 }
 
-// runBatch takes whatever has queued and commits it as one transaction.
+// runBatch commits whatever has queued, at most size callers per transaction,
+// until the queue is empty.
+//
+// It takes the queue only once it holds the commit turn. Taking it first and
+// then waiting for bbolt's writer lock — what db.Batch does — lets several
+// small batches line up behind a busy writer, where they can never merge:
+// each one, once committed, releases its callers together and they queue as a
+// batch of the same size again, while a group whose arrivals spread past the
+// delay splits in two. Under contention the batches only shrink, and every one
+// of them pays a frame's fsync and a commit's. Measured on Linux at 64 workers
+// (BenchmarkDeploymentPricePinCeiling), a three-second run fell to batches of
+// seven and a quarter of its throughput. Holding the turn first means
+// everything that arrived while the previous transaction committed goes into
+// the next one.
 func (s *Store) runBatch() {
-	s.batches.mu.Lock()
-	queued := s.batches.pending
-	s.batches.pending, s.batches.timer = nil, nil
-	s.batches.mu.Unlock()
-	if len(queued) == 0 {
-		return
+	s.batches.commit.Lock()
+	defer s.batches.commit.Unlock()
+	for {
+		s.batches.mu.Lock()
+		queued := s.batches.pending
+		if len(queued) > s.batches.size {
+			s.batches.pending = append([]*batchCall(nil), queued[s.batches.size:]...)
+			queued = queued[:s.batches.size]
+		} else {
+			s.batches.pending, s.batches.timer = nil, nil
+		}
+		s.batches.mu.Unlock()
+		if len(queued) == 0 {
+			return
+		}
+		s.commitBatch(queued)
 	}
-	s.commitBatch(queued)
 }
 
 // commitBatch runs the queue, and on a callback error drops that caller and
