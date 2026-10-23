@@ -145,12 +145,8 @@ func openFreshHistory(path string, ledgerKey []byte) (*usage.HistoryStore, *usag
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, nil, err
 	}
-	history, _, err := usage.OpenHistory(path, key)
+	history, err := usage.CreateHistory(path, key)
 	if err != nil {
-		return nil, nil, err
-	}
-	if err := history.Reset(); err != nil {
-		history.Close()
 		return nil, nil, err
 	}
 	return history, usage.NewAggregate(history), nil
@@ -159,7 +155,7 @@ func openFreshHistory(path string, ledgerKey []byte) (*usage.HistoryStore, *usag
 // openUsageOffline replays the authenticated Ledger into a usage history index
 // and returns the aggregate over it. Without rebuild the index is a scratch
 // copy in a temporary directory, removed by the returned close; with rebuild it
-// is the instance's own history.db, emptied first.
+// then replaces the instance's own history.db.
 func openUsageOffline(
 	ctx context.Context,
 	cfg config.Config,

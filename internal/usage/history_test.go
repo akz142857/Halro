@@ -2,6 +2,7 @@ package usage
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -70,7 +71,10 @@ func TestHistoryRefusesAnAlteredRow(t *testing.T) {
 }
 
 // A history.db written under another key — another instance's, or one whose
-// Ledger key changed — is emptied on open rather than trusted.
+// Ledger key changed — is replaced on open rather than trusted. Replaced, not
+// emptied in place: emptying walks every page of the old file, which on a
+// production-sized index read gigabytes into the mapping on the first start
+// after a format change.
 func TestHistoryWithAnotherKeyIsRebuilt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "history.db")
 	first, rebuilt, err := OpenHistory(path, testHistoryKey)
@@ -83,6 +87,10 @@ func TestHistoryWithAnotherKeyIsRebuilt(t *testing.T) {
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
+	old, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	other := make([]byte, 32)
 	second, rebuilt, err := OpenHistory(path, other)
 	if err != nil {
@@ -91,6 +99,9 @@ func TestHistoryWithAnotherKeyIsRebuilt(t *testing.T) {
 	defer second.Close()
 	if !rebuilt {
 		t.Fatal("an index written under another key was not rebuilt")
+	}
+	if current, err := os.Stat(path); err != nil || os.SameFile(old, current) {
+		t.Fatalf("the untrusted file was emptied in place rather than replaced (err=%v)", err)
 	}
 	if _, err := second.State(); !IsHistoryEmpty(err) {
 		t.Fatalf("the rebuilt index still holds a position: %v", err)

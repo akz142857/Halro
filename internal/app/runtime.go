@@ -1296,7 +1296,7 @@ func restoreGovernanceState(metadata *boltstore.Store, governanceLog *governance
 //
 // The index is a derivative of the Ledger, so every doubt about it ends in a
 // rebuild rather than a refusal to start: another format version or another
-// key (OpenHistory empties it), unreadable state, or a watermark past the
+// key (OpenHistory replaces it), unreadable state, or a watermark past the
 // Ledger head — an index that claims more of the WAL than the WAL holds
 // describes a log that has since shrunk, and resuming from it would seek past
 // the real data. Rows and the watermark they describe are written in one
@@ -1334,9 +1334,11 @@ func openUsageHistory(
 		return store, aggregate, nil
 	}
 	logger.Warn("usage history rebuilt from the ledger", "reason", reason)
-	if err := store.Reset(); err != nil {
-		store.Close()
-		return nil, nil, fmt.Errorf("reset usage history: %w", err)
+	if err := store.Close(); err != nil {
+		return nil, nil, fmt.Errorf("close usage history before replacing it: %w", err)
+	}
+	if store, err = usage.CreateHistory(cfg.HistoryPath(), historyKey); err != nil {
+		return nil, nil, fmt.Errorf("replace usage history: %w", err)
 	}
 	return store, usage.NewAggregate(store), nil
 }
