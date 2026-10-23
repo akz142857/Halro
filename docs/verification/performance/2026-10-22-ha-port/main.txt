@@ -1,0 +1,42 @@
+goos: linux
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/store/bolt
+BenchmarkDeploymentPricePinCeiling/workers=1-4         	      57	  20740035 ns/op	        48.22 attempts/s
+BenchmarkDeploymentPricePinCeiling/workers=8-4         	     322	   4389391 ns/op	       227.8 attempts/s
+BenchmarkDeploymentPricePinCeiling/workers=64-4        	    1588	   1212318 ns/op	       824.9 attempts/s
+PASS
+goos: linux
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/store/bolt
+BenchmarkDeploymentPricePinCeiling/workers=1-4         	      57	  20355524 ns/op	        49.13 attempts/s
+BenchmarkDeploymentPricePinCeiling/workers=8-4         	     402	   3395158 ns/op	       294.5 attempts/s
+BenchmarkDeploymentPricePinCeiling/workers=64-4        	    2652	    651044 ns/op	      1536 attempts/s
+PASS
+goos: linux
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/store/bolt
+BenchmarkDeploymentPricePinCeiling/workers=1-4         	      52	  21228363 ns/op	        47.11 attempts/s
+BenchmarkDeploymentPricePinCeiling/workers=8-4         	     405	   5279469 ns/op	       189.4 attempts/s
+BenchmarkDeploymentPricePinCeiling/workers=64-4        	    3723	   1738674 ns/op	       575.2 attempts/s
+PASS
+goos: linux
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/store/bolt
+BenchmarkDeploymentPricePinCeiling/workers=1-4         	      54	  23824873 ns/op	        41.97 attempts/s
+BenchmarkDeploymentPricePinCeiling/workers=8-4         	     354	   3308446 ns/op	       302.3 attempts/s
+BenchmarkDeploymentPricePinCeiling/workers=64-4        	    1453	    863403 ns/op	      1158 attempts/s
+PASS
+goos: linux
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/store/bolt
+BenchmarkDeploymentPricePinCeiling/workers=1-4         	      56	  21991043 ns/op	        45.47 attempts/s
+BenchmarkDeploymentPricePinCeiling/workers=8-4         	     308	   3385735 ns/op	       295.4 attempts/s
+BenchmarkDeploymentPricePinCeiling/workers=64-4        	    2270	   1215079 ns/op	       823.0 attempts/s
+PASS
+goos: linux
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/store/bolt
+BenchmarkDeploymentPricePinCeiling/workers=1-4         	      48	  24568226 ns/op	        40.70 attempts/s
+BenchmarkDeploymentPricePinCeiling/workers=8-4         	     360	   3676984 ns/op	       272.0 attempts/s
+BenchmarkDeploymentPricePinCeiling/workers=64-4        	    3568	    726308 ns/op	      1377 attempts/s
+PASS

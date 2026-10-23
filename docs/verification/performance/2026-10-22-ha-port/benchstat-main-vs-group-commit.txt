@@ -1,0 +1,16 @@
+goos: linux
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/store/bolt
+                                       │   main.txt    │          group-commit.txt           │
+                                       │    sec/op     │    sec/op     vs base               │
+DeploymentPricePinCeiling/workers=1-4     21.61m ± 14%   20.69m ±  5%        ~ (p=0.093 n=6)
+DeploymentPricePinCeiling/workers=8-4     3.536m ± 49%   3.344m ± 16%        ~ (p=0.240 n=6)
+DeploymentPricePinCeiling/workers=64-4   1037.9µ ± 68%   488.4µ ± 31%  -52.94% (p=0.002 n=6)
+geomean                                   4.296m         3.233m        -24.74%
+
+                                       │  main.txt   │           group-commit.txt           │
+                                       │ attempts/s  │  attempts/s   vs base                │
+DeploymentPricePinCeiling/workers=1-4    46.29 ± 12%    48.33 ±  5%         ~ (p=0.089 n=6)
+DeploymentPricePinCeiling/workers=8-4    283.2 ± 33%    299.1 ± 14%         ~ (p=0.240 n=6)
+DeploymentPricePinCeiling/workers=64-4   991.5 ± 55%   2047.5 ± 45%  +106.52% (p=0.002 n=6)
+geomean                                  235.1          309.3         +31.56%
