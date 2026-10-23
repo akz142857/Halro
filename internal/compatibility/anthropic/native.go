@@ -187,6 +187,23 @@ func decodeNativeRequestOnce(kind compatibility.NativePayloadKind, payload json.
 	return request, true, nil
 }
 
+// NativeSampling reads which sampling members a native request names from the
+// bytes that will travel upstream rather than from the decoded request, where
+// an explicit null decodes to the same nil as an absent member.
+func NativeSampling(request anthropicapi.MessageRequest) (compatibility.AnthropicSampling, error) {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(request.Raw, &members); err != nil {
+		return compatibility.AnthropicSampling{}, err
+	}
+	_, temperature := members["temperature"]
+	_, topP := members["top_p"]
+	_, topK := members["top_k"]
+	return compatibility.AnthropicSampling{
+		Temperature: temperature, TopP: topP, TopK: topK,
+		TemperatureValue: request.Temperature, TopPValue: request.TopP,
+	}, nil
+}
+
 func validateNativePayload(kind compatibility.NativePayloadKind, payload json.RawMessage) error {
 	switch kind {
 	case compatibility.NativeRequest:

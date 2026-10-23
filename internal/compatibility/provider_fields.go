@@ -659,18 +659,28 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 
 // UnsupportedGenerateFieldsForTarget adds the small set of constraints that
 // cannot be expressed at profile granularity. BigModel's reasoning switch and
-// output-limit meaning vary between exact GLM model identifiers.
+// output-limit meaning vary between exact GLM model identifiers, and which
+// sampling members Anthropic accepts varies between exact Claude models.
 func UnsupportedGenerateFieldsForTarget(profileID domain.ProviderProfileID, providerModel string, request semantic.GenerateRequest) []string {
 	unsupported := UnsupportedGenerateFields(profileID, request)
-	if profileID != domain.ProfileBigModelCNChatEmbeddings && profileID != domain.ProfileBigModelGlobalChat &&
-		profileID != domain.ProfileBigModelCNCodingChat && profileID != domain.ProfileBigModelGlobalCodingChat {
+	var targetFields []string
+	if profileID == domain.ProfileBigModelCNChatEmbeddings || profileID == domain.ProfileBigModelGlobalChat ||
+		profileID == domain.ProfileBigModelCNCodingChat || profileID == domain.ProfileBigModelGlobalCodingChat {
+		targetFields = BigModelTargetUnsupportedGenerateFields(profileID, providerModel, request)
+	} else {
+		targetFields = AnthropicSamplingUnsupportedFields(profileID, providerModel, AnthropicSampling{
+			Temperature: request.Temperature != nil, TopP: request.TopP != nil,
+			TemperatureValue: request.Temperature, TopPValue: request.TopP,
+		})
+	}
+	if len(targetFields) == 0 {
 		return unsupported
 	}
 	seen := make(map[string]struct{}, len(unsupported))
 	for _, field := range unsupported {
 		seen[field] = struct{}{}
 	}
-	for _, field := range BigModelTargetUnsupportedGenerateFields(profileID, providerModel, request) {
+	for _, field := range targetFields {
 		if _, exists := seen[field]; exists {
 			continue
 		}
