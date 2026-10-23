@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -87,9 +88,33 @@ func TestHistoryWithAnotherKeyIsRebuilt(t *testing.T) {
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// Rows enough to make the file large. bbolt never shrinks a file, so one
+	// emptied in place stays this size; a replacement starts small.
+	raw, err := bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Update(func(tx *bbolt.Tx) error {
+		attempts := tx.Bucket(historyAttempts)
+		for i := range 4096 {
+			if err := attempts.Put(sequenceKey(uint64(i)), bytes.Repeat([]byte{0xaa}, 1024)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	const large = 4 << 20
 	old, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if old.Size() < large {
+		t.Fatalf("padding left the file at %d bytes", old.Size())
 	}
 	other := make([]byte, 32)
 	second, rebuilt, err := OpenHistory(path, other)
@@ -100,8 +125,12 @@ func TestHistoryWithAnotherKeyIsRebuilt(t *testing.T) {
 	if !rebuilt {
 		t.Fatal("an index written under another key was not rebuilt")
 	}
-	if current, err := os.Stat(path); err != nil || os.SameFile(old, current) {
-		t.Fatalf("the untrusted file was emptied in place rather than replaced (err=%v)", err)
+	current, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Size() >= large {
+		t.Fatalf("the untrusted file was emptied in place rather than replaced: still %d bytes", current.Size())
 	}
 	if _, err := second.State(); !IsHistoryEmpty(err) {
 		t.Fatalf("the rebuilt index still holds a position: %v", err)
