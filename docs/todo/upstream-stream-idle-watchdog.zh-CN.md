@@ -178,8 +178,27 @@ Profile 做一次测量：取各家能用的最长推理设置，记录"响应�
   事件或按内容计时，Anthropic 的默认设置会在 120s 被误杀**——§4.1 按字节计时的规则不能改。
 - `display: summarized` 时推理摘要持续流出，最长空档 4.6s。
 
-**仍未实测：** Gemini、Bedrock Mantle 的流式接口在长推理期间的心跳；Kimi、MiniMax 的 Anthropic 兼容
-接口是否也发 ping。120s 对它们是否足够，要等有 key 时再测。
+### 5.3 MiniMax 实测（2026-10-24，国际站 api.minimax.io，按字节到达时间记录）
+
+同一道难题，MiniMax-M3，`max_tokens` 32000；Anthropic 兼容接口另带
+`thinking: {type: "enabled", budget_tokens: 30976}`。两组都在 32000 处被截断，总时长是下限。
+Responses 接口不测：Halro 对它发非流式请求，看门狗管不到。
+
+| 接口 · 模型 | 输出 token | 响应头到达 | 总时长 | 字节间最长空档 | 只算非心跳字节的最长空档 | 心跳 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `/anthropic/v1/messages` · MiniMax-M3 | 32,000 | 1.5s | 575.9s | 10.4s | 10.4s | 开头 1 个 `ping` |
+| `/v1/chat/completions` · MiniMax-M3 | 32,000（推理 31,999） | 2.1s | 513.3s | 1.4s | 1.4s | 无 |
+
+结论：
+
+- MiniMax 的做法和 OpenAI、Anthropic 相反：推理期间**一直在发推理内容**（Anthropic 接口 8,053 个
+  `thinking_delta`），不靠心跳保活。最长空档 10.4s，120s 有 10 倍以上余量。
+- 它几乎不发心跳，所以如果哪天它把推理改成不外发，120s 就会开始误杀；这是行为假设，不是协议保证。
+- 同一次测量里发现 M2 系列已在按量 API 下线（三个接口都 404，而 `/v1/models` 仍列出），见
+  `fix/minimax-retired-m2-line`。只测了国际站；国内站（api.minimaxi.com）和 Subscription Access 未测。
+
+**仍未实测：** Gemini、Bedrock Mantle 的流式接口在长推理期间的心跳；Kimi 的 Anthropic 兼容接口是否
+也发 ping。120s 对它们是否足够，要等有 key 时再测。
 
 ## 6. 不做的事
 
