@@ -432,7 +432,7 @@ HA 代码在 `ha` 分支（`098a3214`）。本方案落地后，HA 基于新的 
 
 ### 13.4 归档文件 `archive.db`
 
-实现时没有放进 `history.db`，而是单独一个文件 `data/history/archive.db`（`internal/archive`）。原因：`history.db` 是 Usage 的派生数据，运行中会被 `Reset` 清空重建（`runtime.go` 的 `openUsageHistory`、`usage.go`）；而写进归档的条目已经从内存里删掉，归档被单独清空就等于丢数据。归档只和依赖它的快照一起失效，见下面的水位与链绑定。行级 MAC 的密钥从 Ledger 密钥派生（`vault.DeriveArchiveHMACKey`）。
+实现时没有放进 `history.db`，而是单独一个文件 `data/history/archive.db`（`internal/archive`）。原因：`history.db` 是 Usage 的派生数据，运行中会被整个丢弃重建（`runtime.go` 的 `openUsageHistory`、`usage.go`，经 `usage.CreateHistory`）；而写进归档的条目已经从内存里删掉，归档被单独清空就等于丢数据。归档只和依赖它的快照一起失效，见下面的水位与链绑定。行级 MAC 的密钥从 Ledger 密钥派生（`vault.DeriveArchiveHMACKey`）。
 
 | bucket | 键 | 值 |
 | --- | --- | --- |

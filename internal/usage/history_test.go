@@ -1,7 +1,9 @@
 package usage
 
 import (
+	"bytes"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -70,7 +72,10 @@ func TestHistoryRefusesAnAlteredRow(t *testing.T) {
 }
 
 // A history.db written under another key — another instance's, or one whose
-// Ledger key changed — is emptied on open rather than trusted.
+// Ledger key changed — is replaced on open rather than trusted. Replaced, not
+// emptied in place: emptying walks every page of the old file, which on a
+// production-sized index read gigabytes into the mapping on the first start
+// after a format change.
 func TestHistoryWithAnotherKeyIsRebuilt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "history.db")
 	first, rebuilt, err := OpenHistory(path, testHistoryKey)
@@ -83,6 +88,34 @@ func TestHistoryWithAnotherKeyIsRebuilt(t *testing.T) {
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// Rows enough to make the file large. bbolt never shrinks a file, so one
+	// emptied in place stays this size; a replacement starts small.
+	raw, err := bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Update(func(tx *bbolt.Tx) error {
+		attempts := tx.Bucket(historyAttempts)
+		for i := range 4096 {
+			if err := attempts.Put(sequenceKey(uint64(i)), bytes.Repeat([]byte{0xaa}, 1024)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	const large = 4 << 20
+	old, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.Size() < large {
+		t.Fatalf("padding left the file at %d bytes", old.Size())
+	}
 	other := make([]byte, 32)
 	second, rebuilt, err := OpenHistory(path, other)
 	if err != nil {
@@ -91,6 +124,13 @@ func TestHistoryWithAnotherKeyIsRebuilt(t *testing.T) {
 	defer second.Close()
 	if !rebuilt {
 		t.Fatal("an index written under another key was not rebuilt")
+	}
+	current, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Size() >= large {
+		t.Fatalf("the untrusted file was emptied in place rather than replaced: still %d bytes", current.Size())
 	}
 	if _, err := second.State(); !IsHistoryEmpty(err) {
 		t.Fatalf("the rebuilt index still holds a position: %v", err)

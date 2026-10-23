@@ -68,6 +68,21 @@ semantic versioning.
   directory this build has opened. Take a backup before upgrading; rolling
   back is a restore of that backup, as it was across schema 41.
 
+### Fixed
+
+- The first start after an upgrade no longer logs `usage history catch-up
+  failed: context deadline exceeded` while it rebuilds the usage history. The
+  minute tick's catch-up queued behind the rebuild, which is the same catch-up,
+  ran out its ten-second timeout and reported a failure every minute until the
+  rebuild finished; it now skips the tick while the rebuild runs.
+- A usage history (`history.db`) that has to be rebuilt — another format
+  version, another key, or a position past the Ledger — is now replaced by a
+  new file instead of being emptied in place. Emptying it deleted its bbolt
+  buckets, which walks every page: on a 3.3 GB index (5 million Ledger records)
+  the first start after an upgrade spent about 13 seconds reading the whole
+  file and the process held 3.2 GB of resident file pages, against a Go heap
+  of about 120 MB.
+
 ## [0.9.2] - 2026-10-21
 
 ### Upgrading from v0.9.1

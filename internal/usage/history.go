@@ -8,12 +8,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync/atomic"
 	"time"
 
 	"github.com/akz142857/Halro/internal/boltreopen"
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/durable"
 	"github.com/akz142857/Halro/internal/ledger"
 	bbolt "go.etcd.io/bbolt"
 )
@@ -58,6 +62,7 @@ var (
 	historyKeyState         = []byte("state")
 	historyKeyCheckLabel    = []byte("halro history key check v1")
 	errHistoryRowTampered   = errors.New("usage history row failed authentication")
+	errHistoryNotEmpty      = errors.New("usage history file holds buckets")
 	errHistoryStateMissing  = errors.New("usage history state is missing")
 	historyRequestSeparator = byte(0)
 )
@@ -170,7 +175,7 @@ func (s *HistoryStore) WriteStats() HistoryWriteStats {
 
 // OpenHistory opens or creates history.db. rebuilt reports that the file it
 // found could not be trusted — another format version or another key — and was
-// emptied, so the caller rebuilds it from the Ledger.
+// replaced by an empty one, so the caller rebuilds it from the Ledger.
 func OpenHistory(path string, key []byte) (store *HistoryStore, rebuilt bool, err error) {
 	if len(key) != 32 {
 		return nil, false, errors.New("usage history key must be 32 bytes")
@@ -181,24 +186,72 @@ func OpenHistory(path string, key []byte) (store *HistoryStore, rebuilt bool, er
 	}
 	store = &HistoryStore{db: db, key: bytes.Clone(key)}
 	check := store.mac(historyMeta, historyKeyCheck, historyKeyCheckLabel)
-	err = db.Update(func(tx *bbolt.Tx) error {
+	trusted, found := false, false
+	err = db.View(func(tx *bbolt.Tx) error {
+		// Any bucket at all is a file someone wrote; only a file with none is
+		// new and initialised in place.
+		found = tx.ForEach(func([]byte, *bbolt.Bucket) error { return errHistoryNotEmpty }) != nil
 		meta := tx.Bucket(historyMeta)
-		if meta != nil {
-			version := meta.Get(historyKeyVersion)
-			stored := meta.Get(historyKeyCheck)
-			if len(version) == 8 && binary.BigEndian.Uint64(version) == historyFormatVersion &&
-				hmac.Equal(stored, check) {
-				return nil
-			}
-			rebuilt = true
+		if meta == nil {
+			return nil
 		}
-		return store.resetTx(tx, check)
+		version := meta.Get(historyKeyVersion)
+		trusted = len(version) == 8 && binary.BigEndian.Uint64(version) == historyFormatVersion &&
+			hmac.Equal(meta.Get(historyKeyCheck), check)
+		return nil
 	})
 	if err != nil {
-		db.Close()
+		store.Close()
+		return nil, false, fmt.Errorf("read usage history version: %w", err)
+	}
+	if trusted {
+		return store, false, nil
+	}
+	if found {
+		if err := store.Close(); err != nil {
+			return nil, false, fmt.Errorf("close untrusted usage history: %w", err)
+		}
+		store, err = CreateHistory(path, key)
+		return store, err == nil, err
+	}
+	if err := db.Update(func(tx *bbolt.Tx) error { return store.initTx(tx, check) }); err != nil {
+		store.Close()
 		return nil, false, fmt.Errorf("initialize usage history: %w", err)
 	}
-	return store, rebuilt, nil
+	return store, false, nil
+}
+
+// CreateHistory replaces whatever is at path with an empty index. The old file
+// is removed rather than emptied: deleting its buckets in bbolt walks every
+// page of them, which on an index of millions of rows reads the whole file
+// into the mapping — a first start after a format change spent 13 seconds and
+// 3.2 GB of resident pages doing that for a 3.3 GB file it was about to
+// rebuild anyway. The index is a derivative of the Ledger, so nothing in it
+// needs keeping.
+func CreateHistory(path string, key []byte) (*HistoryStore, error) {
+	if len(key) != 32 {
+		return nil, errors.New("usage history key must be 32 bytes")
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("remove usage history: %w", err)
+	}
+	db, err := boltreopen.Open(path, bbolt.Options{Timeout: time.Second})
+	if err != nil {
+		return nil, fmt.Errorf("create usage history: %w", err)
+	}
+	store := &HistoryStore{db: db, key: bytes.Clone(key)}
+	check := store.mac(historyMeta, historyKeyCheck, historyKeyCheckLabel)
+	if err := db.Update(func(tx *bbolt.Tx) error { return store.initTx(tx, check) }); err != nil {
+		store.Close()
+		return nil, fmt.Errorf("initialize usage history: %w", err)
+	}
+	// Makes the replacement durable. A crash before this only means the next
+	// start finds the old file, distrusts it and replaces it again.
+	if err := durable.SyncDirectory(filepath.Dir(path)); err != nil {
+		store.Close()
+		return nil, fmt.Errorf("sync usage history directory: %w", err)
+	}
+	return store, nil
 }
 
 func (s *HistoryStore) Close() error {
@@ -206,21 +259,9 @@ func (s *HistoryStore) Close() error {
 	return s.db.Close()
 }
 
-// Reset discards every row, for a caller that found the index ahead of the
-// Ledger or otherwise unusable.
-func (s *HistoryStore) Reset() error {
-	check := s.mac(historyMeta, historyKeyCheck, historyKeyCheckLabel)
-	return s.db.Update(func(tx *bbolt.Tx) error { return s.resetTx(tx, check) })
-}
-
-func (s *HistoryStore) resetTx(tx *bbolt.Tx, check []byte) error {
+func (s *HistoryStore) initTx(tx *bbolt.Tx, check []byte) error {
 	for _, name := range historyAllBuckets {
-		if tx.Bucket(name) != nil {
-			if err := tx.DeleteBucket(name); err != nil {
-				return err
-			}
-		}
-		if _, err := tx.CreateBucket(name); err != nil {
+		if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 			return err
 		}
 	}
