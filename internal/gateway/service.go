@@ -1904,6 +1904,8 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 	if err != nil {
 		return err
 	}
+	ctx, cancelProjectLimit := projectStreamContext(ctx, principal.Project)
+	defer cancelProjectLimit()
 	payload, err := envelope.PayloadFor(target.ProfileID, 1, compatibility.NativeRequest)
 	if err != nil {
 		return gatewayError("internal_error", "native request payload is unavailable", 500, err)
@@ -2357,6 +2359,18 @@ func (s *Service) chatStream(
 // and a Responses caller translates them, as it did before. What is fixed is
 // the request side: a streaming Responses request no longer has to survive
 // being written as a Chat request first.
+// projectStreamContext narrows a stream to its Project's max_stream_duration
+// when one is set. gateway.stream_max_duration bounds every stream from the
+// handler already, so the shorter of the two applies, and zero leaves only
+// that one. The Project's value was stored, shown and edited in the console
+// and enforced nowhere before this.
+func projectStreamContext(ctx context.Context, project domain.Project) (context.Context, context.CancelFunc) {
+	if project.MaxStreamDuration <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, project.MaxStreamDuration)
+}
+
 func (s *Service) generateStream(
 	ctx context.Context,
 	plaintextKey string,
@@ -2372,6 +2386,8 @@ func (s *Service) generateStream(
 	if err != nil {
 		return err
 	}
+	ctx, cancelProjectLimit := projectStreamContext(ctx, principal.Project)
+	defer cancelProjectLimit()
 	// Before a single byte is written, so a repeat is an ordinary HTTP refusal
 	// rather than an error event inside a stream the caller has already been
 	// told is starting.

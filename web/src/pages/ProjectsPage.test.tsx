@@ -533,6 +533,48 @@ describe("projects page", () => {
     expect(update.mock.calls[0][1]).toMatchObject({ max_request_bytes: bytes });
   });
 
+  // The Gateway now ends a stream at this limit. It used to be written as 600 on
+  // every new project from a field the form never showed, which would cut
+  // streams at ten minutes on an instance whose own limit is longer.
+  it("sends the project stream limit, defaulting to the instance limit", async () => {
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [], next_cursor: "" } as never);
+    vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [
+      { id: "rt_1", public_model: "chat", enabled: true, revision: 1 },
+    ] } as never);
+    const createProject = vi.spyOn(api, "createProject").mockResolvedValue({ data: project(), etag: '"1"' } as never);
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "Inference" } });
+    fireEvent.click(await screen.findByRole("checkbox", { name: /chat/ }));
+    const limit = screen.getByLabelText(/流式请求时长上限/);
+    expect(limit).toHaveValue(0);
+
+    fireEvent.change(limit, { target: { value: "1800" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
+    await waitFor(() => expect(createProject).toHaveBeenCalledOnce());
+    expect(createProject.mock.calls[0][0]).toMatchObject({ max_stream_duration_seconds: 1800 });
+  });
+
+  it("preserves a project's stream limit during an unrelated edit", async () => {
+    const current = project({ max_stream_duration: 600_000_000_000 });
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [current], next_cursor: "" } as never);
+    vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [
+      { id: "rt_1", public_model: "chat", deployment_id: "dep_1", enabled: true, revision: 1 },
+    ] } as never);
+    vi.mocked(api.deployments).mockResolvedValue({ next_cursor: "", items: [deployment("dep_1")] } as never);
+    const update = vi.spyOn(api, "updateProject").mockResolvedValue(current as never);
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    expect(screen.getByLabelText(/流式请求时长上限/)).toHaveValue(600);
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存并热加载" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    expect(update.mock.calls[0][1]).toMatchObject({ max_stream_duration_seconds: 600 });
+  });
+
   it("rejects an unparsable CIDR before the request leaves the browser", async () => {
     vi.mocked(api.projectsPage).mockResolvedValue({ items: [], next_cursor: "" } as never);
     vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [

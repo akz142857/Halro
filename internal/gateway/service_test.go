@@ -343,6 +343,9 @@ type fakeAdapter struct {
 	lastChatRequest   openaiapi.ChatCompletionRequest
 	started           chan struct{}
 	release           <-chan struct{}
+	// holdStream keeps a stream open after its chunks until its context
+	// ends, as an upstream still generating does.
+	holdStream bool
 }
 
 // The registry only routes adapters that carry a profile contract, which is how
@@ -414,7 +417,7 @@ func (a *fakeAdapter) Chat(ctx context.Context, call provider.ChatCall) (openaia
 }
 
 func (a *fakeAdapter) ChatStream(
-	_ context.Context,
+	ctx context.Context,
 	_ provider.ChatCall,
 	emit func(semantic.Event) error,
 ) (*openaiapi.Usage, error) {
@@ -440,6 +443,10 @@ func (a *fakeAdapter) ChatStream(
 		if err := emit(event); err != nil {
 			return a.streamUsage, err
 		}
+	}
+	if a.holdStream {
+		<-ctx.Done()
+		return a.streamUsage, ctx.Err()
 	}
 	return a.streamUsage, a.err
 }
@@ -2571,5 +2578,43 @@ func TestOrderedFallbackReachesEveryCandidate(t *testing.T) {
 				t.Fatalf("walking the candidates left %d pending reservations", f.state.PendingReservations())
 			}
 		})
+	}
+}
+
+// A Project's max_stream_duration was stored, shown and edited in the console
+// and enforced nowhere. It now ends a stream that outlives it; a Project that
+// sets none is bounded by its caller's deadline (the gateway's
+// stream_max_duration) alone.
+func TestProjectMaxStreamDurationEndsAStreamThatOutlivesIt(t *testing.T) {
+	f := newFixture(t, 1_000_000)
+	defer f.close()
+	f.adapter.holdStream = true
+	stream := func(limit, callerDeadline time.Duration) (time.Duration, error) {
+		t.Helper()
+		f.project.MaxStreamDuration = limit
+		plaintext, key, err := auth.GenerateGatewayKey(f.project.ID, "stream-limit", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.service.auth.Refresh(context.Background(), source{
+			keys: []domain.GatewayKey{key}, projects: []domain.Project{f.project},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), callerDeadline)
+		defer cancel()
+		request := chatRequest()
+		request.Stream = true
+		started := time.Now()
+		err = f.service.ChatStream(ctx, plaintext, request, func(openaiapi.ChatCompletionResponse) error { return nil })
+		return time.Since(started), err
+	}
+	took, err := stream(100*time.Millisecond, 10*time.Second)
+	if err == nil || took > 5*time.Second {
+		t.Fatalf("a stream past its Project's 100ms limit ran %s and ended with %v", took, err)
+	}
+	took, err = stream(0, 300*time.Millisecond)
+	if err == nil || took < 300*time.Millisecond {
+		t.Fatalf("a Project with no limit of its own ended its stream at %s (%v), before the caller's deadline", took, err)
 	}
 }
