@@ -153,8 +153,32 @@ Profile 做一次测量：取各家能用的最长推理设置，记录"响应�
   Mantle 也已 3 次在 60.02 秒被切断（#343）。另在分支 `fix/reasoning-response-header-timeout`
   处理，不在本方案范围内。
 
-**仍未实测：** Anthropic（有 `event: ping`，间隔未知）、Gemini、Bedrock Mantle 的流式接口在长推理
-期间的心跳。它们是 Halro 里响应头之后还可能长时间沉默的路径；120s 对它们是否足够，要等有 key 时再测。
+### 5.2 Anthropic 实测（2026-10-23，直连 api.anthropic.com Messages 流式，按字节到达时间记录）
+
+同一道难题，`thinking: {type: "adaptive", display: …}`、`output_config.effort`、`max_tokens` 64000。
+五组并行跑；除冒烟那组外都在 64000 处被 `max_tokens` 截断，所以总时长是下限，不是该模型的最长推理。
+
+| 模型 · effort · display | 输出 token | 响应头到达 | 总时长 | 字节间最长空档 | 只算非 ping 字节的最长空档 | ping |
+| --- | --- | --- | --- | --- | --- | --- |
+| claude-haiku-5-5 · low · omitted | 7,208 | 1.8s | 35.9s | 30.0s | 32.7s | 2 |
+| claude-haiku-5-5 · max · omitted | 64,000 | 1.3s | 275.3s | 30.1s | 273.4s | 10 |
+| claude-sonnet-5-5 · max · omitted | 64,000 | 3.1s | 466.0s | 30.0s | 462.0s | 16 |
+| claude-opus-5-5 · max · omitted | 64,000 | 2.1s | 580.2s | 30.1s | 577.3s | 20 |
+| claude-fable-5-1 · max · omitted | 64,000 | 1.5s | 756.4s | 30.1s | 754.1s | 26 |
+| claude-opus-5-5 · max · summarized | 64,000 | 1.9s | 550.4s | 4.6s | 4.6s | 1 |
+
+结论：
+
+- 响应头 1–3 秒就到，推理在响应头**之后**，所以这条路径归看门狗管，不归响应头超时。
+- `display: omitted`（这些模型的默认值）时，推理期间除了 `event: ping` 什么都不发：Fable 5.1 有
+  754 秒没有一个内容字节。记录到的长空档全部是 29.9–30.1s，每个都以 ping 结束，与 OpenAI Responses 的
+  `event: keepalive` 相同。
+- 看门狗按字节计时，ping 会重置计时，所以 120s 对 Anthropic 也有 4 倍余量。反过来说，**如果改成按
+  事件或按内容计时，Anthropic 的默认设置会在 120s 被误杀**——§4.1 按字节计时的规则不能改。
+- `display: summarized` 时推理摘要持续流出，最长空档 4.6s。
+
+**仍未实测：** Gemini、Bedrock Mantle 的流式接口在长推理期间的心跳；Kimi、MiniMax 的 Anthropic 兼容
+接口是否也发 ping。120s 对它们是否足够，要等有 key 时再测。
 
 ## 6. 不做的事
 
