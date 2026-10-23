@@ -53,6 +53,12 @@ semantic versioning.
   write without showing it. **Projects created in the console before this
   carry that `600`**, which now applies: if `gateway.stream_max_duration` is
   above ten minutes, edit those projects to `0` or to the limit you want.
+- The request and attempt latency histograms gain buckets at 180, 300 and
+  600 seconds. They ended at 120s, so with the header deadline at 5m and the
+  request deadline at 10m every reasoning request between two minutes and the
+  deadline was counted as overflow. The usage history (`history.db`) changes
+  format and is rebuilt from the Ledger on the first start, with no operator
+  action; Prometheus starts new `le` series.
 - `halro.db` is now a projection of `data/metadata.journal`: every metadata
   write is appended to the journal and made durable before the bbolt commit,
   and a start replays any frame the database has not applied. This is the

@@ -33,7 +33,8 @@ import (
 
 // historyFormatVersion is bumped whenever a stored shape changes. A file
 // written under another version is rebuilt rather than read.
-const historyFormatVersion = 1
+// Version 2: the latency histograms gained three buckets past 120s.
+const historyFormatVersion = 2
 
 const historyMACSize = sha256.Size
 
