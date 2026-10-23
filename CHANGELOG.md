@@ -68,6 +68,14 @@ semantic versioning.
   directory this build has opened. Take a backup before upgrading; rolling
   back is a restore of that backup, as it was across schema 41.
 
+### Fixed
+
+- The first start after an upgrade no longer logs `usage history catch-up
+  failed: context deadline exceeded` while it rebuilds the usage history. The
+  minute tick's catch-up queued behind the rebuild, which is the same catch-up,
+  ran out its ten-second timeout and reported a failure every minute until the
+  rebuild finished; it now skips the tick while the rebuild runs.
+
 ## [0.9.2] - 2026-10-21
 
 ### Upgrading from v0.9.1

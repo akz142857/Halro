@@ -1441,7 +1441,16 @@ func (r *Runtime) reopenHistoryFiles(failedOnly bool) {
 
 // catchUpUsageHistory closes any gap the collector opened by dropping live
 // records under load, by replaying them from the Ledger into the index.
+//
+// While the opening build runs it does nothing: the build is that same
+// catch-up, holding the collector's lock until it reaches the head, and it
+// takes in whatever was dropped meanwhile. Waiting behind it ran out the
+// timeout on every tick of a first start after an upgrade and logged a
+// failure for a build that was going fine.
 func (r *Runtime) catchUpUsageHistory() {
+	if r.usageCollector.Building() {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := r.usageCollector.CatchUp(ctx); err != nil {
