@@ -942,3 +942,27 @@ func TestProfilesCoveringDoesNotMatchOnAPrefix(t *testing.T) {
 		t.Fatalf("a model was reported as covered under the wrong provider type: %v", profiles)
 	}
 }
+
+// MiniMax retired its M2 line from the metered API while /v1/models kept
+// listing it — measured 2026-10-24, all seven answer 404 "no longer available"
+// on every face. MiniMax's mapper claims nothing from an enumerated identifier,
+// so this catalogue is the only thing that makes one deployable; an entry here
+// would offer a deployment that fails every call after its reservation.
+// Subscription Access is a separate product and keeps its documented M2.7 pair.
+func TestTheRetiredMiniMaxM2LineIsNotOfferedOnTheMeteredAPI(t *testing.T) {
+	catalog := Builtin()
+	metered := []domain.ProviderProfileID{domain.ProfileMiniMaxAnthropicMessages, domain.ProfileMiniMaxChat, domain.ProfileMiniMaxResponses}
+	for _, profile := range metered {
+		for _, model := range []string{"MiniMax-M2", "MiniMax-M2.1", "MiniMax-M2.1-highspeed", "MiniMax-M2.5", "MiniMax-M2.5-highspeed", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"} {
+			if _, ok := catalog.Lookup(Key{ProviderType: domain.ProviderMiniMax, Profile: profile, Model: model}); ok {
+				t.Errorf("%s still has an entry on %s", model, profile)
+			}
+		}
+		if _, ok := catalog.Lookup(Key{ProviderType: domain.ProviderMiniMax, Profile: profile, Model: "MiniMax-M3"}); !ok {
+			t.Errorf("MiniMax-M3 lost its entry on %s", profile)
+		}
+	}
+	if _, ok := catalog.Lookup(Key{ProviderType: domain.ProviderMiniMax, Profile: domain.ProfileMiniMaxGlobalSubscriptionAnthropicMessages, Model: "MiniMax-M2.7"}); !ok {
+		t.Error("Subscription Access lost its documented M2.7 entry")
+	}
+}

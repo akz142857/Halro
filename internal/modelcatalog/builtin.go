@@ -380,29 +380,33 @@ func anthropicModels() []Entry {
 	}
 }
 
-// minimaxModels covers the eight exact identifiers MiniMax documents. The same
-// eight are served on both of MiniMax's hosts — api.minimax.io for international
-// accounts and api.minimaxi.com for mainland ones — so the entries are not
-// region-scoped; only the connection's base URL is.
+// minimaxModels covers what MiniMax's metered API still serves, and the M2.7
+// pair on Subscription Access. MiniMax serves the same models on both of its
+// hosts — api.minimax.io for international accounts and api.minimaxi.com for
+// mainland ones — so the entries are not region-scoped; only the connection's
+// base URL is.
 //
-// Two deliberate narrowings, both on the conservative side of what the
-// documentation says:
+// The metered API is MiniMax-M3 alone. The M2 line (M2, M2.1, M2.5, M2.7 and
+// their -highspeed variants) was retired: measured 2026-10-24 on an
+// international account, every one of the seven answers 404 "The model ... is
+// no longer available" on /v1/chat/completions, /anthropic/v1/messages and
+// /v1/responses alike — while /v1/models, on both the OpenAI and the Anthropic
+// path, still lists all seven. The list is therefore not evidence that a model
+// can be called, and this catalogue is what stands between it and a deployment:
+// MiniMax's mapper claims nothing from an enumerated identifier, so an
+// identifier with no entry here enumerates with no capability and cannot be
+// deployed. Keeping the M2 entries would have offered an operator seven
+// deployments that fail every call, each after its budget was reserved.
+// A mainland account was not measured; the retirement is MiniMax's, not a
+// region's, and leaving the entries out is the fail-closed reading.
 //
-//   - Only MiniMax-M3 gets vision. The M2.x line is documented as accepting
-//     "text and tool-call content blocks only", so an image request routed there
-//     would be refused after the budget was reserved.
-//   - M2.x carries no output bound. The documentation records its max_tokens
-//     ceiling as 204,800, which is also its context window — that reads as a
-//     missing row rather than a model that can emit its whole window, and a
-//     wrong bound is enforced by budget and routing while a missing one only
-//     costs a layer of protection. M3's 524,288 is listed separately from its
-//     1,000,000 window, so it is recorded.
+// MiniMax-M3.1-Flash appeared on the list in the same measurement and answers
+// 200 on all three faces. It has no entry yet: what it accepts — images, a
+// thinking switch, its output bound — has not been established, and an entry
+// is a capability claim, not an acknowledgement that the model exists.
 //
-// One thing this catalogue records that no capability set can: the M2.x line
-// cannot switch thinking off. That is why reasoning is claimed for M3 alone —
-// an M2.x deployment cannot honour a request not to think, and claiming the
-// capability would let a caller ask for something the model will bill them for
-// anyway.
+// M3's one deliberate narrowing: Responses binds no stream primitive and
+// cannot carry reasoning items, so its Responses entry claims neither.
 //
 // Sources reviewed 2026-08-31:
 //   - https://platform.minimax.io/docs/api-reference/text-anthropic-api
@@ -422,8 +426,6 @@ func minimaxModels() []Entry {
 		}
 	}
 	openAIChat := anthropicChat
-	// Responses binds no stream primitive and cannot carry reasoning items, so
-	// its entries claim neither.
 	responses := func(contextTokens, outputTokens int64) domain.ProviderCapabilities {
 		return domain.ProviderCapabilities{
 			Chat: true, Tools: true,
@@ -431,54 +433,23 @@ func minimaxModels() []Entry {
 		}
 	}
 	const m3Context, m3Output int64 = 1_000_000, 524_288
+	// The M2.7 pair on Subscription Access carries no output bound: MiniMax
+	// documents its max_tokens ceiling as 204,800, which is also its context
+	// window, and that reads as a missing row rather than a model that can emit
+	// its whole window.
 	const m2Context int64 = 204_800
-	m2Models := []string{
-		"MiniMax-M2.7", "MiniMax-M2.7-highspeed",
-		"MiniMax-M2.5", "MiniMax-M2.5-highspeed",
-		"MiniMax-M2.1", "MiniMax-M2.1-highspeed",
-		"MiniMax-M2",
-	}
 	entries := []Entry{
-		// M3 alone sees images and alone can be asked not to think.
+		// M3 sees images and can be asked not to think.
 		builtinEntry(provider, domain.ProfileMiniMaxAnthropicMessages, "MiniMax-M3", with(anthropicChat(m3Context, m3Output), reasoning, vision)),
 		builtinEntry(provider, domain.ProfileMiniMaxChat, "MiniMax-M3", with(openAIChat(m3Context, m3Output), reasoning, vision)),
 		builtinEntry(provider, domain.ProfileMiniMaxResponses, "MiniMax-M3", with(responses(m3Context, m3Output), vision)),
 	}
-	// The M2 line is absent from the Responses profile, and the absence is a
-	// measurement rather than a gap. Measured on an international account
-	// 2026-09-02, MiniMax-M2.1 on /v1/responses:
-	//
-	//	{"model":"MiniMax-M2.1","input":"Reply with OK.","max_output_tokens":256}
-	//	  -> 200, output[0] {"type":"reasoning", content:[{"type":"reasoning_text"}]}
-	//	  and the same again with reasoning:{"effort":"none"}, which is echoed
-	//	  back as "none" and changed nothing.
-	//
-	// That reasoning item is refused by compatibility/openai.DecodeProviderResponse
-	// — `provider Responses output item is unsupported` — which is upstream of
-	// every northbound renderer, so all three faces answer 502 with the upstream
-	// already paid. An entry here would have offered an operator a deployment
-	// that fails every single call.
-	//
-	// MiniMax's own documentation already said the M2 line cannot be told to stop
-	// thinking; what nobody had done was join that to what this profile's decoder
-	// accepts. M2.1 is the one driven; the other two are the same line under the
-	// same documented constraint, and are left out on the fail-closed reading.
-	//
-	// M3 stays, and that is also measured: two probes, one trivial and one built
-	// to provoke multi-step work, both came back with a message item alone and
-	// the working shown inside the text. Its switch is `adaptive`, so this is
-	// evidence rather than proof — TestNoEndpointIsServedByATargetThatReasonsUnasked
-	// is what would catch it if a later measurement says otherwise.
-	for _, model := range m2Models {
-		entries = append(entries,
-			builtinEntry(provider, domain.ProfileMiniMaxAnthropicMessages, model, anthropicChat(m2Context, 0)),
-			builtinEntry(provider, domain.ProfileMiniMaxChat, model, openAIChat(m2Context, 0)),
-		)
-	}
 	// Subscription Access currently documents the M2.7 pair on both account
 	// regions. Enumeration remains authoritative for availability; these entries
 	// only attach the conservative text/tool capability evidence to IDs returned
-	// by that account.
+	// by that account. Subscription Access is a different product on a
+	// different key, and it was not measured when the metered M2 line was found
+	// retired on 2026-10-24, so these stay as documented.
 	for _, profile := range []domain.ProviderProfileID{
 		domain.ProfileMiniMaxCNSubscriptionOpenAIChat,
 		domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat,
