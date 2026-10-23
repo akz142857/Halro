@@ -148,10 +148,12 @@ func TestSamplesLandOnTheSharedLadder(t *testing.T) {
 // such a sample into the last bucket would claim a latency it never had.
 func TestWaitsAboveTheLastBoundOverflowRatherThanBeingLost(t *testing.T) {
 	handler := newFirstByteHandler()
-	handler.firstByte.observe(firstByteResponses, 10*time.Minute)
+	lastBound := time.Duration(usage.LatencyBucketsMillis[len(usage.LatencyBucketsMillis)-1]) * time.Millisecond
+	wait := lastBound + time.Minute
+	handler.firstByte.observe(firstByteResponses, wait)
 	sample := sampleFor(t, handler, "responses")
 	if sample.Overflow != 1 || sample.Count != 1 {
-		t.Fatalf("a ten-minute wait produced overflow=%d count=%d", sample.Overflow, sample.Count)
+		t.Fatalf("a %s wait produced overflow=%d count=%d", wait, sample.Overflow, sample.Count)
 	}
 	for index, count := range sample.Buckets {
 		if count != 0 {
