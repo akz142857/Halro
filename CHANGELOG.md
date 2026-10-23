@@ -6,6 +6,37 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-23
+
+### Upgrading from v0.9.2
+
+**Take a backup before upgrading, and keep it: it is the only way back.** The
+metadata schema moves to 42 and v0.9.2 refuses to open a data directory this
+release has started (`metadata schema version 42 is newer than this build
+supports (41)`); rolling back is restoring that backup with v0.9.2. No
+re-initialisation is needed going forward: the upgrade migrates in place.
+
+- The first start rebuilds the usage history (`data/history/history.db`) from
+  the Ledger in the background, because its latency histograms changed format.
+  The instance is ready within seconds; the console's usage views fill in as
+  the rebuild runs (65–85 seconds for five million Ledger records in testing)
+  and serve what is already indexed meanwhile.
+- An existing `config.yaml` keeps its timeout values. To let reasoning models
+  think for five minutes, raise `gateway.attempt_response_header_timeout`,
+  `gateway.route_total_timeout` and `server.shutdown_timeout` yourself (see
+  Changed), and a Kubernetes `terminationGracePeriodSeconds` with them.
+- A Project's stream duration limit is now enforced. Projects created in the
+  console before this release carry `600` seconds; check them if
+  `gateway.stream_max_duration` is above ten minutes.
+- Every metadata write now also goes to `data/metadata.journal` and is made
+  durable first, including the price pin each Gateway attempt commits. On a
+  Linux VM's disk that lowered the single-deployment attempt ceiling by about a
+  quarter at one and eight concurrent attempts (62 → 48 and 416 → 299 per
+  second) and left 64 unchanged; an instance far below those rates sees only
+  the extra fsync's latency per attempt.
+- HA is included but **not supported in production**: leave out the
+  `replication` block and the instance is Standalone, as before.
+
 ### Added
 
 - High-availability members are back on the current release line: the
@@ -23,9 +54,12 @@ semantic versioning.
   records it applies, and writes snapshots while it runs, so its memory stays
   bounded and a promotion does not replay from the first frame. A Replica never
   seals a Ledger generation; it compacts generations up to its usage history
-  and applied prefix. A deployment without a `replication` block is Standalone
-  and unchanged. HA is still not supported in production until the entry
-  conditions in `docs/todo/halro-ha-architecture.zh-CN.md` §1.3 are met.
+  and applied prefix. Replicas report `halro_ledger_hot_state_estimated_bytes`
+  and their limit, so `HalroLedgerHotStateHigh` warns before a promotion would
+  take over a state already at its cap. A deployment without a `replication`
+  block is Standalone and unchanged. HA is still not supported in production
+  until the entry conditions in `docs/todo/halro-ha-architecture.zh-CN.md`
+  §1.3 are met.
 
 ### Changed
 
@@ -2664,6 +2698,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.10.0]: https://github.com/akz142857/Halro/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/akz142857/Halro/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/akz142857/Halro/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/akz142857/Halro/compare/v0.8.5...v0.9.0
