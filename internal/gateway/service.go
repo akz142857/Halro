@@ -1709,7 +1709,7 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 	if request.Stream {
 		return anthropicapi.Message{}, gatewayError("invalid_request_error", "stream must be false", 400, nil)
 	}
-	principal, target, envelope, inputTokens, outputTokens, err := s.prepareNativeMessages(ctx, plaintextKey, version, betas, request, provider.OperationMessages)
+	principal, target, envelope, inputTokens, outputTokens, err := s.prepareNativeMessages(ctx, plaintextKey, version, betas, request, provider.OperationMessages, true)
 	if err != nil {
 		return anthropicapi.Message{}, err
 	}
@@ -1813,7 +1813,7 @@ func (s *Service) MessagesCountTokens(ctx context.Context, plaintextKey, version
 	if request.Stream {
 		return anthropicapi.TokenCount{}, gatewayError("invalid_request_error", "count_tokens does not stream", 400, nil)
 	}
-	principal, target, envelope, inputTokens, _, err := s.prepareNativeMessages(ctx, plaintextKey, version, betas, request, provider.OperationMessages)
+	principal, target, envelope, inputTokens, _, err := s.prepareNativeMessages(ctx, plaintextKey, version, betas, request, provider.OperationMessages, false)
 	if err != nil {
 		return anthropicapi.TokenCount{}, err
 	}
@@ -1900,7 +1900,7 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 	if !request.Stream {
 		return gatewayError("invalid_request_error", "stream must be true", 400, nil)
 	}
-	principal, target, envelope, inputTokens, outputTokens, err := s.prepareNativeMessages(ctx, plaintextKey, version, betas, request, provider.OperationMessagesStream)
+	principal, target, envelope, inputTokens, outputTokens, err := s.prepareNativeMessages(ctx, plaintextKey, version, betas, request, provider.OperationMessagesStream, true)
 	if err != nil {
 		return err
 	}
@@ -2028,7 +2028,7 @@ func allowsAnthropicBetas(target provider.Target, betas []string) bool {
 	return true
 }
 
-func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, version string, betas []string, request anthropicapi.MessageRequest, operation provider.Operation) (auth.AuthResult, provider.Target, *compatibility.NativeEnvelope, int64, int64, error) {
+func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, version string, betas []string, request anthropicapi.MessageRequest, operation provider.Operation, samples bool) (auth.AuthResult, provider.Target, *compatibility.NativeEnvelope, int64, int64, error) {
 	principal, targets, err := s.resolveRequest(ctx, plaintextKey, request.Model, operation, "model route does not support native Anthropic Messages")
 	if err != nil {
 		return auth.AuthResult{}, provider.Target{}, nil, 0, 0, err
@@ -2052,6 +2052,31 @@ func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, versi
 			"model route does not support the requested Anthropic Messages capabilities",
 			missingCapabilities(nativeCandidates, requirements),
 		)
+	}
+	// Native mode forwards the caller's bytes, so a sampling member the exact
+	// Claude model refuses would otherwise be found out upstream, after the
+	// budget is reserved and with no fallback. Judged per target because two
+	// deployments behind one alias can be different Claude generations.
+	//
+	// count_tokens samples nothing, so it is not judged: refusing a member there
+	// would only refuse a caller reusing its Messages body.
+	if samples {
+		sampling, err := anthropicwire.NativeSampling(request)
+		if err != nil {
+			return auth.AuthResult{}, provider.Target{}, nil, 0, 0, gatewayError("invalid_request_error", "native request is not a JSON object", 400, err)
+		}
+		samplingReasons := newReasonSet()
+		targets = slices.DeleteFunc(slices.Clone(targets), func(target provider.Target) bool {
+			refused := compatibility.AnthropicSamplingUnsupportedFields(target.ProfileID, target.ProviderModel, sampling)
+			samplingReasons.addAll(refused)
+			return len(refused) > 0
+		})
+		if len(targets) == 0 {
+			return auth.AuthResult{}, provider.Target{}, nil, 0, 0, s.unservableError(
+				"model route does not support the requested Anthropic Messages sampling parameters",
+				samplingReasons.values,
+			)
+		}
 	}
 	// The beta allowlist is per connection, so it is checked once a target is
 	// chosen and before any provider work — an unaccepted beta costs nothing —

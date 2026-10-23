@@ -130,7 +130,7 @@ func renderBatchLine(profileID domain.ProviderProfileID, providerModel string, t
 	// from a target that would lose something. A batch is routed once for many
 	// requests, so nothing has looked at these lines, and rendering them without
 	// this check would silently drop members the caller wrote.
-	if unsupported := compatibility.UnsupportedGenerateFields(profileID, canonical); len(unsupported) > 0 {
+	if unsupported := compatibility.UnsupportedGenerateFieldsForTarget(profileID, providerModel, canonical); len(unsupported) > 0 {
 		return batchRequest{}, fmt.Errorf("request uses %s, which this provider cannot carry", strings.Join(unsupported, ", "))
 	}
 	rendered, err := anthropicwire.RenderPortableRequest(canonical, providerModel)

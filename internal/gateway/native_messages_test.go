@@ -153,6 +153,15 @@ func newNativeMessagesFixtureWithLedgerOptions(t *testing.T, profileID domain.Pr
 
 func newNativeMessagesFixtureComplete(t *testing.T, profileID domain.ProviderProfileID, adjust func(*provider.Capabilities), options ledger.Options, serviceOptions ServiceOptions, allowedBetas ...string) (*Service, *nativeMessagesFake, string, func()) {
 	t.Helper()
+	service, fakes, key, closeFixture := newNativeMessagesFixtureTargets(t, profileID, adjust, options, serviceOptions, []string{"claude-provider"}, allowedBetas...)
+	return service, fakes[0], key, closeFixture
+}
+
+// newNativeMessagesFixtureTargets puts one deployment per provider model behind
+// the alias, in that order, each with its own fake so a test can tell which one
+// served. The first keeps the identifiers the single-target fixture always had.
+func newNativeMessagesFixtureTargets(t *testing.T, profileID domain.ProviderProfileID, adjust func(*provider.Capabilities), options ledger.Options, serviceOptions ServiceOptions, providerModels []string, allowedBetas ...string) (*Service, []*nativeMessagesFake, string, func()) {
+	t.Helper()
 	project := domain.Project{ID: "project_native", Name: "Native", Enabled: true, AllowedModels: []string{"claude"}, DailyBudgetMicrosUSD: 1000000, MaxInputTokens: 10000, MaxOutputTokens: 1000}
 	plaintext, key, err := auth.GenerateGatewayKey(project.ID, "test", nil)
 	if err != nil {
@@ -173,25 +182,33 @@ func newNativeMessagesFixtureComplete(t *testing.T, profileID domain.ProviderPro
 		t.Fatal(err)
 	}
 	manifest, _ := provider.BuiltinProfile(profileID)
-	fake := &nativeMessagesFake{providerType: manifest.ProviderType, ledgerState: state}
 	capabilities := domain.DefaultProviderCapabilitiesForProfile(manifest.ProviderType, profileID)
-	bridge, err := provider.NewLegacyAdapterBridge(fake, manifest, domain.EvidenceForCapabilities(capabilities, domain.EvidenceVerified))
-	if err != nil {
-		t.Fatal(err)
-	}
 	registry := provider.NewRegistry()
 	targetCapabilities := provider.Capabilities{Chat: true, Streaming: true, Tools: true, Reasoning: true, StreamUsage: true}
 	if adjust != nil {
 		adjust(&targetCapabilities)
 	}
-	if err := registry.Register(provider.Target{ID: "route_native", DeploymentID: "dep_route_native", ProviderID: "provider_native", PublicModel: "claude", ProviderModel: "claude-provider", AccessSurface: manifest.AccessSurface, ProfileID: profileID, Adapter: bridge, Capabilities: targetCapabilities, AllowedAnthropicBetas: allowedBetas, InputMicrosPerMillion: 1000, OutputMicrosPerMillion: 1000}); err != nil {
-		t.Fatal(err)
+	fakes := make([]*nativeMessagesFake, 0, len(providerModels))
+	for index, providerModel := range providerModels {
+		fake := &nativeMessagesFake{providerType: manifest.ProviderType, ledgerState: state}
+		bridge, err := provider.NewLegacyAdapterBridge(fake, manifest, domain.EvidenceForCapabilities(capabilities, domain.EvidenceVerified))
+		if err != nil {
+			t.Fatal(err)
+		}
+		suffix := ""
+		if index > 0 {
+			suffix = "_" + strconv.Itoa(index)
+		}
+		if err := registry.Register(provider.Target{ID: "route_native" + suffix, DeploymentID: "dep_route_native" + suffix, ProviderID: "provider_native" + suffix, PublicModel: "claude", ProviderModel: providerModel, AccessSurface: manifest.AccessSurface, ProfileID: profileID, Adapter: bridge, Capabilities: targetCapabilities, AllowedAnthropicBetas: allowedBetas, InputMicrosPerMillion: 1000, OutputMicrosPerMillion: 1000}); err != nil {
+			t.Fatal(err)
+		}
+		fakes = append(fakes, fake)
 	}
 	service, err := NewServiceWithOptions(snapshot, registry, accounting, serviceOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return service, fake, plaintext, func() { _ = log.Close() }
+	return service, fakes, plaintext, func() { _ = log.Close() }
 }
 
 // Outbound redaction refusing a response is Halro's verdict on work the
@@ -386,6 +403,110 @@ func TestNativeMessagesGatesAnthropicBetasOnTheConnectionAllowlist(t *testing.T)
 			t.Fatal("provider was not called")
 		}
 	})
+}
+
+// The fixture's provider model is one the sampling table has not met, so it
+// stands for every Claude model since Opus 4.7: a sampling member is refused
+// before the provider is called rather than forwarded into an upstream 400.
+func TestNativeMessagesRefusesSamplingTheClaudeModelRejects(t *testing.T) {
+	for _, member := range []string{`"temperature":0.2`, `"top_p":0.9`, `"top_k":5`} {
+		t.Run(member, func(t *testing.T) {
+			service, fake, key, closeFixture := newNativeMessagesFixture(t)
+			defer closeFixture()
+			request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(`{"model":"claude","max_tokens":64,` + member + `,"messages":[{"role":"user","content":"hi"}]}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, nil, request)
+			var gatewayErr *Error
+			if !errors.As(err, &gatewayErr) || gatewayErr.Code != "unsupported_feature" {
+				t.Fatalf("want unsupported_feature, got %v", err)
+			}
+			name := strings.Trim(strings.SplitN(member, ":", 2)[0], `"`)
+			if !strings.Contains(gatewayErr.Message, name) {
+				t.Fatalf("refusal does not name %s: %q", name, gatewayErr.Message)
+			}
+			if fake.payload != nil {
+				t.Fatalf("provider was called despite the refusal: %s", fake.payload)
+			}
+		})
+	}
+}
+
+// Two deployments behind one alias can be different Claude generations, which
+// is why the refusal is judged per target: the one that accepts the member
+// serves, whichever order the route lists them in, and the route is refused
+// only when none does.
+func TestNativeMessagesRoutesSamplingToTheDeploymentThatAcceptsIt(t *testing.T) {
+	body := `{"model":"claude","max_tokens":64,"temperature":0.2,"messages":[{"role":"user","content":"hi"}]}`
+	for _, testCase := range []struct {
+		name   string
+		models []string
+		served int
+	}{
+		{"refusing deployment first", []string{"claude-opus-4-7", "claude-sonnet-4-6"}, 1},
+		{"accepting deployment first", []string{"claude-sonnet-4-6", "claude-opus-4-7"}, 0},
+		{"no deployment accepts", []string{"claude-opus-4-7", "claude-opus-5-5"}, -1},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			service, fakes, key, closeFixture := newNativeMessagesFixtureTargets(t, domain.ProfileAnthropicMessages, nil, ledger.Options{ChainKey: testChainKey}, ServiceOptions{}, testCase.models)
+			defer closeFixture()
+			request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, nil, request)
+			if testCase.served < 0 {
+				var gatewayErr *Error
+				if !errors.As(err, &gatewayErr) || gatewayErr.Code != "unsupported_feature" {
+					t.Fatalf("want unsupported_feature, got %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			for index, fake := range fakes {
+				if called := fake.payload != nil; called != (index == testCase.served) {
+					t.Fatalf("deployment %d (%s) called=%v, want only deployment %d", index, testCase.models[index], called, testCase.served)
+				}
+			}
+		})
+	}
+}
+
+// An explicit null decodes to the same nil as an absent member, but native mode
+// forwards the bytes, so the key reaches the upstream either way.
+func TestNativeMessagesJudgesAnExplicitNullSamplingMember(t *testing.T) {
+	service, fake, key, closeFixture := newNativeMessagesFixture(t)
+	defer closeFixture()
+	request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(`{"model":"claude","max_tokens":64,"temperature":null,"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, nil, request)
+	var gatewayErr *Error
+	if !errors.As(err, &gatewayErr) || gatewayErr.Code != "unsupported_feature" {
+		t.Fatalf("want unsupported_feature, got %v", err)
+	}
+	if fake.payload != nil {
+		t.Fatalf("provider was called despite the refusal: %s", fake.payload)
+	}
+}
+
+// count_tokens samples nothing, so a caller reusing its Messages body is not
+// refused for the sampling members in it.
+func TestMessagesCountTokensDoesNotJudgeSampling(t *testing.T) {
+	service, fake, key, closeFixture := newNativeMessagesFixture(t)
+	defer closeFixture()
+	request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(`{"model":"claude","temperature":0.2,"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.MessagesCountTokens(context.Background(), key, anthropicapi.SupportedVersion, nil, request); err != nil {
+		t.Fatal(err)
+	}
+	if fake.countCalls != 1 {
+		t.Fatalf("count_tokens calls = %d", fake.countCalls)
+	}
 }
 
 // textStreamEvents is a native stream that actually carries text, which the

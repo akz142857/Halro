@@ -137,6 +137,7 @@
           "messages[].content[].detail"
         ],
         "declared_transforms": [
+          "temperature, top_p and top_k are checked against the exact Claude model before provider I/O, natively as well as portably: Claude 3 accepts all three, the Claude 4 models up to Opus 4.6, Sonnet 4.6 and Haiku 4.5 accept temperature or top_p but not both, Haiku 5.5 accepts only its stated defaults (temperature 1 or top_p 0.99), and every other Claude model, including one not yet known, has the members refused rather than forwarded into an upstream 400",
           "portable Chat content is mapped to Anthropic Messages blocks",
           "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
           "response_format and reasoning_effort are declared unsupported at field granularity because support is value-dependent: json_schema maps to output_config.format and the low/medium/high/xhigh/max ladder maps to output_config.effort, while json_object and any effort outside that ladder have no Anthropic representation and are routed away before provider I/O"
@@ -155,6 +156,7 @@
           "messages[].content[].detail"
         ],
         "declared_transforms": [
+          "temperature, top_p and top_k are checked against the exact Claude model before provider I/O, natively as well as portably: Claude 3 accepts all three, the Claude 4 models up to Opus 4.6, Sonnet 4.6 and Haiku 4.5 accept temperature or top_p but not both, Haiku 5.5 accepts only its stated defaults (temperature 1 or top_p 0.99), and every other Claude model, including one not yet known, has the members refused rather than forwarded into an upstream 400",
           "portable Chat content is mapped to Anthropic Messages blocks",
           "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
           "response_format and reasoning_effort are declared unsupported at field granularity because support is value-dependent: json_schema maps to output_config.format and the low/medium/high/xhigh/max ladder maps to output_config.effort, while json_object and any effort outside that ladder have no Anthropic representation and are routed away before provider I/O"
@@ -378,6 +380,7 @@
           "messages[].content[].detail"
         ],
         "declared_transforms": [
+          "temperature, top_p and top_k are checked against the exact Claude model before provider I/O, natively as well as portably: Claude 3 accepts all three, the Claude 4 models up to Opus 4.6, Sonnet 4.6 and Haiku 4.5 accept temperature or top_p but not both, Haiku 5.5 accepts only its stated defaults (temperature 1 or top_p 0.99), and every other Claude model, including one not yet known, has the members refused rather than forwarded into an upstream 400",
           "portable Chat content is mapped to Bedrock Mantle Anthropic Messages blocks",
           "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
           "Anthropic states that only base64-encoded image sources are available on Amazon Bedrock, so an image_url naming an address to fetch is rejected before provider I/O while a data URL is carried as a base64 source"
@@ -965,6 +968,7 @@
           "input[].content[].detail"
         ],
         "declared_transforms": [
+          "temperature, top_p and top_k are checked against the exact Claude model before provider I/O, natively as well as portably: Claude 3 accepts all three, the Claude 4 models up to Opus 4.6, Sonnet 4.6 and Haiku 4.5 accept temperature or top_p but not both, Haiku 5.5 accepts only its stated defaults (temperature 1 or top_p 0.99), and every other Claude model, including one not yet known, has the members refused rather than forwarded into an upstream 400",
           "Responses items are mapped through the Anthropic Messages ProviderPrimitive"
         ]
       },
@@ -977,6 +981,7 @@
           "input[].content[].detail"
         ],
         "declared_transforms": [
+          "temperature, top_p and top_k are checked against the exact Claude model before provider I/O, natively as well as portably: Claude 3 accepts all three, the Claude 4 models up to Opus 4.6, Sonnet 4.6 and Haiku 4.5 accept temperature or top_p but not both, Haiku 5.5 accepts only its stated defaults (temperature 1 or top_p 0.99), and every other Claude model, including one not yet known, has the members refused rather than forwarded into an upstream 400",
           "Responses items are mapped through the Anthropic Messages ProviderPrimitive"
         ]
       },
@@ -1153,6 +1158,7 @@
           "input[].content[].detail"
         ],
         "declared_transforms": [
+          "temperature, top_p and top_k are checked against the exact Claude model before provider I/O, natively as well as portably: Claude 3 accepts all three, the Claude 4 models up to Opus 4.6, Sonnet 4.6 and Haiku 4.5 accept temperature or top_p but not both, Haiku 5.5 accepts only its stated defaults (temperature 1 or top_p 0.99), and every other Claude model, including one not yet known, has the members refused rather than forwarded into an upstream 400",
           "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
           "Responses items are mapped through Bedrock Mantle Anthropic Messages"
         ]
@@ -1505,6 +1511,7 @@
         "profile_id": "anthropic.messages.2023-06-01",
         "status": "compatible",
         "declared_transforms": [
+          "temperature, top_p and top_k are checked against the exact Claude model before provider I/O, natively as well as portably: Claude 3 accepts all three, the Claude 4 models up to Opus 4.6, Sonnet 4.6 and Haiku 4.5 accept temperature or top_p but not both, Haiku 5.5 accepts only its stated defaults (temperature 1 or top_p 0.99), and every other Claude model, including one not yet known, has the members refused rather than forwarded into an upstream 400",
           "native mode preserves validated Anthropic content blocks and events"
         ]
       },
@@ -1512,6 +1519,7 @@
         "profile_id": "anthropic.subscription.messages.v1",
         "status": "compatible",
         "declared_transforms": [
+          "temperature, top_p and top_k are checked against the exact Claude model before provider I/O, natively as well as portably: Claude 3 accepts all three, the Claude 4 models up to Opus 4.6, Sonnet 4.6 and Haiku 4.5 accept temperature or top_p but not both, Haiku 5.5 accepts only its stated defaults (temperature 1 or top_p 0.99), and every other Claude model, including one not yet known, has the members refused rather than forwarded into an upstream 400",
           "native mode preserves validated Anthropic content blocks and events"
         ]
       },
@@ -1744,6 +1752,7 @@
           "output_config.format"
         ],
         "declared_transforms": [
+          "temperature, top_p and top_k are checked against the exact Claude model before provider I/O, natively as well as portably: Claude 3 accepts all three, the Claude 4 models up to Opus 4.6, Sonnet 4.6 and Haiku 4.5 accept temperature or top_p but not both, Haiku 5.5 accepts only its stated defaults (temperature 1 or top_p 0.99), and every other Claude model, including one not yet known, has the members refused rather than forwarded into an upstream 400",
           "native mode preserves validated Anthropic content blocks, thinking signatures, and events",
           "output_config is unsupported in portable mode only: this profile shares the Anthropic wire form and could carry the member, but its Mantle Beta capability ceiling is fixed by the build and widening it is a separate contract review, so a portable request carrying effort or format is routed away before provider I/O while native mode forwards the member verbatim"
         ]
