@@ -11,16 +11,17 @@
 上游流每来一点数据就重新计时；超过设定时间一点数据都没来，就判定它卡住了，主动断开，
 按现有规则结算，把占着的预留与并发名额放回去。
 
-## 2. 现状（已对照代码核实，`main` 011bc5cd）
+## 2. 现状（已对照代码核实，`main` 011bc5cd；2026-10-24 按 `main` 1acd9782 更新默认值）
 
 一次流式请求今天受这些上限约束：
 
 | 上限 | 配置 | 默认 | 管什么 |
 | --- | --- | --- | --- |
 | 连接 | `gateway.attempt_connect_timeout` | 5s | 建连与 TLS |
-| 响应头 | `gateway.attempt_response_header_timeout` | 60s | 发出请求到收到响应头（`safetransport` 的 `ResponseHeaderTimeout`） |
+| 响应头 | `gateway.attempt_response_header_timeout` | 5m（#451 前为 60s） | 发出请求到收到响应头（`safetransport` 的 `ResponseHeaderTimeout`） |
 | 下游单次写 | `gateway.downstream_write_timeout` | 15s | 写给客户端的每个事件，`gatewayapi` 每个事件前重新设置 |
 | 流总时长 | `gateway.stream_max_duration` | 10m | 整个流式请求（`gatewayapi/handler.go` 的 `context.WithTimeout`） |
+| Project 流时长 | `max_stream_duration_seconds`（Admin） | 0 = 跟随实例 | #452 起生效，与 `stream_max_duration` 取较小者 |
 
 **缺的是上游方向的空闲上限。** 上游发出响应头和几个事件之后既不发数据也不断开，Halro 会一直
 阻塞在 `sse.Decoder.Next()` 里，直到 `stream_max_duration` 到期。这期间这次尝试一直占着：
