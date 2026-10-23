@@ -20,15 +20,25 @@ module and lock files.
 | `github.com/aws/aws-sdk-go-v2` | 1.47.3 | Apache-2.0 | runtime |
 | `github.com/aws/aws-sdk-go-v2/config` | 1.33.9 | Apache-2.0 | runtime |
 | `github.com/aws/aws-sdk-go-v2/credentials` | 1.20.9 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.61.4 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.61.5 | Apache-2.0 | runtime |
 | `github.com/aws/smithy-go` | 1.28.5 | Apache-2.0 | runtime |
-| `github.com/go-chi/chi/v5` | 5.4.0 | MIT | runtime |
+| `github.com/go-chi/chi/v5` | 5.5.0 | MIT | runtime |
 | `github.com/google/jsonschema-go` | 0.4.3 | MIT | test/release tooling |
 | `github.com/parquet-go/parquet-go` | 0.32.0 | Apache-2.0 | runtime |
 | `go.etcd.io/bbolt` | 1.5.0 | MIT | runtime |
 | `golang.org/x/crypto` | 0.58.0 | BSD-3-Clause | runtime |
 | `golang.org/x/sys` | 0.49.0 | BSD-3-Clause | runtime |
 | `gopkg.in/yaml.v3` | 3.0.1 | MIT and Apache-2.0 | runtime |
+
+The 2026-10-23 refresh (Dependabot #460) moves
+`github.com/aws/aws-sdk-go-v2/service/kms` 1.61.4 to 1.61.5 and
+`github.com/go-chi/chi/v5` 5.4.0 to 5.5.0. Only those two modules move in
+`go.mod` and `go.sum`, the module-path set is unchanged, and both LICENSE files
+are byte-identical across the bump, compared in the module cache. chi's root
+package, which is all the runtime links, is byte-identical between the two
+releases; 5.5.0 changes only `chi/middleware` (a new `Deprecation` middleware
+and edits to `ContentCharset`, `Maybe`, `Sunset`, `SupressNotFound` and
+`Throttle`), which Halro does not import.
 
 The 2026-10-21 refresh moves the `go` directive in `go.mod` from 1.26.9 to
 1.26.10 for GO-2026-6809 in `crypto/x509`, which govulncheck reaches through
@@ -124,14 +134,14 @@ is linked into the Go runtime.
 
 | Package | Version | License |
 |---|---:|---|
-| `@hookform/resolvers` | 5.9.1 | MIT |
-| `@tanstack/react-query` | 5.104.2 | MIT |
-| `i18next` | 26.4.4 | MIT |
+| `@hookform/resolvers` | 6.0.0 | MIT |
+| `@tanstack/react-query` | 5.104.5 | MIT |
+| `i18next` | 26.5.3 | MIT |
 | `qrcode` | 1.5.4 | MIT |
-| `react` | 19.3.0 | MIT |
-| `react-dom` | 19.3.0 | MIT |
+| `react` | 19.3.1 | MIT |
+| `react-dom` | 19.3.1 | MIT |
 | `react-hook-form` | 7.90.0 | MIT |
-| `react-i18next` | 17.0.16 | MIT |
+| `react-i18next` | 17.1.0 | MIT |
 | `uplot` | 1.6.32 | MIT |
 | `zod` | 4.6.7 | MIT |
 
@@ -209,6 +219,20 @@ dev-only entries left the lock (`siginfo` ISC, `stackback` MIT, and the nested
 the initial bundle is 246994 bytes gzipped and the browser artifact secret scan
 reports 29 files clean.
 
+The 2026-10-23 Admin UI refresh (Dependabot #459) moved six runtime
+dependencies — `@hookform/resolvers` 5.9.1 to 6.0.0, `@tanstack/react-query`
+5.104.2 to 5.104.5 (with `@tanstack/query-core`), `i18next` 26.4.4 to 26.5.3,
+`react` and `react-dom` 19.3.0 to 19.3.1, and `react-i18next` 17.0.16 to
+17.1.0 — and the dev-only `jsdom` and `vitest`. Compared entry by entry against
+the previous lock, 13 entries moved version, none changed license, and the
+lockfile package set is unchanged. `@hookform/resolvers` 6.0.0 is a major only
+for the resolvers this project does not import: it moves the `effect` peer to
+4 and edits the `ajv` resolver. Its `zod` resolver, the only one imported, and
+its shared core are byte-identical to 5.9.1 in the published tarballs, as is
+its LICENSE. `internal/webui/dist` was rebuilt under Node 22 and committed with
+this change; the initial bundle is 248642 bytes gzipped and the browser
+artifact secret scan reports 30 files clean.
+
 The Admin UI lockfile contains no CC-BY package. Its 12 MPL-2.0 entries are
 `lightningcss` 1.33.0 plus eleven platform-specific optional binaries. They are
 dev-only CSS build tooling and are not present in the generated Admin UI bundle
@@ -232,16 +256,16 @@ Node lock, and `pip-audit` for the complete hashed Python lock.
 
 | Ecosystem | Reviewed direct dependencies | License |
 |---|---|---|
-| Go | `github.com/anthropics/anthropic-sdk-go` 1.80.0 | MIT |
-| Go | `github.com/openai/openai-go/v3` 3.78.0 | Apache-2.0 |
-| Node | `@anthropic-ai/sdk` 0.133.0 | MIT |
-| Node | `openai` 7.33.0 | Apache-2.0 |
-| Python | `anthropic` 1.13.0 | MIT |
-| Python | `openai` 3.31.0 | Apache-2.0 |
+| Go | `github.com/anthropics/anthropic-sdk-go` 1.82.0 | MIT |
+| Go | `github.com/openai/openai-go/v3` 3.82.0 | Apache-2.0 |
+| Node | `@anthropic-ai/sdk` 0.135.0 | MIT |
+| Node | `openai` 7.39.0 | Apache-2.0 |
+| Python | `anthropic` 1.15.0 | MIT |
+| Python | `openai` 3.35.1 | Apache-2.0 |
 | Python tooling | `pip-audit` 2.10.1 | Apache-2.0 |
 
 The resolved Go compatibility graph is MIT, BSD-3-Clause, Apache-2.0, or ISC — the last of these arrived on 2026-09-26 and is described below. The
-Node lock contains MIT, Apache-2.0, and Unlicense packages. The 42-package
+Node lock contains MIT, Apache-2.0, and Unlicense packages. The 43-package
 Python lock contains MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, PSF/PSFL,
 and one MPL-2.0 certificate bundle (`certifi`); all are test-only and none are
 distributed in Halro artifacts. The `pip-audit` tool and its transitive packages
@@ -335,6 +359,30 @@ unchanged. The hashed lock was not recompiled here, for the reason below: each
 Dependabot run changed only its own package's block, and the two blocks were
 applied side by side, leaving the 42-package set unchanged.
 
+The 2026-10-23 compatibility refresh again took the three SDK pairs together
+(Dependabot #453 and #455 for Go, #454 and #457 for Node, #456 and #458 for
+Python). Go: `anthropic-sdk-go` 1.80.0 to 1.82.0 and `openai-go/v3` 3.78.0 to
+3.82.0, bumped together with `go get`; Node: `@anthropic-ai/sdk` 0.133.0 to
+0.135.0 (MIT) and `openai` 7.33.0 to 7.39.0 (Apache-2.0), pinned exactly, lock
+regenerated with `npm install`; Python: `anthropic` 1.13.0 to 1.15.0 (MIT) and
+`openai` 3.31.0 to 3.35.1 (Apache-2.0), each Dependabot run's lock block applied
+side by side as before, installed with `--require-hashes` and `pip check`
+clean. Every SDK LICENSE is unchanged across its bump.
+
+**The dependency sets grew this time, in all three ecosystems, for one reason:
+the Anthropic SDKs now depend on the OpenTelemetry API.** In Go,
+`go.opentelemetry.io/otel`, `otel/metric`, `otel/trace`, `go.opentelemetry.io/auto/sdk`,
+`github.com/go-logr/logr` and `go-logr/stdr` are now compiled into the
+compatibility tests, all Apache-2.0 per their LICENSE files in the module
+cache; `go.sum` also gained hashes for the rest of the SDK's module graph (its
+AWS, Azure, Google Cloud, gRPC and MCP integrations), which the tests do not
+build — `go list -deps -test` names exactly the six above as new. Dependabot's
+own #455 produced the same graph. In Node, `@opentelemetry/api` 1.10.0
+(Apache-2.0) entered the lock, also present in Dependabot's own #457 lock. In
+Python, `opentelemetry-api` 1.45.1 (Apache-2.0, read from the installed
+distribution's metadata) entered the hashed lock, which is now 43 packages. No
+new license family entered any lock, and none of it reaches a Halro artifact.
+
 The 2026-09-18 Node compatibility refresh moved `@anthropic-ai/sdk` from
 0.124.0 to 0.125.0. The package remains MIT licensed, the lockfile package set
 is unchanged, and the SDK remains confined to compatibility CI.
@@ -377,18 +425,19 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `7ae6f019dc23e744ec47b0b1f5190ebb5cca3314`
-- `go.sum`: `970818705511fbf525299e52de822fcca6c000d9`
-- `web/package.json`: `4ffb712f631f5a5d1383cbfbace37f3bba98ffcb`
-- `web/package-lock.json`: `787919b41d0440ab5eb09f7be3e45d77b93a382e`
-- `tests/compatibility/go/go.mod`: `5956600457121a28ce98fe409119c8b6e8b451ea`
-- `tests/compatibility/go/go.sum`: `6104e9721b40c0c4b7f050b575191ed94df201f2`
-- `tests/compatibility/node/package.json`: `8189b4738da40529f77b9d2644fcf05b95c115ea`
-- `tests/compatibility/node/package-lock.json`: `3529b7584be983ae4eda1067ed41919edc7d03fa`
-- `tests/compatibility/python/requirements.in`: `d2db9779dd34fbe3374aea32475bdde0e0ae4ddf`
-- `tests/compatibility/python/requirements.txt`: `11090f7ea5d0cc3dd8f14d8ce2cab0f7c47e0340`
+- `go.mod`: `3a6ae3889cf47baf9d350666bd7c8e1112d5de50`
+- `go.sum`: `7e3df8d6a1c7322fc9b3c15e7772097d211b5911`
+- `web/package.json`: `a54189dfb01123481a0faaccf07793e38b2ed00f`
+- `web/package-lock.json`: `7c6e0b4e4293499a195566f997665f839e0eeb1d`
+- `tests/compatibility/go/go.mod`: `6b29ef500d72a1d3dc832777d516966b3e0c8867`
+- `tests/compatibility/go/go.sum`: `931e61d2a6c1c7357e2303dc4abb58338e743de8`
+- `tests/compatibility/node/package.json`: `fa64491949d17525bb79dd2ad5241b465f0e471d`
+- `tests/compatibility/node/package-lock.json`: `b1f97596bc6e42555dcc2caf329dc747d77d9d39`
+- `tests/compatibility/python/requirements.in`: `e7aead8aed67406d553563a198a17af1a6b1ba96`
+- `tests/compatibility/python/requirements.txt`: `151d8af34e7c2290c88bcbd0bd11359bb11f9f1e`
 
-All ten hashes last moved for the 2026-10-17 refreshes recorded above. Before
+All ten hashes last moved for the 2026-10-23 refreshes recorded above, and
+before that for the 2026-10-17 refreshes. Before
 that the Go hashes moved for the 2026-09-18 Go refresh, and the two web hashes
 for the 2026-09-18 Admin UI refresh, before
 that for the 2026-09-11 Admin UI refresh, before that for the 2026-09-05
