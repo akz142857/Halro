@@ -568,7 +568,7 @@ func (r *Runtime) runCapabilityDetection(parent context.Context, detectionID str
 			// still waiting on an unresolved dependency is not counted, because
 			// it may never be asked at all.
 			fairShare := time.Until(deadline) / time.Duration(max(runnableProbes(d.Results, plan.Probes[probeIndex:]), 1))
-			probeTimeout := min(fairShare, r.config.Gateway.AttemptResponseHeaderTimeout.Value())
+			probeTimeout := min(fairShare, probeTimeout(r.config))
 			if probeTimeout > 0 {
 				probeContext, probeCancel = context.WithTimeout(ctx, probeTimeout)
 			}
@@ -753,7 +753,7 @@ func (r *Runtime) spendDetectionProbe(ctx context.Context, d domain.ModelCapabil
 	probeContext, probeCancel := ctx, func() {}
 	if deadline, ok := ctx.Deadline(); ok && len(remaining) > 0 {
 		fairShare := time.Until(deadline) / time.Duration(max(runnableProbes(d.Results, remaining), 1))
-		if probeTimeout := min(fairShare, r.config.Gateway.AttemptResponseHeaderTimeout.Value()); probeTimeout > 0 {
+		if probeTimeout := min(fairShare, probeTimeout(r.config)); probeTimeout > 0 {
 			probeContext, probeCancel = context.WithTimeout(ctx, probeTimeout)
 		}
 	}

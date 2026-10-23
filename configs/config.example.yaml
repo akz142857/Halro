@@ -36,7 +36,7 @@ server:
   # @description.zh-CN 否则已受理的请求来不及走完。
   # @description.en-US Shared listener shutdown budget. It must be at least
   # @description.en-US gateway.route_total_timeout, or accepted requests cannot drain.
-  shutdown_timeout: 120s
+  shutdown_timeout: 10m
   # @title.zh-CN 最大请求头大小
   # @title.en-US Maximum header size
   # @description.zh-CN 单个请求头允许的最大字节数。
@@ -434,7 +434,7 @@ gateway:
   # @title.en-US Route total timeout
   # @description.zh-CN 一次 Gateway 请求跨所有尝试允许的总时间。
   # @description.en-US Total time allowed across all attempts for one Gateway request.
-  route_total_timeout: 120s
+  route_total_timeout: 10m
   # @title.zh-CN 价格时钟回退容差
   # @title.en-US Pricing rollback tolerance
   # @description.zh-CN 价格选择时间允许向后偏移的安全容差。
@@ -460,9 +460,12 @@ gateway:
   attempt_connect_timeout: 5s
   # @title.zh-CN 响应头超时
   # @title.en-US Response header timeout
-  # @description.zh-CN 单次上游尝试等待响应头的最长时间。
-  # @description.en-US Maximum time an upstream attempt waits for response headers.
-  attempt_response_header_timeout: 60s
+  # @description.zh-CN 单次上游尝试等待响应头的最长时间。推理模型要等推理结束才发响应头，所以这也是它最多能想多久。
+  # @description.zh-CN 连接测试、健康探测最多只等 1 分钟，不受它影响。
+  # @description.en-US Maximum time an upstream attempt waits for response headers. A reasoning model sends
+  # @description.en-US none until it has finished reasoning, so this is how long it may think. Connection tests
+  # @description.en-US and health probes wait at most a minute regardless.
+  attempt_response_header_timeout: 5m
   # @title.zh-CN 下游写入超时
   # @title.en-US Downstream write timeout
   # @description.zh-CN 向客户端写入单次响应数据允许的时间。

@@ -26,7 +26,7 @@ server:
   # Shared graceful-shutdown budget for Gateway, Admin and Metrics listeners.
   # It must be at least gateway.route_total_timeout so an accepted request can
   # finish before the process forcibly closes remaining connections.
-  shutdown_timeout: 2m0s
+  shutdown_timeout: 10m0s
   max_header_bytes: 32768
   # Bounds one request body. Callers above this get 413 rather than the gateway
   # deciding how much memory an unauthenticated body may cost.
@@ -221,9 +221,12 @@ ledger:
 
 gateway:
   # The whole request, across retries and fallbacks.
-  route_total_timeout: 2m0s
+  route_total_timeout: 10m0s
   attempt_connect_timeout: 5s
-  attempt_response_header_timeout: 1m0s
+  # A reasoning model sends no header until it has finished reasoning, so this
+  # is how long it may think. Connection tests and health probes wait at most
+  # a minute regardless.
+  attempt_response_header_timeout: 5m0s
   # How long a client may take to accept what the gateway is writing. Applied
   # per write, so it bounds a stalled reader without cutting a long stream.
   downstream_write_timeout: 15s

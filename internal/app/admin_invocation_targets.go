@@ -272,10 +272,7 @@ func (r *Runtime) describeInvocationTarget(ctx context.Context, instance domain.
 	if err != nil {
 		return domain.InvocationTargetDescriptor{}, false
 	}
-	timeout := r.config.Gateway.AttemptResponseHeaderTimeout.Value()
-	if timeout <= 0 {
-		timeout = 15 * time.Second
-	}
+	timeout := probeTimeout(r.config)
 	describeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	described, err := describer.DescribeInvocationTarget(describeCtx, target)
@@ -418,10 +415,7 @@ func (r *Runtime) fetchInvocationTargetCatalog(ctx context.Context, instance dom
 			return result
 		}
 	}
-	timeout := r.config.Gateway.AttemptResponseHeaderTimeout.Value()
-	if timeout <= 0 {
-		timeout = 15 * time.Second
-	}
+	timeout := probeTimeout(r.config)
 	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	fetchSequence := r.beginInvocationTargetFetch(cacheKey)

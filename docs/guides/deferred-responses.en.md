@@ -72,7 +72,7 @@ The request remains `queued` rather than failing; that is why the queue exists. 
 
 ## Execution time limit
 
-Each deferred execution uses the same `route_total_timeout` limit as a synchronous request (default: two minutes). A timeout produces `failed` with `deferred_response_timeout` and **may still have incurred a charge**. Without this overall bound, a body returned one byte at a time could hold one of the limited workers indefinitely: SafeTransport's connection and response-header timeouts alone do not bound the whole body.
+Each deferred execution uses the same `route_total_timeout` limit as a synchronous request (default: ten minutes). A timeout produces `failed` with `deferred_response_timeout` and **may still have incurred a charge**. Without this overall bound, a body returned one byte at a time could hold one of the limited workers indefinitely: SafeTransport's connection and response-header timeouts alone do not bound the whole body.
 
 ## Answer size limit
 

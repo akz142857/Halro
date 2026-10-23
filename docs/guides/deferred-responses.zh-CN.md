@@ -86,7 +86,7 @@ TTL。排到 TTL 都没轮上的请求会变成 `failed`，错误码 `deferred_r
 
 ## 单次执行的时间上限
 
-一次延迟执行受 `route_total_timeout`（默认 2 分钟）约束，与同步请求相同。超时的请求变成
+一次延迟执行受 `route_total_timeout`（默认 10 分钟）约束，与同步请求相同。超时的请求变成
 `failed`（`deferred_response_timeout`），并且**同样可能已经计费**。没有这个上限的话，延迟路径
 会比它声称等同的同步路径更松：SafeTransport 只约束建连与响应头，一个逐字节返回的响应体不受任何
 约束，而它会一直占住数量很少的 worker 之一。

@@ -23,9 +23,11 @@ spec:
       serviceAccountName: halro
       automountServiceAccountToken: false
       enableServiceLinks: false
-      # The default server.shutdown_timeout is 120s. Leave process and
-      # container-runtime cleanup headroom beyond Halro's own drain budget.
-      terminationGracePeriodSeconds: 150
+      # The default server.shutdown_timeout is 10m, at least
+      # gateway.route_total_timeout so a reasoning request can finish. Leave
+      # process and container-runtime cleanup headroom beyond Halro's own
+      # drain budget.
+      terminationGracePeriodSeconds: 650
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
