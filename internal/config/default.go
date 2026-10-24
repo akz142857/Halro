@@ -81,7 +81,7 @@ func Default() Config {
 			AttemptConnectTimeout:         Duration(5 * time.Second),
 			AttemptResponseHeaderTimeout:  Duration(5 * time.Minute),
 			DownstreamWriteTimeout:        Duration(15 * time.Second),
-			StreamMaxDuration:             Duration(10 * time.Minute),
+			StreamMaxDuration:             Duration(30 * time.Minute),
 			MaxTotalAttempts:              4,
 			DeferredResponseWorkers:       4,
 			HealthProbeInterval:           Duration(30 * time.Second),

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestDefaultIsValidAndLoopbackOnly(t *testing.T) {
@@ -85,5 +86,17 @@ func TestDefaultAttemptBudgetReachesAFanOut(t *testing.T) {
 				"a route beyond that is configured and never called",
 			reachable, total, perTarget,
 		)
+	}
+}
+
+// The longest reasoning streams measured so far ran 921s (OpenAI Responses,
+// gpt-5.5 xhigh), 756s (Anthropic, claude-fable-5-1 max) and 971s (Kimi
+// Anthropic face, kimi-k3, cut at 32k tokens) — all past the old 10m default,
+// which cut them while the upstream was still sending and billing. See
+// docs/todo/upstream-stream-idle-watchdog.zh-CN.md §5.
+func TestDefaultStreamDurationOutlastsAMeasuredReasoningStream(t *testing.T) {
+	const longestMeasured = 971 * time.Second
+	if got := Default().Gateway.StreamMaxDuration.Value(); got < longestMeasured*3/2 {
+		t.Fatalf("gateway.stream_max_duration defaults to %s; the longest measured reasoning stream ran %s, and the default should leave it half as much again", got, longestMeasured)
 	}
 }

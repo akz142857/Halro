@@ -473,9 +473,12 @@ gateway:
   downstream_write_timeout: 15s
   # @title.zh-CN 流最长持续时间
   # @title.en-US Maximum stream duration
-  # @description.zh-CN 单个流式请求允许保持活动的最长时间。
-  # @description.en-US Maximum lifetime allowed for one streaming request.
-  stream_max_duration: 10m
+  # @description.zh-CN 单个流式请求允许保持活动的最长时间。推理模型的长推理流实测超过 15 分钟，
+  # @description.zh-CN 低于它会在上游仍在输出、照常计费时截断。
+  # @description.en-US Maximum lifetime allowed for one streaming request. Long reasoning
+  # @description.en-US streams were measured past 15 minutes; a lower value cuts one off while the
+  # @description.en-US upstream is still sending and billing it.
+  stream_max_duration: 30m
   # @title.zh-CN 最大总尝试次数
   # @title.en-US Maximum total attempts
   # @description.zh-CN 一次请求跨路由目标允许的尝试总数。能触及的候选数是
