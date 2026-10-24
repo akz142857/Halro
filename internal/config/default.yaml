@@ -230,7 +230,10 @@ gateway:
   # How long a client may take to accept what the gateway is writing. Applied
   # per write, so it bounds a stalled reader without cutting a long stream.
   downstream_write_timeout: 15s
-  stream_max_duration: 10m0s
+  # A reasoning stream sends while it thinks, and the longest measured ran past
+  # fifteen minutes. A request that reaches this limit is cut while the upstream
+  # is still billing it, so it is set well above what was measured.
+  stream_max_duration: 30m0s
   # Shared by the whole request, across retries and fallbacks. The number of
   # distinct candidates a request can reach is ceil(max_total_attempts /
   # retry.max_attempts_per_target), so this has to be at least as large as the

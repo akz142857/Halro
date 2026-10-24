@@ -6,8 +6,35 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Upgrading
+
+- **An existing `config.yaml` keeps `gateway.stream_max_duration: 10m0s`**,
+  since the first start writes it out. Raise it to `30m` yourself to stop long
+  reasoning streams being cut (see Changed). A Project created in the console
+  before v0.10.0 also carries its own `600` second stream limit, which stays the
+  smaller of the two; set it to `0` to follow the instance.
+- A Debian package or the AWS KMS systemd unit: `systemctl daemon-reload` after
+  upgrading so the new `TimeoutStopSec` takes effect (see Fixed).
+
+### Changed
+
+- A streaming request may now run for thirty minutes:
+  `gateway.stream_max_duration` defaults to `30m` instead of `10m`. A reasoning
+  stream keeps sending while it thinks, and the longest measured ran past the
+  old limit on every platform measured — 921s on OpenAI Responses at
+  `xhigh`, 756s on Anthropic at `max`, 971s on Kimi's kimi-k3 (cut at 32k
+  tokens, so its real length is longer). At the limit Halro ends the stream
+  while the upstream is still sending and billing it. `server.shutdown_timeout`
+  stays `10m`: a stream still running when it expires is truncated and counted
+  as before, so a restart does not wait half an hour.
+
 ### Fixed
 
+- The Debian package's systemd unit and the AWS KMS example unit stopped Halro
+  with `SIGKILL` after 150 seconds, while `server.shutdown_timeout` has
+  defaulted to ten minutes since v0.10.0 — so a stop could kill in-flight
+  requests mid-drain, before Halro recorded them as truncated. Both now wait
+  `650s`, as the Kubernetes manifests already did.
 - A sampling member the Claude model behind a route refuses is now refused by
   Halro before the request reaches Anthropic, instead of by Anthropic after the
   budget was reserved. Every Claude model since Opus 4.7 rejects `temperature`,
