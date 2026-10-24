@@ -400,10 +400,15 @@ func anthropicModels() []Entry {
 // A mainland account was not measured; the retirement is MiniMax's, not a
 // region's, and leaving the entries out is the fail-closed reading.
 //
-// MiniMax-M3.1-Flash appeared on the list in the same measurement and answers
-// 200 on all three faces. It has no entry yet: what it accepts — images, a
-// thinking switch, its output bound — has not been established, and an entry
-// is a capability claim, not an acknowledgement that the model exists.
+// MiniMax-M3.1-Flash appeared on the list in the same measurement and is left
+// out on evidence, measured 2026-10-24: it always thinks. thinking disabled,
+// reasoning effort none and reasoning_split false each answer 400 on every
+// face, and Halro sends thinking disabled on every Chat and Anthropic request
+// that did not ask to think — so an entry would offer a deployment that refuses
+// the ordinary request. Its Responses face returns a reasoning item unasked,
+// which DecodeProviderResponse refuses after the call is paid. Serving it would
+// take a catalogue-driven "always thinks" distinction in the renderer, not an
+// entry here. See docs/verification/provider-real-matrix.md.
 //
 // M3's one deliberate narrowing: Responses binds no stream primitive and
 // cannot carry reasoning items, so its Responses entry claims neither.

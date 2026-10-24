@@ -25,7 +25,8 @@ semantic versioning.
   capabilities and cannot be deployed; MiniMax-M3 is unchanged. **An existing
   deployment on one of them was already failing upstream** and should be moved
   to MiniMax-M3. Subscription Access keeps its M2.7 pair. MiniMax-M3.1-Flash,
-  newly listed, is not offered yet: its capabilities have not been established.
+  newly listed, is not offered: measured, it always thinks and refuses the
+  thinking-disabled request Halro sends when a caller did not ask to think.
 
 ## [0.10.0] - 2026-10-23
 

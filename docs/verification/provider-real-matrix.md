@@ -353,6 +353,55 @@ The guard this exposed a hole in is
 safe here; that endpoint can render it and never gets the chance. It now asks the
 provider profile's own decoder first.
 
+### MiniMax-M3.1-Flash measured, and not offered (2026-10-24)
+
+The same measurement that found the M2 line retired found `MiniMax-M3.1-Flash`
+newly listed by `/v1/models`. About ninety calls on the international host,
+the same probe set run against `MiniMax-M3` alongside for comparison, decided it
+stays out of the catalogue.
+
+| probe | M3.1-Flash | M3 |
+|---|---|---|
+| `thinking: {"type":"disabled"}` (Chat, Anthropic) | **400** "requires adaptive thinking" | 200 |
+| `reasoning.effort: none` (Responses) | **400**, same message | 200 |
+| `reasoning_split: false` (Chat) | **400** "requires reasoning_split=true" | — |
+| output bound | 524,288; 524,289 is 400 | the same |
+| tools, `json_object`, image input, streaming with usage (thinking adaptive) | served on Chat and Anthropic | served |
+| top-level `reasoning_effort` `low` … `max` | accepted; documented default `max` | documented as ignored |
+| Responses, nothing asked | `reasoning` output item | message only |
+
+MiniMax's Chat reference agrees: it says the model "always thinks", that
+`disabled` and `none` return 400, and that the context window is 1M (not
+measured — measuring it means sending a million tokens).
+
+It is out for three reasons, each one face:
+
+- **Chat and Anthropic.** Halro sends `thinking: {"type":"disabled"}` on every
+  request that did not ask to think, so the caller does not pay for reasoning
+  it did not request. Flash refuses exactly that request. On Anthropic, a
+  request that does ask reaches `output_config.effort`, which the MiniMax rules
+  already refuse, and a thinking answer carries signed thinking blocks the
+  portable surface cannot return — so no portable request is servable there.
+- **Responses.** The captured bodies were run through the real decoder:
+
+  ```
+  Flash nothing asked   DecodeProviderResponse -> provider Responses output item is unsupported
+  Flash image input     DecodeProviderResponse -> provider Responses output item is unsupported
+  Flash tool call       decodes cleanly (that answer happened not to reason)
+  M3 multi-step         decodes cleanly
+  ```
+
+- **Cost.** The depth ladder barely binds. On one hard prompt `low` spent
+  32,121 reasoning tokens over about 280 s, and `max` exhausted a 32,768 bound
+  without answering. A caller who reaches this model pays for that whatever
+  they ask for.
+
+Offering it would take a catalogue-driven "always thinks" mark that the Chat
+renderer reads — render adaptive thinking where it now renders disabled,
+refuse `none`, and declare the target as reasoning unasked — rather than an
+entry on its own. That is a feature, not a catalogue edit, and it is not
+scheduled. The mainland host was not measured.
+
 ## Kimi: measured on a mainland account (2026-09-01)
 
 Kimi (Moonshot AI) was adapted from its published OpenAPI documents and then
