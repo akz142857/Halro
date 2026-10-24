@@ -6,6 +6,8 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-24
+
 ### Upgrading
 
 - **An existing `config.yaml` keeps `gateway.stream_max_duration: 10m0s`**,
@@ -2747,6 +2749,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.10.1]: https://github.com/akz142857/Halro/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/akz142857/Halro/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/akz142857/Halro/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/akz142857/Halro/compare/v0.9.0...v0.9.1
