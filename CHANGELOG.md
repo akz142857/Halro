@@ -6,6 +6,27 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- A sampling member the Claude model behind a route refuses is now refused by
+  Halro before the request reaches Anthropic, instead of by Anthropic after the
+  budget was reserved. Every Claude model since Opus 4.7 rejects `temperature`,
+  `top_p` and `top_k`, and the earlier Claude 4 models reject `temperature` and
+  `top_p` together. A route whose other deployment accepts the member is served
+  by it; otherwise the caller gets `unsupported_feature` naming the member.
+  This applies to the Anthropic, Anthropic Subscription and Bedrock Mantle
+  Anthropic Messages profiles, natively and portably; a Claude model this build
+  does not know is refused (fail-closed), Haiku 5.5 accepts its stated
+  defaults, and `count_tokens` is not affected.
+- MiniMax's metered API no longer offers the M2 line (M2, M2.1, M2.5, M2.7 and
+  their `-highspeed` variants). MiniMax retired them — every face answers 404
+  "no longer available" — while its model list still names them, so Halro
+  offered seven deployments that failed every call. They now enumerate without
+  capabilities and cannot be deployed; MiniMax-M3 is unchanged. **An existing
+  deployment on one of them was already failing upstream** and should be moved
+  to MiniMax-M3. Subscription Access keeps its M2.7 pair. MiniMax-M3.1-Flash,
+  newly listed, is not offered yet: its capabilities have not been established.
+
 ## [0.10.0] - 2026-10-23
 
 ### Upgrading from v0.9.2

@@ -1257,7 +1257,7 @@ OpenAI 形状的假响应。这条进 §7。
 |---|---|---|
 | Bearer 在 `/anthropic/v1/messages` 上可用（§7 第 1 条） | 六个子测试**全部**走 openai 适配器，Anthropic 路由一次都没打过 | `internal/provider/anthropic/minimax_real_smoke_test.go` |
 | `response_format` 支不支持（第 4 条） | 根本没写这个子测试 | 原始请求发一次，读状态码与响应体 |
-| M2.x 能否关闭思考（第 9 条另一半） | 模型默认 M3，而风险在 M2.x | `HALRO_SMOKE_M2_MODEL`，默认 `MiniMax-M2.7` |
+| M2.x 能否关闭思考（第 9 条另一半） | 模型默认 M3，而风险在 M2.x | 曾以 `HALRO_SMOKE_M2_MODEL` 补测；2026-10-24 起 M2 系列在按量 API 上已下线（三个接口均 404），子测试与目录条目一并删除 |
 
 第一条尤其要紧：它的结论会改动**凭据方案与 profile 分组**，是 §2.1 那条一直挂着的前置。
 一次没打过那条路由，就等于这个方案最核心的形状假设至今没有证据。

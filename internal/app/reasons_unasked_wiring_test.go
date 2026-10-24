@@ -50,12 +50,17 @@ func TestTheRegistryReadsReasonsUnaskedFromTheCatalogue(t *testing.T) {
 			deployment: deployment(domain.ProfileKimiChat, "kimi-k9-unreleased"), want: false,
 		},
 		{
-			// MiniMax's M2 line reasons unasked on Responses and its entries were
-			// removed from that profile for it. On Chat, where it is offered, the
-			// answer decodes — so the mark belongs to the pair, not the model.
-			name:       "the same model on a profile whose decoder carries it",
+			// MiniMax-M2.7 reasons unasked on Subscription Access's OpenAI Chat
+			// face; its Anthropic face sends thinking disabled, so the same model
+			// does not — the mark belongs to the pair, not the model.
+			name:       "the same model on a profile that can switch it off",
 			instance:   domain.ProviderInstance{Type: domain.ProviderMiniMax},
-			deployment: deployment(domain.ProfileMiniMaxChat, "MiniMax-M2.1"), want: false,
+			deployment: deployment(domain.ProfileMiniMaxGlobalSubscriptionAnthropicMessages, "MiniMax-M2.7"), want: false,
+		},
+		{
+			name:       "the model on the profile where it reasons unasked",
+			instance:   domain.ProviderInstance{Type: domain.ProviderMiniMax},
+			deployment: deployment(domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat, "MiniMax-M2.7"), want: true,
 		},
 		{
 			name:       "BigModel defaults GLM-4.7 thinking on",

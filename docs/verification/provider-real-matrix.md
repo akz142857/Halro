@@ -246,8 +246,9 @@ go run ./tests/provider-matrix -include-beta \
   -commit '<exact-lowercase-40-character-commit>' -output provider-matrix.json
 ```
 
-`BASE_URL`, `API_KEY` and `MODEL` are required; `M2_MODEL` is optional and
-defaults to `MiniMax-M2.7`. **This is adaptation evidence, not GA matrix
+`BASE_URL`, `API_KEY` and `MODEL` are required. (`M2_MODEL` drove an M2.x
+subtest that went with the M2 line when MiniMax retired it from the metered
+API on 2026-10-24.) **This is adaptation evidence, not GA matrix
 evidence**: MiniMax is Beta, so it never gates a release, and the runs below
 carried no `-commit` binding and produced no archived evidence file.
 

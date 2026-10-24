@@ -145,8 +145,8 @@ func TestRealMiniMaxSmoke(t *testing.T) {
 	})
 
 	// Assertion 5: Halro sends the switch on every request that did not ask to
-	// think, because M3 thinks by default. M2.x cannot switch it off, and which
-	// way it answers decides whether that default is safe.
+	// think, because M3 thinks by default, and which way it answers decides
+	// whether that default is safe.
 	t.Run("thinking disabled is accepted", func(t *testing.T) {
 		request := ask(model)
 		request.ReasoningEffort = "none"
@@ -258,26 +258,6 @@ func TestRealMiniMaxSmoke(t *testing.T) {
 		t.Logf("status=%d body=%s", response.StatusCode, strings.TrimSpace(string(payload)))
 		t.Log("read this: a 2xx whose content is valid JSON means the capability is real and both profiles under-declare it; " +
 			"a 4xx, or a 2xx that ignored the member, means the fail-closed declaration was right")
-	})
-
-	// The loudest open risk, and the model it concerns was never the one under
-	// test: everything above ran on M3. MiniMax documents the M2.x line as unable
-	// to switch thinking off, and Halro sends the disabled switch on every request
-	// that did not ask to think. If M2.x refuses it, every M2.x request fails.
-	t.Run("M2.x accepts or refuses a disabled thinking switch", func(t *testing.T) {
-		m2 := strings.TrimSpace(os.Getenv("HALRO_SMOKE_M2_MODEL"))
-		if m2 == "" {
-			m2 = "MiniMax-M2.7"
-		}
-		request := ask(m2)
-		request.ReasoningEffort = "none"
-		_, err := newAdapter(t, false).Chat(ctx, provider.ChatCall{RequestID: "smoke_m2", ProviderModel: m2, Request: request})
-		if err != nil {
-			t.Errorf("model %q refused an explicitly disabled thinking switch: %v\n"+
-				"this is the failure the plan predicted; the fix is a catalogue-driven distinction, not a model-name prefix", m2, err)
-			return
-		}
-		t.Logf("%q accepted a disabled thinking switch", m2)
 	})
 
 	// The catalogue route the connection test and target enumeration both read.

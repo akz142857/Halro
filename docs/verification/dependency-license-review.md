@@ -279,6 +279,13 @@ release. `urllib3` remains MIT licensed, the 42-package lock set is unchanged,
 and this dependency is installed only for SDK compatibility tests, not shipped
 in Halro artifacts.
 
+The 2026-10-24 PR #467 CI recovery moved `filelock` in the Python compatibility lock
+from 3.32.6 to 4.2.4 (CVE-2026-112907, CVE-2026-112913 and CVE-2026-112940,
+fixed in 4.2.1). `filelock` is reached only through `cachecontrol` for `pip-audit`,
+stays MIT and test-only, and requires Python 3.11 or later, which CI's 3.12
+meets. Only its pin and two hashes changed, both checked against the published
+PyPI wheel and sdist; `requirements.in` is unchanged.
+
 The 2026-09-18 Go compatibility refresh moved
 `github.com/anthropics/anthropic-sdk-go` from 1.71.0 to 1.72.0. The module
 remains MIT licensed, the resolved module-path set is unchanged, and this SDK
@@ -434,9 +441,10 @@ document is deliberately refreshed with the new inventory and hashes.
 - `tests/compatibility/node/package.json`: `fa64491949d17525bb79dd2ad5241b465f0e471d`
 - `tests/compatibility/node/package-lock.json`: `b1f97596bc6e42555dcc2caf329dc747d77d9d39`
 - `tests/compatibility/python/requirements.in`: `e7aead8aed67406d553563a198a17af1a6b1ba96`
-- `tests/compatibility/python/requirements.txt`: `151d8af34e7c2290c88bcbd0bd11359bb11f9f1e`
+- `tests/compatibility/python/requirements.txt`: `7a371fd2351a188bf52f2235b63807350227d8a5`
 
-All ten hashes last moved for the 2026-10-23 refreshes recorded above, and
+The Python lock hash last moved for the 2026-10-24 `filelock` refresh. All ten
+hashes moved before that for the 2026-10-23 refreshes recorded above, and
 before that for the 2026-10-17 refreshes. Before
 that the Go hashes moved for the 2026-09-18 Go refresh, and the two web hashes
 for the 2026-09-18 Admin UI refresh, before
