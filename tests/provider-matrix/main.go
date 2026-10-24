@@ -71,7 +71,6 @@ var betaProfiles = []profile{
 		Name: "minimax", Prefix: "MINIMAX", Package: "./internal/provider/openai",
 		Test:     "TestRealMiniMaxSmoke",
 		Required: []string{"BASE_URL", "API_KEY", "MODEL"},
-		Optional: []string{"M2_MODEL"},
 	},
 	{
 		Name: "minimax_anthropic", Prefix: "MINIMAX", Package: "./internal/provider/anthropic",
@@ -315,7 +314,7 @@ func smokeEnvironment(item profile, values map[string]string) []string {
 		"HALRO_SMOKE_API_KEY="+values["API_KEY"],
 		"HALRO_SMOKE_MODEL="+values["MODEL"],
 	)
-	for _, suffix := range []string{"EMBEDDING_MODEL", "API_VERSION", "MANTLE_PROFILE", "BEDROCK_PROJECT_ID", "M2_MODEL"} {
+	for _, suffix := range []string{"EMBEDDING_MODEL", "API_VERSION", "MANTLE_PROFILE", "BEDROCK_PROJECT_ID"} {
 		if value := values[suffix]; value != "" {
 			environment = append(environment, "HALRO_SMOKE_"+suffix+"="+value)
 		}
