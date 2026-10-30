@@ -15,8 +15,19 @@ def client(api_key: str = API_KEY) -> openai.OpenAI:
     return openai.OpenAI(api_key=api_key, base_url=BASE_URL, max_retries=0, timeout=5.0)
 
 
+def test_anthropic_default_version_is_rejected() -> None:
+    # SDK 2.x defaults to 2026-10-21; Halro only declares 2023-06-01.
+    with anthropic.Anthropic(api_key=API_KEY, base_url=BASE_URL.removesuffix("/v1"), max_retries=0, timeout=5.0) as sdk:
+        try:
+            sdk.messages.create(model="compat-chat", max_tokens=32, messages=[{"role": "user", "content": "ping"}])
+        except anthropic.BadRequestError as error:
+            assert "unsupported anthropic-version" in str(error)
+        else:
+            raise AssertionError("the unsupported default API version must be rejected")
+
+
 def test_anthropic_messages() -> None:
-    sdk = anthropic.Anthropic(api_key=API_KEY, base_url=BASE_URL.removesuffix("/v1"), max_retries=0, timeout=5.0)
+    sdk = anthropic.Anthropic(api_key=API_KEY, base_url=BASE_URL.removesuffix("/v1"), max_retries=0, timeout=5.0, default_headers={"anthropic-version": "2023-06-01"})
     message = sdk.messages.create(model="compat-chat", max_tokens=32, messages=[{"role": "user", "content": "ping"}])
     assert message.content[0].text == "compat-ok"
     assert message.usage.output_tokens == 2
@@ -119,6 +130,7 @@ def test_disconnecting_stream_releases_server_resources() -> None:
 
 if __name__ == "__main__":
     # Official Anthropic SDKs exercise x-api-key and anthropic-version headers.
+    test_anthropic_default_version_is_rejected()
     test_anthropic_messages()
     test_non_stream_and_embeddings()
     # Keep the executable CI entry point aligned with pytest discovery.
