@@ -1,6 +1,6 @@
 # Dependency and License Review
 
-Date: 2026-09-11
+Date: 2026-10-30
 
 Halro is distributed under Apache-2.0. The source tree includes the project
 license in `LICENSE`, required attribution in `NOTICE`, and the runtime
@@ -17,11 +17,11 @@ module and lock files.
 
 | Module | Version | License | Distribution scope |
 |---|---:|---|---|
-| `github.com/aws/aws-sdk-go-v2` | 1.47.3 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/config` | 1.33.9 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/credentials` | 1.20.9 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.61.5 | Apache-2.0 | runtime |
-| `github.com/aws/smithy-go` | 1.28.5 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2` | 1.47.4 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/config` | 1.33.11 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/credentials` | 1.20.11 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.62.0 | Apache-2.0 | runtime |
+| `github.com/aws/smithy-go` | 1.28.6 | Apache-2.0 | runtime |
 | `github.com/go-chi/chi/v5` | 5.5.0 | MIT | runtime |
 | `github.com/google/jsonschema-go` | 0.4.3 | MIT | test/release tooling |
 | `github.com/parquet-go/parquet-go` | 0.32.0 | Apache-2.0 | runtime |
@@ -469,6 +469,18 @@ and no package enters or leaves the lock. The five runtime entries remain MIT.
 The embedded Admin UI bundle is regenerated under Node 22 from this lockfile
 and committed alongside the dependency update.
 
+The 2026-10-30 PR #479 runtime Go refresh moves the five direct AWS SDK and
+Smithy modules above plus ten AWS transitive modules. The module-path set is
+unchanged. LICENSE and NOTICE files for all 15 changed modules are
+byte-identical across their bumps, compared in the downloaded module cache;
+all remain Apache-2.0 and the existing distribution notices remain applicable.
+KMS 1.62.0 adds ML-KEM APIs and Signin 1.11.0 adds OAuth token exchange;
+Halro continues to use its existing symmetric Encrypt/Decrypt contract; the
+SDK source files for both operations are byte-identical across this bump.
+Smithy 1.28.6 fixes event-stream header limits and dense-list null handling.
+The KMS wire contract, credential boundary, master-key custody and vault paths
+are covered by the focused suites and the integrated Go validation.
+
 ## Distribution requirements
 
 - Preserve the project license plus dependency copyright/license notices in
@@ -487,8 +499,8 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `3a6ae3889cf47baf9d350666bd7c8e1112d5de50`
-- `go.sum`: `7e3df8d6a1c7322fc9b3c15e7772097d211b5911`
+- `go.mod`: `194923898968e6a48374d52c35055258fe92a835`
+- `go.sum`: `69591afe7d4f7536ec67aa9a0ffb0a74cac2bd31`
 - `web/package.json`: `9c5830d4266cac212ca8114fe8abb53f482ccd03`
 - `web/package-lock.json`: `e020e0d43f86764445af8bbc8f82f80791eec4fd`
 - `tests/compatibility/go/go.mod`: `1c4e1c1932a91e12754cd98a7aded4784585788a`
@@ -511,8 +523,8 @@ for `chore(release): v0.2.0`, again for `v0.3.0`, again for `v0.4.0`, and again
 for `v0.5.0`, `v0.6.0`, `v0.7.0`, `v0.7.1`, `v0.8.0`, `v0.8.3`, `v0.8.4`, `v0.8.5`, `v0.9.0`, `v0.9.1`, `v0.9.2`, `v0.10.0`, and now `v0.10.1`, each of which bumped the
 `version`
 field in both files and changed nothing else.
-Nothing in any of it added, removed, or relicensed a dependency, so the
-inventory above still describes the reviewed tree. The gate hashes whole files
+The inventory above includes the 2026-10-30 version updates and the
+test-only Anthropic SDK license changes from MIT to Apache-2.0. The gate hashes whole files
 rather than dependency sections, which is the right trade: it cannot be talked
 out of noticing a change, at the cost of occasionally flagging one that carries
 no dependency in it.
