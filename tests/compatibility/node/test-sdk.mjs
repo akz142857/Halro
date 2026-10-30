@@ -5,7 +5,13 @@ import Anthropic from '@anthropic-ai/sdk';
 const baseURL = process.env.HALRO_COMPAT_BASE_URL ?? 'http://127.0.0.1:18088/v1';
 const apiKey = 'gw_sdk_compatibility';
 const client = new OpenAI({ apiKey, baseURL, maxRetries: 0, timeout: 5_000 });
-const anthropic = new Anthropic({ apiKey, baseURL: baseURL.replace(/\/v1$/, ''), maxRetries: 0, timeout: 5_000 });
+const anthropicOptions = { apiKey, baseURL: baseURL.replace(/\/v1$/, ''), maxRetries: 0, timeout: 5_000 };
+// SDK 1.x defaults to 2026-10-21; Halro's declared contract is 2023-06-01.
+await assert.rejects(
+  new Anthropic(anthropicOptions).messages.create({ model: 'compat-chat', max_tokens: 32, messages: [{ role: 'user', content: 'ping' }] }),
+  (error) => error instanceof Anthropic.BadRequestError && error.message.includes('unsupported anthropic-version'),
+);
+const anthropic = new Anthropic({ ...anthropicOptions, defaultHeaders: { 'anthropic-version': '2023-06-01' } });
 
 const message = await anthropic.messages.create({ model: 'compat-chat', max_tokens: 32, messages: [{ role: 'user', content: 'ping' }] });
 assert.equal(message.content[0].text, 'compat-ok');
