@@ -182,6 +182,7 @@ from anthropic import Anthropic
 client = Anthropic(
     api_key=os.environ["HALRO_GATEWAY_KEY"],
     base_url="https://halro.example.internal",
+    default_headers={"anthropic-version": "2023-06-01"},
 )
 
 message = client.messages.create(
@@ -200,6 +201,7 @@ import Anthropic from "@anthropic-ai/sdk";
 const client = new Anthropic({
   apiKey: process.env.HALRO_GATEWAY_KEY,
   baseURL: "https://halro.example.internal",
+  defaultHeaders: { "anthropic-version": "2023-06-01" },
 });
 
 const message = await client.messages.create({
@@ -211,8 +213,9 @@ console.log(message.content[0].text);
 ```
 
 注意两个 SDK 的 `base_url` 不同：OpenAI SDK 需要带 `/v1` 后缀，Anthropic SDK
-只填根地址（SDK 自己拼 `/v1/messages`）。`anthropic-version` 请求头按 SDK
-默认值发送即可。同一把 Gateway Key、同一个别名，两种协议都能用；选哪个 SDK
+只填根地址（SDK 自己拼 `/v1/messages`）。Halro 目前只接受
+`anthropic-version: 2023-06-01`，请按示例显式固定；Node SDK 1.x 的默认值
+是 `2026-10-21`，直接使用会收到 400。同一把 Gateway Key、同一个别名，两种协议都能用；选哪个 SDK
 取决于你的应用已有的依赖，不影响背后路由到哪个上游。
 
 ### Embeddings
