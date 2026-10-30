@@ -256,7 +256,7 @@ Node lock, and `pip-audit` for the complete hashed Python lock.
 
 | Ecosystem | Reviewed direct dependencies | License |
 |---|---|---|
-| Go | `github.com/anthropics/anthropic-sdk-go` 1.82.0 | MIT |
+| Go | `github.com/anthropics/anthropic-sdk-go` 1.84.0 | MIT |
 | Go | `github.com/openai/openai-go/v3` 3.88.0 | Apache-2.0 |
 | Node | `@anthropic-ai/sdk` 0.135.0 | MIT |
 | Node | `openai` 7.45.0 | Apache-2.0 |
@@ -427,6 +427,12 @@ The 2026-10-30 PR #472 refresh moves the test-only Node `openai` SDK from
 Apache-2.0. Its new `google-auth-library` peer is optional and does not enter
 this lock. The SDK remains confined to compatibility tests.
 
+The 2026-10-30 PR #474 refresh moves the test-only Anthropic Go SDK from
+1.82.0 to 1.84.0 while retaining the OpenAI SDK 3.88.0 update from #471.
+Only the Anthropic version and checksums move against main; its go.mod
+checksum is unchanged, as is its LICENSE (MIT), compared in the module cache.
+No module or license family is added, and the SDK stays outside Halro artifacts.
+
 ## Distribution requirements
 
 - Preserve the project license plus dependency copyright/license notices in
@@ -449,8 +455,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `go.sum`: `7e3df8d6a1c7322fc9b3c15e7772097d211b5911`
 - `web/package.json`: `0f2ea89317ab04c46436babda5aebc00ec79a4b6`
 - `web/package-lock.json`: `58e6b3935d3082a80a9d709d9d4914ad03c1fb11`
-- `tests/compatibility/go/go.mod`: `1585b96dbac31039469d2424f806ff31c2b3f756`
-- `tests/compatibility/go/go.sum`: `0a6c7841b02c48b247a861c31f27bd166c296784`
+- `tests/compatibility/go/go.mod`: `1c4e1c1932a91e12754cd98a7aded4784585788a`
+- `tests/compatibility/go/go.sum`: `f532c4b3299bb9fe375c97da938f50e728a123fc`
 - `tests/compatibility/node/package.json`: `e60579e1af1b4b8a43b00e01c21facc547110ba2`
 - `tests/compatibility/node/package-lock.json`: `af95e720b52bb21cde9610ec8ab9c99af651a5eb`
 - `tests/compatibility/python/requirements.in`: `e7aead8aed67406d553563a198a17af1a6b1ba96`
