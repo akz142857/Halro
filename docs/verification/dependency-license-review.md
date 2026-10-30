@@ -261,7 +261,7 @@ Node lock, and `pip-audit` for the complete hashed Python lock.
 | Node | `@anthropic-ai/sdk` 1.3.0 | Apache-2.0 |
 | Node | `openai` 7.45.0 | Apache-2.0 |
 | Python | `anthropic` 1.15.0 | MIT |
-| Python | `openai` 3.35.1 | Apache-2.0 |
+| Python | `openai` 3.39.0 | Apache-2.0 |
 | Python tooling | `pip-audit` 2.10.1 | Apache-2.0 |
 
 The resolved Go compatibility graph is MIT, BSD-3-Clause, Apache-2.0, or ISC — the last of these arrived on 2026-09-26 and is described below. The
@@ -443,6 +443,12 @@ The major SDK defaults to Anthropic API 2026-10-21, which Halro rejects.
 Contracts and integration examples explicitly select the supported 2023-06-01
 version, and the Node suite also checks the unsupported default's rejection.
 
+The 2026-10-30 PR #476 refresh moves the test-only Python `openai` SDK
+from 3.35.1 to 3.39.0. Its Apache-2.0 license is unchanged in PyPI metadata;
+the two replacement hashes match the published wheel and source archive.
+The declared non-extra dependencies and the 43-package lock set are unchanged.
+The new Vertex extra is not installed, so it adds no dependency here.
+
 ## Distribution requirements
 
 - Preserve the project license plus dependency copyright/license notices in
@@ -469,8 +475,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `tests/compatibility/go/go.sum`: `f532c4b3299bb9fe375c97da938f50e728a123fc`
 - `tests/compatibility/node/package.json`: `1707407145cdb431c81ca6931a415ad1d24abc0e`
 - `tests/compatibility/node/package-lock.json`: `e33d541775b7ca490fddcc978ac498427441aa65`
-- `tests/compatibility/python/requirements.in`: `e7aead8aed67406d553563a198a17af1a6b1ba96`
-- `tests/compatibility/python/requirements.txt`: `054fb003126c0f0ece5b942acaf2f4bc6c5db5e6`
+- `tests/compatibility/python/requirements.in`: `98745e333ea9a41863a933d4d1f0f4427ff9403c`
+- `tests/compatibility/python/requirements.txt`: `c6c01bdc74cb60b2ec485b030bba191e1dad494e`
 
 The Python lock hash last moved for the 2026-10-24 `filelock` refresh. All ten
 hashes moved before that for the 2026-10-23 refreshes recorded above, and
