@@ -259,7 +259,7 @@ Node lock, and `pip-audit` for the complete hashed Python lock.
 | Go | `github.com/anthropics/anthropic-sdk-go` 1.82.0 | MIT |
 | Go | `github.com/openai/openai-go/v3` 3.88.0 | Apache-2.0 |
 | Node | `@anthropic-ai/sdk` 0.135.0 | MIT |
-| Node | `openai` 7.39.0 | Apache-2.0 |
+| Node | `openai` 7.45.0 | Apache-2.0 |
 | Python | `anthropic` 1.15.0 | MIT |
 | Python | `openai` 3.35.1 | Apache-2.0 |
 | Python tooling | `pip-audit` 2.10.1 | Apache-2.0 |
@@ -422,6 +422,11 @@ CVE-2026-114613 reported by CI. The replacement block uses the SHA-256 hashes
 of all 91 published PyPI artifacts, preserves the rest of the hashed lock,
 and retains the Apache-2.0 license reported by the distribution metadata.
 
+The 2026-10-30 PR #472 refresh moves the test-only Node `openai` SDK from
+7.39.0 to 7.45.0. The lockfile package set is unchanged and its license stays
+Apache-2.0. Its new `google-auth-library` peer is optional and does not enter
+this lock. The SDK remains confined to compatibility tests.
+
 ## Distribution requirements
 
 - Preserve the project license plus dependency copyright/license notices in
@@ -446,8 +451,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `web/package-lock.json`: `58e6b3935d3082a80a9d709d9d4914ad03c1fb11`
 - `tests/compatibility/go/go.mod`: `1585b96dbac31039469d2424f806ff31c2b3f756`
 - `tests/compatibility/go/go.sum`: `0a6c7841b02c48b247a861c31f27bd166c296784`
-- `tests/compatibility/node/package.json`: `fa64491949d17525bb79dd2ad5241b465f0e471d`
-- `tests/compatibility/node/package-lock.json`: `b1f97596bc6e42555dcc2caf329dc747d77d9d39`
+- `tests/compatibility/node/package.json`: `e60579e1af1b4b8a43b00e01c21facc547110ba2`
+- `tests/compatibility/node/package-lock.json`: `af95e720b52bb21cde9610ec8ab9c99af651a5eb`
 - `tests/compatibility/python/requirements.in`: `e7aead8aed67406d553563a198a17af1a6b1ba96`
 - `tests/compatibility/python/requirements.txt`: `054fb003126c0f0ece5b942acaf2f4bc6c5db5e6`
 
