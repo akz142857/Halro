@@ -42,10 +42,10 @@ filtering, redaction, budget/accounting, or a real Provider adapter, and must
 not be cited as end-to-end Gateway or real-Provider evidence.
 
 Anthropic SDK compatibility covers Halro's declared `anthropic-version:
-2023-06-01` contract. Node SDK 1.x defaults to `2026-10-21`,
+2023-06-01` contract. Node SDK 1.x and Python SDK 2.x default to `2026-10-21`,
 which Halro rejects. Set `defaultHeaders: { 'anthropic-version': '2023-06-01' }`
 in Node or `default_headers={"anthropic-version": "2023-06-01"}` in Python.
-The Node suite verifies both the default-version rejection and the supported
+The Node and Python suites verify both the default-version rejection and the supported
 version's non-streaming and streaming requests. This is not a claim of support
 for the 2026 API version.
 
