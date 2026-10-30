@@ -303,8 +303,11 @@ from anthropic import Anthropic
 # OpenAI SDK: the base URL carries /v1
 OpenAI(base_url="https://halro.example.com/v1", api_key="gw_...")
 
-# Anthropic SDK: the base URL does not
-Anthropic(base_url="https://halro.example.com", api_key="gw_...")
+# Anthropic SDK: no /v1 suffix; select Halro's supported API version
+Anthropic(
+    base_url="https://halro.example.com", api_key="gw_...",
+    default_headers={"anthropic-version": "2023-06-01"},
+)
 ```
 
 ```bash
