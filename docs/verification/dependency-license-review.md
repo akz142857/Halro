@@ -257,7 +257,7 @@ Node lock, and `pip-audit` for the complete hashed Python lock.
 | Ecosystem | Reviewed direct dependencies | License |
 |---|---|---|
 | Go | `github.com/anthropics/anthropic-sdk-go` 1.82.0 | MIT |
-| Go | `github.com/openai/openai-go/v3` 3.82.0 | Apache-2.0 |
+| Go | `github.com/openai/openai-go/v3` 3.88.0 | Apache-2.0 |
 | Node | `@anthropic-ai/sdk` 0.135.0 | MIT |
 | Node | `openai` 7.39.0 | Apache-2.0 |
 | Python | `anthropic` 1.15.0 | MIT |
@@ -414,6 +414,14 @@ to 3.14.0. The package remains Apache-2.0 licensed, and the 42-package
 transitive set is unchanged. The client remains test-only and is not
 distributed in Halro artifacts.
 
+The 2026-10-30 PR #471 refresh moves the test-only OpenAI Go SDK from
+3.82.0 to 3.88.0. Only its version and checksums move; the module-path set
+is unchanged. The SDK remains Apache-2.0 and outside Halro runtime artifacts.
+The same repair moves the test-only `msgpack` pin from 1.2.2 to 1.2.3 for
+CVE-2026-114613 reported by CI. The replacement block uses the SHA-256 hashes
+of all 91 published PyPI artifacts, preserves the rest of the hashed lock,
+and retains the Apache-2.0 license reported by the distribution metadata.
+
 ## Distribution requirements
 
 - Preserve the project license plus dependency copyright/license notices in
@@ -436,12 +444,12 @@ document is deliberately refreshed with the new inventory and hashes.
 - `go.sum`: `7e3df8d6a1c7322fc9b3c15e7772097d211b5911`
 - `web/package.json`: `0f2ea89317ab04c46436babda5aebc00ec79a4b6`
 - `web/package-lock.json`: `58e6b3935d3082a80a9d709d9d4914ad03c1fb11`
-- `tests/compatibility/go/go.mod`: `6b29ef500d72a1d3dc832777d516966b3e0c8867`
-- `tests/compatibility/go/go.sum`: `931e61d2a6c1c7357e2303dc4abb58338e743de8`
+- `tests/compatibility/go/go.mod`: `1585b96dbac31039469d2424f806ff31c2b3f756`
+- `tests/compatibility/go/go.sum`: `0a6c7841b02c48b247a861c31f27bd166c296784`
 - `tests/compatibility/node/package.json`: `fa64491949d17525bb79dd2ad5241b465f0e471d`
 - `tests/compatibility/node/package-lock.json`: `b1f97596bc6e42555dcc2caf329dc747d77d9d39`
 - `tests/compatibility/python/requirements.in`: `e7aead8aed67406d553563a198a17af1a6b1ba96`
-- `tests/compatibility/python/requirements.txt`: `7a371fd2351a188bf52f2235b63807350227d8a5`
+- `tests/compatibility/python/requirements.txt`: `054fb003126c0f0ece5b942acaf2f4bc6c5db5e6`
 
 The Python lock hash last moved for the 2026-10-24 `filelock` refresh. All ten
 hashes moved before that for the 2026-10-23 refreshes recorded above, and
