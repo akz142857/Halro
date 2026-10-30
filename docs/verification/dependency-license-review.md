@@ -135,13 +135,13 @@ is linked into the Go runtime.
 | Package | Version | License |
 |---|---:|---|
 | `@hookform/resolvers` | 6.0.0 | MIT |
-| `@tanstack/react-query` | 5.104.5 | MIT |
-| `i18next` | 26.5.3 | MIT |
+| `@tanstack/react-query` | 5.105.0 | MIT |
+| `i18next` | 26.5.11 | MIT |
 | `qrcode` | 1.5.4 | MIT |
 | `react` | 19.3.1 | MIT |
 | `react-dom` | 19.3.1 | MIT |
-| `react-hook-form` | 7.90.0 | MIT |
-| `react-i18next` | 17.1.0 | MIT |
+| `react-hook-form` | 7.91.0 | MIT |
+| `react-i18next` | 17.1.9 | MIT |
 | `uplot` | 1.6.32 | MIT |
 | `zod` | 4.6.7 | MIT |
 
@@ -459,6 +459,16 @@ Its default API version is now 2026-10-21, confirmed in the installed
 now check that rejection and explicitly select 2023-06-01 for the supported
 non-streaming and streaming surface, as the integration guide instructs.
 
+The 2026-10-30 PR #478 Admin UI refresh moves four direct runtime packages:
+`@tanstack/react-query` 5.104.5 to 5.105.0 (with `@tanstack/query-core`),
+`i18next` 26.5.3 to 26.5.11, `react-hook-form` 7.90.0 to 7.91.0, and
+`react-i18next` 17.1.0 to 17.1.9. The dev-only Vite moves 8.3.4 to 8.3.5,
+including its rolldown bindings and OXC types. Compared entry by entry, 23
+lockfile entries change version, none change license or distribution scope,
+and no package enters or leaves the lock. The five runtime entries remain MIT.
+The embedded Admin UI bundle is regenerated under Node 22 from this lockfile
+and committed alongside the dependency update.
+
 ## Distribution requirements
 
 - Preserve the project license plus dependency copyright/license notices in
@@ -479,8 +489,8 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `3a6ae3889cf47baf9d350666bd7c8e1112d5de50`
 - `go.sum`: `7e3df8d6a1c7322fc9b3c15e7772097d211b5911`
-- `web/package.json`: `0f2ea89317ab04c46436babda5aebc00ec79a4b6`
-- `web/package-lock.json`: `58e6b3935d3082a80a9d709d9d4914ad03c1fb11`
+- `web/package.json`: `9c5830d4266cac212ca8114fe8abb53f482ccd03`
+- `web/package-lock.json`: `e020e0d43f86764445af8bbc8f82f80791eec4fd`
 - `tests/compatibility/go/go.mod`: `1c4e1c1932a91e12754cd98a7aded4784585788a`
 - `tests/compatibility/go/go.sum`: `f532c4b3299bb9fe375c97da938f50e728a123fc`
 - `tests/compatibility/node/package.json`: `1707407145cdb431c81ca6931a415ad1d24abc0e`
