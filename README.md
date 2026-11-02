@@ -296,6 +296,7 @@ Access Surface, operations, credential scheme, and capability evidence.
 | Anthropic | Native Messages JSON/SSE, `count_tokens`, tools, and signed Thinking round-trip; no embeddings |
 | Azure OpenAI | Deployment-scoped Chat/stream/embeddings with an explicitly pinned API version |
 | DeepSeek | OpenAI-compatible Chat/stream with reasoning and cache-tier usage; no embeddings |
+| Volcengine / ModelArk | Pay-as-you-go Chat/stream, deep thinking with encrypted replay, tools, vision, JSON output and upstream capability metadata; [setup and validation](docs/runbooks/volcengine-ark.md) |
 | OpenAI-compatible | Chat/stream/embeddings with explicitly declared optional capabilities |
 | MiniMax | One host and one key across three Profiles: Chat, Stateless Responses (no streaming), and Anthropic Messages |
 | Kimi | One key across the connection group: Chat (the only face reaching all published models) and Anthropic Messages; its Responses Profile is withheld |

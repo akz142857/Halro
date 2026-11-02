@@ -40,6 +40,7 @@ type OutputDelta struct {
 type ContentDelta struct {
 	Kind              ContentKind `json:"kind"`
 	Text              string      `json:"text,omitempty"`
+	EncryptedContent  string      `json:"encrypted_content,omitempty"`
 	ToolIndex         *int        `json:"tool_index,omitempty"`
 	CallID            string      `json:"call_id,omitempty"`
 	Name              string      `json:"name,omitempty"`
@@ -76,6 +77,9 @@ func (event Event) Validate() error {
 		}
 		toolIndexes := map[int]struct{}{}
 		for _, delta := range output.Content {
+			if delta.EncryptedContent != "" && (delta.Kind != ContentReasoning || len(delta.EncryptedContent) > 64<<10) {
+				return errors.New("encrypted reasoning delta is misplaced or exceeds its size limit")
+			}
 			switch delta.Kind {
 			case ContentText, ContentReasoning:
 				if delta.ToolIndex != nil || delta.CallID != "" || delta.Name != "" || delta.ArgumentsFragment != "" {

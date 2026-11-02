@@ -39,6 +39,7 @@ type Message struct {
 	Role             string          `json:"role"`
 	Content          json.RawMessage `json:"content,omitempty"`
 	ReasoningContent string          `json:"reasoning_content,omitempty"`
+	EncryptedContent string          `json:"encrypted_content,omitempty"`
 	Name             string          `json:"name,omitempty"`
 	ToolCallID       string          `json:"tool_call_id,omitempty"`
 	ToolCalls        []ToolCall      `json:"tool_calls,omitempty"`
@@ -80,6 +81,9 @@ func (r ChatCompletionRequest) Validate() error {
 		problems = append(problems, errors.New("messages must not be empty"))
 	}
 	for index, message := range r.Messages {
+		if message.EncryptedContent != "" && (message.Role != "assistant" || len(message.EncryptedContent) > 64<<10) {
+			problems = append(problems, fmt.Errorf("messages[%d].encrypted_content must be bounded assistant reasoning state", index))
+		}
 		switch message.Role {
 		case "system", "developer", "user", "assistant", "tool":
 		default:
@@ -127,7 +131,7 @@ func (r ChatCompletionRequest) Validate() error {
 func (r ChatCompletionRequest) EstimatedInputBytes() int64 {
 	var total int64
 	for _, message := range r.Messages {
-		total += int64(len(message.Role) + len(message.Content) + len(message.ReasoningContent) + len(message.Name) + len(message.ToolCallID))
+		total += int64(len(message.Role) + len(message.Content) + len(message.ReasoningContent) + len(message.EncryptedContent) + len(message.Name) + len(message.ToolCallID))
 		for _, call := range message.ToolCalls {
 			total += int64(len(call.ID) + len(call.Type) + len(call.Function.Name) + len(call.Function.Arguments))
 		}

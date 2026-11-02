@@ -93,15 +93,20 @@ type Citation struct {
 }
 
 // Content is the smallest portable content vocabulary needed by the current
-// Chat Completions profiles. Provider-native payloads are never stored here.
+// Chat Completions profiles, including opaque authenticated reasoning state.
+// Provider-native JSON payloads are never stored here.
 type Content struct {
-	Kind      ContentKind `json:"kind"`
-	Text      string      `json:"text,omitempty"`
-	URL       string      `json:"url,omitempty"`
-	Detail    string      `json:"detail,omitempty"`
-	CallID    string      `json:"call_id,omitempty"`
-	Name      string      `json:"name,omitempty"`
-	Arguments string      `json:"arguments,omitempty"`
+	Kind ContentKind `json:"kind"`
+	Text string      `json:"text,omitempty"`
+	// EncryptedContent is opaque, upstream-authenticated reasoning state. It is
+	// carried byte-for-byte only on reasoning parts, never interpreted as text.
+	// Routing admits it only on profiles with an explicit replay contract.
+	EncryptedContent string `json:"encrypted_content,omitempty"`
+	URL              string `json:"url,omitempty"`
+	Detail           string `json:"detail,omitempty"`
+	CallID           string `json:"call_id,omitempty"`
+	Name             string `json:"name,omitempty"`
+	Arguments        string `json:"arguments,omitempty"`
 	// ToolError marks a tool result the caller reported as failed. It is only
 	// meaningful on ContentToolResult. Anthropic models it (tool_result.is_error)
 	// and the OpenAI wire does not, so a profile that cannot carry it declares the
@@ -132,6 +137,9 @@ func (message Message) Validate() error {
 	reasoningParts := 0
 	toolResultCallID := ""
 	for _, part := range message.Content {
+		if part.EncryptedContent != "" && (part.Kind != ContentReasoning || len(part.EncryptedContent) > 64<<10) {
+			return errors.New("encrypted reasoning state is misplaced or exceeds its size limit")
+		}
 		switch part.Kind {
 		case ContentText:
 			if part.URL != "" || part.Detail != "" || part.CallID != "" || part.Name != "" || part.Arguments != "" || part.Status != "" {

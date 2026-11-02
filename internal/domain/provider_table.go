@@ -268,6 +268,13 @@ var profileTable = []profileRow{
 		Defaults: openAICompatibleSet, Ceiling: openAICompatibleSet,
 	},
 	{
+		ID: ProfileVolcengineChat, Type: ProviderVolcengine,
+		ConnectionGroup: "volcengine-ark-api",
+		Surface:         SurfaceVolcengine, Scheme: CredentialBearerStatic,
+		BaseURLTemplate: "https://ark.cn-beijing.volces.com/api/v3",
+		Defaults:        volcengineChatSet, Ceiling: volcengineChatSet,
+	},
+	{
 		ID: ProfileBigModelCNChatEmbeddings, Type: ProviderBigModel,
 		ConnectionGroup: "bigmodel-cn-general",
 		Surface:         SurfaceBigModelCNGeneral, Scheme: CredentialBigModelAPIKey,
@@ -640,6 +647,13 @@ var (
 		Chat: true, Streaming: true, Tools: true, JSONObject: true,
 		Reasoning: true, StreamUsage: true,
 	}
+	// Ark embeddings use a different wire shape. Reasoning is carried through
+	// the portable reasoning part, including opaque authenticated replay state.
+	// These are connection capabilities, never claims about an unknown model.
+	volcengineChatSet = ProviderCapabilities{
+		Chat: true, Streaming: true, Tools: true, Vision: true, FetchedImage: true,
+		JSONObject: true, StructuredOutputs: true, StreamUsage: true, Reasoning: true,
+	}
 	bigModelCNSet = ProviderCapabilities{
 		Chat: true, Streaming: true, Embeddings: true, Tools: true,
 		JSONObject: true, StreamUsage: true,
@@ -912,6 +926,7 @@ var providerTypeTable = []providerTypeRow{
 	}},
 	{ProviderAzureOpenAI, ProfileAzureChatEmbeddings, openAIChatSet},
 	{ProviderDeepSeek, ProfileDeepSeekChat, deepSeekSet},
+	{ProviderVolcengine, ProfileVolcengineChat, volcengineChatSet},
 	{ProviderBigModel, ProfileBigModelCNChatEmbeddings, bigModelCNSet},
 	{ProviderOpenAICompatible, ProfileOpenAICompatible, openAICompatibleSet},
 	{ProviderGemini, ProfileGeminiText, geminiTextSet},

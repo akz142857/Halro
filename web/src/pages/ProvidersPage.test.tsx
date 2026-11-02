@@ -43,6 +43,23 @@ describe("ProvidersPage profile and credential bindings", () => {
     window.history.replaceState({}, "", "/admin/providers");
   });
 
+  it("saves an Ark API key with the pay-as-you-go endpoint and product identity", async () => {
+    const create = vi.spyOn(api, "createCredential").mockResolvedValue({} as never);
+    renderPage();
+    fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+    fireEvent.click(screen.getByRole("button", { name: "＋ 凭据" }));
+    fireEvent.change(screen.getByLabelText("凭据名称"), { target: { value: "Ark" } });
+    fireEvent.change(screen.getByLabelText("服务商类型"), { target: { value: "volcengine" } });
+    expect(screen.getByRole("option", { name: "火山引擎 / 火山方舟" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/^服务商密钥/), { target: { value: "ark-test-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "加密保存" }));
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create.mock.calls[0][0]).toMatchObject({
+      type: "volcengine", access_surface: "volcengine-ark-api", scheme: "bearer.static",
+      base_url: "https://ark.cn-beijing.volces.com/api/v3",
+    });
+  });
+
   it("uses the tabs as the only repeated resource headings", async () => {
     renderPage();
     expect(await screen.findByRole("tab", { name: "服务商 0" })).toBeVisible();

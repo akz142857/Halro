@@ -1255,11 +1255,14 @@ func (s *Service) Chat(
 // It is not a way around Chat's routing or its capability filtering: the request
 // is decoded and routed exactly as Chat decodes and routes it, which is what
 // keeps a portable Messages request confined to what the Chat wire can say.
+// The optional source retains the facade identity so routing also knows which
+// output renderer must carry the eventual answer, including opaque reasoning.
 func (s *Service) chatWithRender(
 	ctx context.Context,
 	plaintextKey string,
 	request openaiapi.ChatCompletionRequest,
 	render func(semantic.GenerateResult) error,
+	source ...semantic.Source,
 ) error {
 	if request.Stream {
 		return gatewayError("unsupported_feature", "streaming is not available yet", 400, nil)
@@ -1267,6 +1270,9 @@ func (s *Service) chatWithRender(
 	canonical, err := openaiwire.DecodeGenerate(request)
 	if err != nil {
 		return gatewayError("invalid_request_error", "request cannot be represented safely", 400, err)
+	}
+	if len(source) > 0 {
+		canonical.Source = source[0]
 	}
 	_, err = s.generate(ctx, plaintextKey, request.Model, canonical, render)
 	return err
@@ -1423,7 +1429,7 @@ func (s *Service) executeGenerate(
 				abortErr := attempt.abort("resource_store_unavailable")
 				return semantic.GenerateResult{}, errors.Join(markErr, abortErr)
 			}
-			semanticResponse, providerErr := generation.Generate(ctx, provider.GenerateCall{RequestID: requestID, ProviderModel: target.ProviderModel, Request: canonical})
+			semanticResponse, providerErr := generation.Generate(ctx, provider.GenerateCall{RequestID: requestID, ProviderModel: target.ProviderModel, CanonicalModelRef: target.CanonicalModelRef, Request: canonical})
 			settlement := settlementForResult(
 				semanticResponse, providerErr, inputTokens, outputTokens, attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD,
 			)
@@ -1643,7 +1649,7 @@ func (s *Service) Messages(
 		}
 		message = rendered
 		return nil
-	}); err != nil {
+	}, canonical.Source); err != nil {
 		return anthropicapi.Message{}, err
 	}
 	return message, nil
@@ -1695,7 +1701,7 @@ func (s *Service) MessagesStream(
 			}
 		}
 		return nil
-	})
+	}, canonical.Source)
 	if err != nil {
 		if emitted {
 			return &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "Anthropic stream failed after payload", Cause: err}
@@ -2364,6 +2370,7 @@ func (s *Service) chatStream(
 	request openaiapi.ChatCompletionRequest,
 	emit func(openaiapi.ChatCompletionResponse) error,
 	complete func() error,
+	source ...semantic.Source,
 ) error {
 	if !request.Stream {
 		return gatewayError("invalid_request_error", "stream must be true", 400, nil)
@@ -2371,6 +2378,9 @@ func (s *Service) chatStream(
 	canonical, err := openaiwire.DecodeGenerate(request)
 	if err != nil {
 		return gatewayError("invalid_request_error", "request cannot be represented safely", 400, err)
+	}
+	if len(source) > 0 {
+		canonical.Source = source[0]
 	}
 	return s.generateStream(ctx, plaintextKey, request.Model, canonical, emit, complete)
 }
@@ -2523,7 +2533,7 @@ func (s *Service) generateStream(
 				return errors.Join(markErr, abortErr)
 			}
 			semanticUsage, providerErr := generation.GenerateStream(ctx, provider.GenerateCall{
-				RequestID: requestID, ProviderModel: target.ProviderModel, Request: canonical,
+				RequestID: requestID, ProviderModel: target.ProviderModel, CanonicalModelRef: target.CanonicalModelRef, Request: canonical,
 			}, func(event semantic.Event) error {
 				if validationErr := semanticStream.Accept(event); validationErr != nil {
 					return validationErr
@@ -3028,7 +3038,7 @@ func unservableReasons(candidates []provider.Target, request semantic.GenerateRe
 	reasons := newReasonSet()
 	for _, target := range candidates {
 		reasons.addAll(missingCapabilities([]provider.Target{target}, request.Requirements))
-		reasons.addAll(compatibility.UnsupportedGenerateFieldsForTarget(target.ProfileID, target.ProviderModel, request))
+		reasons.addAll(compatibility.UnsupportedGenerateFieldsForTarget(target.ProfileID, target.CapabilityModel(), request))
 		if targetReasoningIsUnrenderable(target, request) {
 			// Not a capability key and not a request field, because it is neither:
 			// the request asked for nothing and the target is not lacking
@@ -3123,7 +3133,7 @@ func filterSemanticCapabilities(targets []provider.Target, requirements semantic
 
 func filterGenerateProfileCompatibility(targets []provider.Target, request semantic.GenerateRequest) []provider.Target {
 	return slices.DeleteFunc(slices.Clone(targets), func(target provider.Target) bool {
-		return len(compatibility.UnsupportedGenerateFieldsForTarget(target.ProfileID, target.ProviderModel, request)) > 0
+		return len(compatibility.UnsupportedGenerateFieldsForTarget(target.ProfileID, target.CapabilityModel(), request)) > 0
 	})
 }
 

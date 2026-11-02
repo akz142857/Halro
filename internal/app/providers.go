@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/akz142857/Halro/internal/compatibility"
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/modelcatalog"
@@ -153,6 +154,13 @@ func (r *Runtime) reconcileProviderRegistryWithCatalogState(ctx context.Context)
 // what each endpoint can render is a build-time one over the catalogue rather
 // than a runtime assertion.
 func reasonsUnasked(catalog *modelcatalog.Catalog, instance domain.ProviderInstance, deployment domain.Deployment) bool {
+	if instance.Type == domain.ProviderVolcengine {
+		model := deployment.ProviderModel
+		if deployment.ModelCapabilitySnapshot.CanonicalModelRef != "" {
+			model = deployment.ModelCapabilitySnapshot.CanonicalModelRef
+		}
+		return compatibility.VolcengineReasonsUnasked(model)
+	}
 	if catalog == nil {
 		return false
 	}
@@ -780,6 +788,7 @@ func loadProviderRegistryWithCatalogAndEgress(
 			BindingID:                   bindingID,
 			PublicModel:                 route.PublicModel,
 			ProviderModel:               providerModel,
+			CanonicalModelRef:           deploymentByID[deploymentID].ModelCapabilitySnapshot.CanonicalModelRef,
 			AccessSurface:               deploymentByID[deploymentID].AccessSurface,
 			ProfileID:                   deploymentByID[deploymentID].ProfileID,
 			AccountRegionID:             accountRegion,

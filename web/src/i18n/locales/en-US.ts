@@ -1403,7 +1403,7 @@ save: "Save and hot-reload", saveWithDeclaration: "Declare and save",  saveDisab
     editCapabilities: "Edit capabilities",
     lastTest: "Last manual test",
     lastUpdated: "Last updated",
-    accessSurfaces: { "openai-api": "OpenAI API", "azure-openai": "Azure OpenAI API", "deepseek-api": "DeepSeek API", "openai-compatible": "OpenAI-compatible API", "gemini-generate-content": "Gemini API", "anthropic-api": "Anthropic API", "bedrock-runtime": "Bedrock Runtime", "bedrock-agent-runtime": "Bedrock Agent Runtime", "bedrock-mantle": "Bedrock Mantle", "minimax-api": "MiniMax API", "minimax-cn-subscription-access": "MiniMax Subscription Access (mainland China)", "minimax-global-subscription-access": "MiniMax Subscription Access (international)", "kimi-api": "Kimi API", "kimi-code": "Kimi Code subscription API", "bigmodel-cn-general-api": "BigModel general API (mainland China)", "bigmodel-global-general-api": "Z.AI general API (international)", "bigmodel-cn-coding-api": "GLM Coding Plan API (mainland China)", "bigmodel-global-coding-api": "GLM Coding Plan API (international)" },
+    accessSurfaces: { "openai-api": "OpenAI API", "azure-openai": "Azure OpenAI API", "volcengine-ark-api": "ModelArk pay-as-you-go API", "deepseek-api": "DeepSeek API", "openai-compatible": "OpenAI-compatible API", "gemini-generate-content": "Gemini API", "anthropic-api": "Anthropic API", "bedrock-runtime": "Bedrock Runtime", "bedrock-agent-runtime": "Bedrock Agent Runtime", "bedrock-mantle": "Bedrock Mantle", "minimax-api": "MiniMax API", "minimax-cn-subscription-access": "MiniMax Subscription Access (mainland China)", "minimax-global-subscription-access": "MiniMax Subscription Access (international)", "kimi-api": "Kimi API", "kimi-code": "Kimi Code subscription API", "bigmodel-cn-general-api": "BigModel general API (mainland China)", "bigmodel-global-general-api": "Z.AI general API (international)", "bigmodel-cn-coding-api": "GLM Coding Plan API (mainland China)", "bigmodel-global-coding-api": "GLM Coding Plan API (international)" },
     compatibleInterface: "Compatible interface",
     activeRoutesEnabled: "Enabled routes: {{count}}",
     uniformEvidence: "All {{evidence}}",
@@ -1536,7 +1536,7 @@ save: "Save and hot-reload", saveWithDeclaration: "Declare and save",  saveDisab
   providers: {
     notifyCreated: "Provider created and hot loaded", notifyUpdated: "Provider saved", notifyDeleted: "Provider deleted", notifyEnabled: "Provider enabled", notifyDisabled: "Provider disabled",
     notifyCredentialSaved: "Credential saved encrypted", notifyCredentialRotated: "Credential rotated", notifyCredentialDeleted: "Credential deleted",
-    types: { openai: "OpenAI", anthropic: "Anthropic", azure_openai: "Azure OpenAI", deepseek: "DeepSeek", gemini: "Gemini", bedrock: "AWS Bedrock", minimax: "MiniMax", kimi: "Kimi", bigmodel: "BigModel / Z.AI", openai_compatible: "OpenAI-compatible" },
+    types: { openai: "OpenAI", anthropic: "Anthropic", azure_openai: "Azure OpenAI", deepseek: "DeepSeek", volcengine: "Volcengine / ModelArk", gemini: "Gemini", bedrock: "AWS Bedrock", minimax: "MiniMax", kimi: "Kimi", bigmodel: "BigModel / Z.AI", openai_compatible: "OpenAI-compatible" },
     // This block answers the operator's question — "why did my request not go
     // to this upstream" — rather than naming what the gate did internally.
     suspensions: {
@@ -1613,6 +1613,7 @@ save: "Save and hot-reload", saveWithDeclaration: "Declare and save",  saveDisab
       "openai.api-platform": "OpenAI API platform",
       "anthropic.console-api": "Anthropic Console API",
       "azure-openai.resource": "Azure OpenAI resource",
+      "volcengine.ark-api": "ModelArk pay-as-you-go API",
       "deepseek.api-platform": "DeepSeek API platform",
       "google.gemini-api": "Gemini API",
       "aws.bedrock-mantle": "Amazon Bedrock Mantle",

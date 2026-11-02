@@ -218,9 +218,9 @@ func TestAdminProviderProfilesServesTheConstraintsRoutingApplies(t *testing.T) {
 		t.Errorf("the Mantle constraints were not served: %#v", mantle)
 	}
 
-	// A profile that declares nothing says nothing, rather than sending rows an
-	// operator has to read to learn there is no rule.
-	if declared := constraints[domain.ProfileOpenAIChatEmbeddings]; len(declared) > 1 {
+	// OpenAI now states two real boundaries: portable Anthropic projection,
+	// and the Ark-only encrypted reasoning replay extension on Chat.
+	if declared := constraints[domain.ProfileOpenAIChatEmbeddings]; len(declared) != 2 {
 		t.Errorf("the OpenAI chat profile served %d constraint rows", len(declared))
 	}
 }

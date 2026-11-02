@@ -100,6 +100,16 @@ func bedrockSigV4(ctx adapterBuildContext) (provider.Authorizer, error) {
 }
 
 var adapterBuilders = map[domain.ProviderProfileID]adapterBuilder{
+	domain.ProfileVolcengineChat: {
+		authorize: staticHeader("Authorization", "Bearer ", "api-key", "x-api-key"),
+		build: func(ctx adapterBuildContext, authorizer provider.Authorizer) (provider.Adapter, error) {
+			return openaiprovider.NewWithOptions(openaiprovider.Options{
+				Endpoint: ctx.Endpoint, Authorizer: authorizer, Client: ctx.Client,
+				ProviderType: string(domain.ProviderVolcengine), ProfileID: ctx.Binding.ProfileID,
+				Capabilities: ctx.Binding.Capabilities, DisableTargetDescribe: true,
+			})
+		},
+	},
 	// OpenAI, its compatibility servers, and DeepSeek share one adapter and one
 	// credential shape. The provider type is carried through because the adapter
 	// reports it and, for DeepSeek, switches to a smaller request body.

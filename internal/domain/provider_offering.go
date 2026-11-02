@@ -65,6 +65,7 @@ const (
 	OfferingAnthropicAPI     ProviderOfferingID = "anthropic.console-api"
 	OfferingAzureOpenAI      ProviderOfferingID = "azure-openai.resource"
 	OfferingDeepSeekAPI      ProviderOfferingID = "deepseek.api-platform"
+	OfferingVolcengineArk    ProviderOfferingID = "volcengine.ark-api"
 	OfferingGeminiAPI        ProviderOfferingID = "google.gemini-api"
 	OfferingBedrockRuntime   ProviderOfferingID = "aws.bedrock-runtime"
 	OfferingBedrockMantle    ProviderOfferingID = "aws.bedrock-mantle"
@@ -236,6 +237,7 @@ var providerOfferingTable = []providerOfferingRow{
 	{ID: OfferingAnthropicAPI, Type: ProviderAnthropic, Kind: OfferingKindMeteredAPI},
 	{ID: OfferingAzureOpenAI, Type: ProviderAzureOpenAI, Kind: OfferingKindMeteredAPI},
 	{ID: OfferingDeepSeekAPI, Type: ProviderDeepSeek, Kind: OfferingKindMeteredAPI},
+	{ID: OfferingVolcengineArk, Type: ProviderVolcengine, Kind: OfferingKindMeteredAPI},
 	{ID: OfferingGeminiAPI, Type: ProviderGemini, Kind: OfferingKindMeteredAPI},
 	{ID: OfferingBedrockRuntime, Type: ProviderBedrock, Kind: OfferingKindMeteredAPI},
 	{ID: OfferingBedrockMantle, Type: ProviderBedrock, Kind: OfferingKindMeteredAPI},
@@ -298,6 +300,7 @@ var surfaceTable = []surfaceRow{
 	},
 	{Surface: SurfaceAzureOpenAI, Type: ProviderAzureOpenAI, Offering: OfferingAzureOpenAI, RegionScope: RegionScopeNone},
 	{Surface: SurfaceDeepSeek, Type: ProviderDeepSeek, Offering: OfferingDeepSeekAPI, RegionScope: RegionScopeNone},
+	{Surface: SurfaceVolcengine, Type: ProviderVolcengine, Offering: OfferingVolcengineArk, RegionScope: RegionScopeNone},
 	{Surface: SurfaceOpenAICompatible, Type: ProviderOpenAICompatible, Offering: OfferingOpenAICompatible, RegionScope: RegionScopeNone},
 	{Surface: SurfaceGemini, Type: ProviderGemini, Offering: OfferingGeminiAPI, RegionScope: RegionScopeNone},
 	// Runtime and Agent Runtime are two API surfaces of one purchased product,

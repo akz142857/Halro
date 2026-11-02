@@ -174,6 +174,7 @@ func expectedAdapterFamily(profileID domain.ProviderProfileID) string {
 		domain.ProfileOpenAIMediaResources,
 		domain.ProfileAzureChatEmbeddings,
 		domain.ProfileDeepSeekChat,
+		domain.ProfileVolcengineChat,
 		domain.ProfileOpenAICompatible,
 		domain.ProfileBigModelCNChatEmbeddings,
 		domain.ProfileBigModelGlobalChat,

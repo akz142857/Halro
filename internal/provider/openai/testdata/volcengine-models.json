@@ -1,0 +1,148 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "created": 1747668176,
+      "domain": "Embedding",
+      "features": {
+        "structured_outputs": {
+          "json_object": false,
+          "json_schema": false
+        }
+      },
+      "id": "doubao-embedding-large-text-250515",
+      "modalities": {
+        "input_modalities": [
+          "text"
+        ]
+      },
+      "name": "doubao-embedding-large",
+      "object": "model",
+      "status": "Retiring",
+      "task_type": [
+        "TextEmbedding"
+      ],
+      "token_limits": {
+        "context_window": 131072,
+        "max_input_token_length": 131072
+      },
+      "version": "text-250515"
+    },
+    {
+      "created": 1760183257,
+      "domain": "VLM",
+      "features": {
+        "batch": {
+          "batch_chat": false,
+          "batch_job": false
+        },
+        "cache": {
+          "prefix_cache": false,
+          "session_cache": false
+        },
+        "structured_outputs": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "tools": {
+          "function_calling": true
+        }
+      },
+      "id": "doubao-seed-1-6-251015",
+      "modalities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "output_modalities": [
+          "text"
+        ]
+      },
+      "name": "doubao-seed-1-6",
+      "object": "model",
+      "status": "Shutdown",
+      "task_type": [
+        "VisualQuestionAnswering",
+        "TextGeneration"
+      ],
+      "token_limits": {
+        "context_window": 262144,
+        "max_input_token_length": 229376,
+        "max_output_token_length": 65536,
+        "max_reasoning_token_length": 32768
+      },
+      "version": "251015"
+    },
+    {
+      "created": 1778037357,
+      "domain": "VLM",
+      "features": {
+        "structured_outputs": {
+          "json_object": true,
+          "json_schema": true
+        },
+        "tools": {
+          "function_calling": true
+        }
+      },
+      "id": "doubao-seed-2-0-mini-260428",
+      "modalities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "output_modalities": [
+          "text"
+        ]
+      },
+      "name": "doubao-seed-2-0-mini",
+      "object": "model",
+      "task_type": [
+        "VisualQuestionAnswering",
+        "TextGeneration",
+        "SpeechToText"
+      ],
+      "token_limits": {
+        "context_window": 262144,
+        "max_input_token_length": 229376,
+        "max_output_token_length": 131072,
+        "max_reasoning_token_length": 131072
+      },
+      "version": "260428"
+    },
+    {
+      "created": 1782822149,
+      "domain": "VideoGeneration",
+      "features": {
+        "structured_outputs": {
+          "json_object": false,
+          "json_schema": false
+        }
+      },
+      "id": "doubao-seedance-2-5-260628",
+      "modalities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "output_modalities": [
+          "video"
+        ]
+      },
+      "name": "doubao-seedance-2-5",
+      "object": "model",
+      "task_type": [
+        "VideoEditing",
+        "VideoExtension",
+        "MultimodalToVideo"
+      ],
+      "token_limits": {},
+      "version": "260628"
+    }
+  ]
+}

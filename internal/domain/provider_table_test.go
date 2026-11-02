@@ -58,7 +58,8 @@ func TestProfileConnectionGroupsAreStable(t *testing.T) {
 	want := map[ProviderProfileID]ProviderConnectionGroupID{
 		ProfileOpenAIChatEmbeddings: "openai-api", ProfileOpenAIResponses: "openai-api",
 		ProfileAnthropicMessages: "anthropic-api", ProfileAzureChatEmbeddings: "azure-openai",
-		ProfileDeepSeekChat: "deepseek-api", ProfileOpenAICompatible: "openai-compatible",
+		ProfileVolcengineChat: "volcengine-ark-api",
+		ProfileDeepSeekChat:   "deepseek-api", ProfileOpenAICompatible: "openai-compatible",
 		ProfileBigModelCNChatEmbeddings: "bigmodel-cn-general", ProfileBigModelGlobalChat: "bigmodel-global-general",
 		ProfileBigModelCNCodingChat: "bigmodel-cn-coding", ProfileBigModelGlobalCodingChat: "bigmodel-global-coding",
 		ProfileGeminiText: "gemini-text", ProfileBedrockConverseText: "bedrock-runtime",
@@ -101,6 +102,7 @@ func TestSurfaceOfferingAndRegionScopeAreStable(t *testing.T) {
 	want := map[AccessSurface]stableIdentity{
 		SurfaceOpenAI: {OfferingOpenAIAPI, RegionScopeNone, RegionNone, ""}, SurfaceAnthropic: {OfferingAnthropicAPI, RegionScopeNone, RegionNone, ""},
 		SurfaceAzureOpenAI: {OfferingAzureOpenAI, RegionScopeNone, RegionNone, ""}, SurfaceDeepSeek: {OfferingDeepSeekAPI, RegionScopeNone, RegionNone, ""},
+		SurfaceVolcengine:       {OfferingVolcengineArk, RegionScopeNone, RegionNone, ""},
 		SurfaceOpenAICompatible: {OfferingOpenAICompatible, RegionScopeNone, RegionNone, ""}, SurfaceGemini: {OfferingGeminiAPI, RegionScopeNone, RegionNone, ""},
 		SurfaceBedrockRuntime: {OfferingBedrockRuntime, RegionScopeNone, RegionNone, ""}, SurfaceBedrockAgentRuntime: {OfferingBedrockRuntime, RegionScopeNone, RegionNone, ""},
 		SurfaceBedrockMantle:             {OfferingBedrockMantle, RegionScopeNone, RegionNone, ""},
@@ -369,6 +371,7 @@ func TestCapabilityDependenciesAreEnforcedSomewhere(t *testing.T) {
 func TestResolvedEndpointsMatchWhatTheConsoleOffered(t *testing.T) {
 	const region = "us-east-1"
 	want := map[ProviderProfileID]string{
+		ProfileVolcengineChat:                 "https://ark.cn-beijing.volces.com/api/v3",
 		ProfileOpenAIChatEmbeddings:           "https://api.openai.com",
 		ProfileOpenAIMediaResources:           "https://api.openai.com",
 		ProfileAzureChatEmbeddings:            "",

@@ -208,5 +208,9 @@ func portableMessagesRequest(t *testing.T, outputConfig string) (semantic.Genera
 	if err != nil {
 		return semantic.GenerateRequest{}, false
 	}
+	// The projection limits the vocabulary; it must not replace the caller's
+	// endpoint identity. Routing needs that identity to reject an Ark thinking
+	// answer whose encrypted state the Messages renderer cannot return.
+	decoded.Source = canonical.Source
 	return decoded, true
 }

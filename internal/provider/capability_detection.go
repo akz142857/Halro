@@ -215,6 +215,8 @@ func reasoningProbeEffort(profile domain.ProviderProfileID) (string, bool) {
 		// thinking ladder is verified with a real membership key. Do not spend a
 		// capability probe by guessing an OpenAI effort rung in the meantime.
 		return "", false
+	case domain.ProfileVolcengineChat:
+		return shallowestEffort(compatibility.VolcengineEffortLevels), true
 	case domain.ProfileDeepSeekChat:
 		return shallowestEffort(compatibility.DeepSeekEffortLevels), true
 	case domain.ProfileKimiChat:
@@ -250,6 +252,14 @@ func isBigModelChatProfile(profile domain.ProviderProfileID) bool {
 // by exact model. A probe is never useful when Halro cannot encode a depth for
 // that target without rounding it or changing whether thinking runs.
 func reasoningProbeEffortForTarget(profile domain.ProviderProfileID, model string) (string, bool) {
+	if profile == domain.ProfileVolcengineChat {
+		for _, effort := range compatibility.VolcengineEffortLevels {
+			if compatibility.VolcengineReasoningSupported(model, effort) {
+				return effort, true
+			}
+		}
+		return "", false
+	}
 	if !isBigModelChatProfile(profile) {
 		return reasoningProbeEffort(profile)
 	}

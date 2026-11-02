@@ -56,6 +56,15 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		add(request.EndUserRef != "", "user")
 	}, domain.ProfileGeminiText)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
+		add(hasFailedToolResult(request), "messages[].content[].is_error")
+		add(hasDeveloperMessage(request), "messages[].role=developer")
+		add(request.Candidates != nil && *request.Candidates > 1, "n")
+		add(request.EndUserRef != "", "user")
+		add(!VolcengineEffortSupported(request.ReasoningEffort), "reasoning_effort")
+		add(request.Source.ProfileID != "" && request.Source.ProfileID != string(ProfileOpenAIChatCompletions) && request.ReasoningEffort != "" && request.ReasoningEffort != "none", "reasoning_effort")
+		add(request.VisibleOutputTokenLimit != nil && request.CompletionTokenLimit != nil, "max_completion_tokens")
+	}, domain.ProfileVolcengineChat)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
 		add(hasNamedMessage(request), "messages[].name")
 		add(hasFailedToolResult(request), "messages[].content[].is_error")
 		add(request.Candidates != nil && *request.Candidates > 1, "n")
@@ -653,6 +662,7 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 	// negative into a dozen rule sets is a dozen places for the next profile to
 	// be forgotten. The allowlist inverts that — a new profile carries it only by
 	// being named here.
+	add(hasEncryptedReasoning(request) && profileID != domain.ProfileVolcengineChat, "messages[].encrypted_content")
 	add(hasProviderExecutedTool(request) && !slices.Contains(providerExecutedToolProfiles, profileID), "tools[].type")
 	return unsupported
 }
@@ -664,7 +674,9 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 func UnsupportedGenerateFieldsForTarget(profileID domain.ProviderProfileID, providerModel string, request semantic.GenerateRequest) []string {
 	unsupported := UnsupportedGenerateFields(profileID, request)
 	var targetFields []string
-	if profileID == domain.ProfileBigModelCNChatEmbeddings || profileID == domain.ProfileBigModelGlobalChat ||
+	if profileID == domain.ProfileVolcengineChat {
+		targetFields = VolcengineTargetUnsupportedGenerateFields(providerModel, request)
+	} else if profileID == domain.ProfileBigModelCNChatEmbeddings || profileID == domain.ProfileBigModelGlobalChat ||
 		profileID == domain.ProfileBigModelCNCodingChat || profileID == domain.ProfileBigModelGlobalCodingChat {
 		targetFields = BigModelTargetUnsupportedGenerateFields(profileID, providerModel, request)
 	} else {
@@ -817,4 +829,15 @@ func UnsupportedEmbeddingFields(profileID domain.ProviderProfileID, request sema
 		}
 		return unsupported
 	}
+}
+
+func hasEncryptedReasoning(request semantic.GenerateRequest) bool {
+	for _, message := range request.Messages {
+		for _, part := range message.Content {
+			if part.EncryptedContent != "" {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -31,6 +31,7 @@ type Adapter struct {
 	apiVersion   string
 	azure        bool
 	deepSeek     bool
+	volcengine   bool
 	// miniMax turns on two things this adapter does for no other upstream: the
 	// dialect body in encodeChatRequest, and the base_resp guard that catches a
 	// failure MiniMax reports inside a 200.
@@ -161,6 +162,7 @@ func NewWithOptions(options Options) (*Adapter, error) {
 		endpoint: endpoint, authorizer: authorizer, client: client,
 		providerType: options.ProviderType, apiVersion: options.APIVersion,
 		azure: options.Azure, deepSeek: options.ProviderType == string(domain.ProviderDeepSeek),
+		volcengine:          options.ProviderType == string(domain.ProviderVolcengine),
 		miniMax:             options.ProviderType == string(domain.ProviderMiniMax),
 		kimi:                options.ProviderType == string(domain.ProviderKimi) && !options.UseOpenAIChatDialect,
 		kimiCode:            options.KimiCode,
@@ -182,14 +184,24 @@ func NewWithOptions(options Options) (*Adapter, error) {
 // encodeChatRequest turns the OpenAI-shaped call into the bytes this upstream
 // accepts.
 //
-// Only DeepSeek needs a second shape. It reuses this adapter because it speaks
-// the same wire format, but not the same member list: it has no n, seed,
-// parallel_tool_calls, max_completion_tokens or top-level reasoning_effort, it
-// reaches reasoning through `thinking`, and it names the end-user reference
-// user_id. Marshalling the OpenAI struct straight out sent five members it
-// ignores and one under a name it does not read.
-func (a *Adapter) encodeChatRequest(request openaiapi.ChatCompletionRequest, requestID string) ([]byte, error) {
+// Sharing a response protocol does not establish the same request members.
+// Each provider dialect below renders its own accepted subset and rejects
+// controls it cannot preserve before sending a request to the upstream.
+func (a *Adapter) encodeChatRequest(request openaiapi.ChatCompletionRequest, requestID, canonicalModel string) ([]byte, error) {
+	if !a.volcengine {
+		for _, message := range request.Messages {
+			if message.EncryptedContent != "" {
+				return nil, errors.New("encrypted reasoning replay is not supported by this provider profile")
+			}
+		}
+	}
 	switch {
+	case a.volcengine:
+		body, err := compatibility.RenderVolcengineChatRequestForModel(request, canonicalModel)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(body)
 	case a.deepSeek:
 		body, err := compatibility.RenderDeepSeekChatRequest(request)
 		if err != nil {
@@ -346,9 +358,12 @@ func (a *Adapter) ListInvocationTargets(ctx context.Context, query domain.Target
 	if len(payload) > maxResponseBytes {
 		return nil, &provider.Error{Class: provider.ErrorMalformed, Message: "model catalog response is too large"}
 	}
-	catalog, _, err := provider.DecodeOpenAIShapedModelCatalog(payload)
+	catalog, hasData, err := provider.DecodeOpenAIShapedModelCatalog(payload)
 	if err != nil {
 		return nil, &provider.Error{Class: provider.ErrorMalformed, Message: "decode model catalog response", Cause: err}
+	}
+	if a.volcengine && (!hasData || catalog.Data == nil) {
+		return nil, &provider.Error{Class: provider.ErrorMalformed, Message: "Ark model catalog did not return a model list"}
 	}
 	kind := domain.TargetModelID
 	canonicalModelRef := func(id string) string { return id }
@@ -361,6 +376,11 @@ func (a *Adapter) ListInvocationTargets(ctx context.Context, query domain.Target
 		canonicalModelRef = func(string) string { return "" }
 	}
 	models := catalog.InvocationTargets(kind, canonicalModelRef)
+	if a.volcengine {
+		if err := applyVolcengineCatalogLifecycle(payload, models); err != nil {
+			return nil, &provider.Error{Class: provider.ErrorMalformed, Message: "decode Ark model lifecycle", Cause: err}
+		}
+	}
 	now := time.Now().UTC()
 	for index := range models {
 		models[index].FetchedAt = now
@@ -387,6 +407,26 @@ func (a *Adapter) DescribeInvocationTarget(ctx context.Context, target domain.In
 func (a *Adapter) ProbeRequiresModel() bool { return a.azure }
 
 func (a *Adapter) Probe(ctx context.Context, providerModel string) error {
+	if a.volcengine {
+		// Reuse list discovery, including envelope validation. Do not assume an
+		// undocumented /models/{id} route exists, or spend tokens to test a key.
+		items, err := a.ListInvocationTargets(ctx, domain.TargetQuery{})
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(providerModel) == "" {
+			return nil
+		}
+		for _, item := range items {
+			if item.TargetID == strings.TrimSpace(providerModel) {
+				if item.Availability == domain.AvailabilityUnavailable {
+					return &provider.Error{Class: provider.ErrorBadRequest, Message: "Ark invocation target has been shut down"}
+				}
+				return nil
+			}
+		}
+		return &provider.Error{Class: provider.ErrorBadRequest, Message: "Ark invocation target was not found in the upstream list"}
+	}
 	var endpoint url.URL
 	if a.azure {
 		if !validAzureDeployment(providerModel) {
@@ -462,7 +502,7 @@ func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.C
 		requestBody.Model = call.ProviderModel
 	}
 	requestBody.Stream = false
-	encoded, err := a.encodeChatRequest(requestBody, call.RequestID)
+	encoded, err := a.encodeChatRequest(requestBody, call.RequestID, call.CanonicalModelRef)
 	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "encode provider request", Cause: err}
 	}
@@ -819,7 +859,7 @@ func (a *Adapter) ChatStream(
 	} else {
 		requestBody.StreamOptions = nil
 	}
-	encoded, err := a.encodeChatRequest(requestBody, call.RequestID)
+	encoded, err := a.encodeChatRequest(requestBody, call.RequestID, call.CanonicalModelRef)
 	if err != nil {
 		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "encode provider request", Cause: err}
 	}

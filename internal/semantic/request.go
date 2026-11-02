@@ -292,7 +292,7 @@ func (request GenerateRequest) EstimatedInputBytes() int64 {
 			// estimate depend on how many parts a wire form happened to split the
 			// same text into.
 			total += int64(len(part.Text) + len(part.URL) + len(part.Detail) +
-				len(part.CallID) + len(part.Name) + len(part.Arguments))
+				len(part.CallID) + len(part.Name) + len(part.Arguments) + len(part.EncryptedContent))
 		}
 	}
 	for _, tool := range request.Tools {
