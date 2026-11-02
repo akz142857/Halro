@@ -27,7 +27,8 @@
       "parallel_tool_calls",
       "response_format",
       "reasoning_effort",
-      "user"
+      "user",
+      "messages[].encrypted_content"
     ],
     "request_headers": [
       "Authorization",
@@ -40,7 +41,9 @@
       "created",
       "model",
       "choices",
-      "usage"
+      "usage",
+      "choices[].message.encrypted_content",
+      "choices[].delta.encrypted_content"
     ],
     "stream_events": [
       "chat.completion.chunk",
@@ -77,6 +80,7 @@
       "anthropic.messages.2023-06-01",
       "anthropic.subscription.messages.v1",
       "azure-openai.chat-embeddings.v1",
+      "volcengine.ark.chat.v1",
       "deepseek.chat.v1",
       "bigmodel.cn.chat-embeddings.v1",
       "bigmodel.global.chat.v1",
@@ -106,7 +110,13 @@
     "profile_coverage": [
       {
         "profile_id": "openai.chat-embeddings.v1",
-        "status": "compatible"
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "messages[].encrypted_content"
+        ],
+        "declared_transforms": [
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+        ]
       },
       {
         "profile_id": "openai.responses.v1",
@@ -116,12 +126,14 @@
           "n",
           "stop",
           "seed",
-          "reasoning_effort"
+          "reasoning_effort",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "Chat messages are mapped to stateless Responses input items",
           "store=false is always sent upstream",
-          "this profile binds no stream primitive, so a streaming request is routed away rather than refused by field"
+          "this profile binds no stream primitive, so a streaming request is routed away rather than refused by field",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -134,13 +146,15 @@
           "response_format",
           "reasoning_effort",
           "user",
-          "messages[].content[].detail"
+          "messages[].content[].detail",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "temperature, top_p and top_k are checked against the exact Claude model before provider I/O, natively as well as portably: Claude 3 accepts all three, the Claude 4 models up to Opus 4.6, Sonnet 4.6 and Haiku 4.5 accept temperature or top_p but not both, Haiku 5.5 accepts only its stated defaults (temperature 1 or top_p 0.99), and every other Claude model, including one not yet known, has the members refused rather than forwarded into an upstream 400",
           "portable Chat content is mapped to Anthropic Messages blocks",
           "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
-          "response_format and reasoning_effort are declared unsupported at field granularity because support is value-dependent: json_schema maps to output_config.format and the low/medium/high/xhigh/max ladder maps to output_config.effort, while json_object and any effort outside that ladder have no Anthropic representation and are routed away before provider I/O"
+          "response_format and reasoning_effort are declared unsupported at field granularity because support is value-dependent: json_schema maps to output_config.format and the low/medium/high/xhigh/max ladder maps to output_config.effort, while json_object and any effort outside that ladder have no Anthropic representation and are routed away before provider I/O",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -153,18 +167,44 @@
           "response_format",
           "reasoning_effort",
           "user",
-          "messages[].content[].detail"
+          "messages[].content[].detail",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "temperature, top_p and top_k are checked against the exact Claude model before provider I/O, natively as well as portably: Claude 3 accepts all three, the Claude 4 models up to Opus 4.6, Sonnet 4.6 and Haiku 4.5 accept temperature or top_p but not both, Haiku 5.5 accepts only its stated defaults (temperature 1 or top_p 0.99), and every other Claude model, including one not yet known, has the members refused rather than forwarded into an upstream 400",
           "portable Chat content is mapped to Anthropic Messages blocks",
           "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
-          "response_format and reasoning_effort are declared unsupported at field granularity because support is value-dependent: json_schema maps to output_config.format and the low/medium/high/xhigh/max ladder maps to output_config.effort, while json_object and any effort outside that ladder have no Anthropic representation and are routed away before provider I/O"
+          "response_format and reasoning_effort are declared unsupported at field granularity because support is value-dependent: json_schema maps to output_config.format and the low/medium/high/xhigh/max ladder maps to output_config.effort, while json_object and any effort outside that ladder have no Anthropic representation and are routed away before provider I/O",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
         "profile_id": "azure-openai.chat-embeddings.v1",
-        "status": "compatible"
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "messages[].encrypted_content"
+        ],
+        "declared_transforms": [
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+        ]
+      },
+      {
+        "profile_id": "volcengine.ark.chat.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "n",
+          "user",
+          "reasoning_effort",
+          "max_tokens",
+          "max_completion_tokens"
+        ],
+        "declared_transforms": [
+          "Ark pay-as-you-go Chat is explicitly rendered on /api/v3/chat/completions",
+          "n=1 is omitted and larger candidate counts are refused",
+          "reasoning effort selects Ark thinking and is checked against the exact model; encrypted reasoning state is preserved byte-for-byte",
+          "two simultaneous output limits are refused rather than allowing max_completion_tokens to override max_tokens",
+          "DeepSeek V4.1 counts reasoning inside max_tokens, so an answer-only bound with thinking enabled is refused; max_completion_tokens preserves a total budget"
+        ]
       },
       {
         "profile_id": "deepseek.chat.v1",
@@ -175,14 +215,16 @@
           "max_completion_tokens",
           "parallel_tool_calls",
           "response_format",
-          "reasoning_effort"
+          "reasoning_effort",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "DeepSeek speaks this wire format but accepts a smaller member list, so the fields it has no place for are rejected before provider I/O rather than sent and ignored",
           "user is carried as DeepSeek's user_id",
           "reasoning_effort and response_format are declared unsupported at field granularity because support is value-dependent: none maps to thinking.type=disabled and the low and high rungs map to thinking.reasoning_effort with thinking enabled, while minimal, medium and xhigh have no DeepSeek rung; json_object maps to response_format and json_schema has no DeepSeek counterpart",
           "max_completion_tokens is value-dependent too: it counts reasoning tokens and DeepSeek's max_tokens does not, so it is carried as max_tokens on a request with thinking off and rejected before provider I/O on one with thinking on, or on one that already carries max_tokens",
-          "n and parallel_tool_calls are value-dependent in the same way: n=1 and parallel_tool_calls=true are what omitting the member already means, and only n\u003e1 and a request to run tools one at a time are rejected"
+          "n and parallel_tool_calls are value-dependent in the same way: n=1 and parallel_tool_calls=true are what omitting the member already means, and only n\u003e1 and a request to run tools one at a time are rejected",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -198,7 +240,8 @@
           "stop",
           "tool_choice",
           "user",
-          "messages[].content[].detail"
+          "messages[].content[].detail",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "BigModel's smaller Chat request is rendered explicitly; OpenAI-only members are never forwarded",
@@ -207,7 +250,8 @@
           "function tools are carried up to the documented limit of 128",
           "json_object is preserved while json_schema is rejected",
           "stream usage is returned by the final provider chunk without sending stream_options",
-          "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O"
+          "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -223,7 +267,8 @@
           "stop",
           "tool_choice",
           "user",
-          "messages[].content[].detail"
+          "messages[].content[].detail",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "the GLM Coding Plan uses the same explicitly rendered BigModel Chat dialect on its own /api/coding/paas/v4 path and its own subscription key",
@@ -233,7 +278,8 @@
           "function tools are carried up to the documented limit of 128",
           "json_object is preserved while json_schema is rejected",
           "stream usage is returned by the final provider chunk without sending stream_options",
-          "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O"
+          "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -249,7 +295,8 @@
           "stop",
           "tool_choice",
           "user",
-          "messages[].content[].detail"
+          "messages[].content[].detail",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "the international GLM Coding Plan uses the documented Z.AI /api/coding/paas/v4 path and the same explicitly rendered BigModel Chat dialect",
@@ -258,7 +305,8 @@
           "function tools are carried up to the documented limit of 128",
           "json_object and json_schema are both routed away until the international Coding endpoint is measured",
           "streaming is declared from the official coding-agent contract, but stream usage accounting remains unknown until a subscription response is captured",
-          "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O"
+          "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -274,7 +322,8 @@
           "stop",
           "tool_choice",
           "user",
-          "messages[].content[].detail"
+          "messages[].content[].detail",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "Z.AI uses the same explicitly rendered BigModel Chat dialect on an isolated global surface",
@@ -283,12 +332,19 @@
           "function tools are carried up to the documented limit of 128",
           "json_object is preserved while json_schema is rejected",
           "stream usage is returned by the final provider chunk without sending stream_options",
-          "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O"
+          "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
         "profile_id": "openai-compatible.chat-embeddings.v1",
-        "status": "compatible"
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "messages[].encrypted_content"
+        ],
+        "declared_transforms": [
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+        ]
       },
       {
         "profile_id": "gemini.generate-content.text.v1beta",
@@ -301,10 +357,12 @@
           "parallel_tool_calls",
           "response_format",
           "reasoning_effort",
-          "user"
+          "user",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
-          "developer messages are merged into Gemini system_instruction"
+          "developer messages are merged into Gemini system_instruction",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -319,19 +377,33 @@
           "parallel_tool_calls",
           "response_format",
           "reasoning_effort",
-          "user"
+          "user",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
-          "Bedrock stop reasons are normalized to OpenAI finish reasons"
+          "Bedrock stop reasons are normalized to OpenAI finish reasons",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
         "profile_id": "bedrock.mantle.chat.v1",
-        "status": "compatible"
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "messages[].encrypted_content"
+        ],
+        "declared_transforms": [
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+        ]
       },
       {
         "profile_id": "bedrock.mantle.openai.chat.v1",
-        "status": "compatible"
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "messages[].encrypted_content"
+        ],
+        "declared_transforms": [
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+        ]
       },
       {
         "profile_id": "bedrock.mantle.responses.v1",
@@ -342,12 +414,14 @@
           "stop",
           "seed",
           "tools",
-          "reasoning_effort"
+          "reasoning_effort",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "Chat messages are mapped to stateless Responses input items",
           "store=false is always sent upstream",
-          "streaming requests with tools are rejected before provider I/O"
+          "streaming requests with tools are rejected before provider I/O",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -359,12 +433,14 @@
           "stop",
           "seed",
           "tools",
-          "reasoning_effort"
+          "reasoning_effort",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "Chat messages are mapped to stateless Responses input items",
           "store=false is always sent upstream",
-          "streaming requests with tools are rejected before provider I/O"
+          "streaming requests with tools are rejected before provider I/O",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -377,13 +453,15 @@
           "response_format",
           "reasoning_effort",
           "user",
-          "messages[].content[].detail"
+          "messages[].content[].detail",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "temperature, top_p and top_k are checked against the exact Claude model before provider I/O, natively as well as portably: Claude 3 accepts all three, the Claude 4 models up to Opus 4.6, Sonnet 4.6 and Haiku 4.5 accept temperature or top_p but not both, Haiku 5.5 accepts only its stated defaults (temperature 1 or top_p 0.99), and every other Claude model, including one not yet known, has the members refused rather than forwarded into an upstream 400",
           "portable Chat content is mapped to Bedrock Mantle Anthropic Messages blocks",
           "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
-          "Anthropic states that only base64-encoded image sources are available on Amazon Bedrock, so an image_url naming an address to fetch is rejected before provider I/O while a data URL is carried as a base64 source"
+          "Anthropic states that only base64-encoded image sources are available on Amazon Bedrock, so an image_url naming an address to fetch is rejected before provider I/O while a data URL is carried as a base64 source",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -397,14 +475,16 @@
           "response_format",
           "reasoning_effort",
           "user",
-          "messages[].content[].detail"
+          "messages[].content[].detail",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "portable Chat content is mapped to MiniMax's Anthropic Messages blocks",
           "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
           "reasoning_effort is unsupported at any value because MiniMax's reasoning switch is the thinking member and it accepts no output_config; a request that asks for no depth still reaches MiniMax with thinking disabled, because the portable mapper emits that member on its own and MiniMax spells it the same way",
           "stop is rejected before provider I/O rather than sent: MiniMax documents stop_sequences as ignored, so sending it would return 200 for a completion that ran past a boundary the caller set and paid for",
-          "response_format has no counterpart on this face at all: MiniMax accepts no output_config, and its Chat face was later measured serving json_object while this one was not"
+          "response_format has no counterpart on this face at all: MiniMax accepts no output_config, and its Chat face was later measured serving json_object while this one was not",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -417,7 +497,8 @@
           "response_format",
           "parallel_tool_calls",
           "user",
-          "max_tokens"
+          "max_tokens",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "MiniMax speaks this wire format but accepts a smaller member list, so the fields it has no place for are rejected before provider I/O rather than sent and ignored — this upstream documents its unsupported parameters as ignored, not refused",
@@ -426,7 +507,8 @@
           "reasoning_split is sent alongside an enabled switch so reasoning returns in its own member instead of inline in the answer",
           "max_completion_tokens is carried as itself and max_tokens is carried into it only while thinking is off, because MiniMax's single output bound counts reasoning; max_tokens is value-dependent for that reason — a request that also thinks, or that carries both members, is routed away by field before provider I/O rather than refused after the budget is reserved",
           "n and parallel_tool_calls are value-dependent: n=1 and parallel_tool_calls=true are what omitting the member already means",
-          "response_format is value-dependent: json_object was measured against a real account on 2026-08-31 and is carried, text is dropped because it means what omitting the member already means, and the schema mode has never been sent and is rejected before provider I/O"
+          "response_format is value-dependent: json_object was measured against a real account on 2026-08-31 and is carried, text is dropped because it means what omitting the member already means, and the schema mode has never been sent and is rejected before provider I/O",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -440,13 +522,15 @@
           "response_format",
           "parallel_tool_calls",
           "reasoning_effort",
-          "user"
+          "user",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "Chat messages are mapped to stateless Responses input items",
           "store=false is always sent upstream",
           "this profile binds no stream primitive, so a streaming request is routed away rather than refused by field — MiniMax itself documents stream on /v1/responses, so this is a Halro scope decision and not an upstream limit",
-          "reasoning is unsupported here and supported on the MiniMax Chat profile: the canonical response mapper cannot preserve the reasoning items this endpoint returns"
+          "reasoning is unsupported here and supported on the MiniMax Chat profile: the canonical response mapper cannot preserve the reasoning items this endpoint returns",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -462,7 +546,8 @@
           "max_tokens",
           "reasoning_effort",
           "stop",
-          "tool_choice"
+          "tool_choice",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "Kimi speaks this wire format but does not model the sampling parameters at all: temperature, top_p and n are absent from its request schema, and its parameter reference pins each to one value per model and answers any other with an error, so they are rejected before provider I/O rather than sent or silently replaced with the pinned value",
@@ -473,7 +558,8 @@
           "K2.x has one on state and no depth ladder, so an effort routed to those models is honored as on rather than preserved",
           "a request that names no depth is sent with reasoning explicitly switched off rather than left to Kimi's default, which is on: measured 2026-09-01, kimi-k3 and kimi-k2.6 both accept the off switch, and leaving it out returned a 64-token budget spent entirely on reasoning with an empty answer. kimi-k2.7-code has no off state and keeps reasoning, which is a per-model fact this profile-scoped declaration cannot express",
           "stop is value-dependent: Kimi documents it as honored and it is carried, but only within its published bounds of five sequences of at most 32 bytes each, and a request outside them is routed away before provider I/O rather than refused while the body is encoded",
-          "tool_choice is value-dependent, and the two ways of forcing a tool call are not the same value: a named function together with a depth is refused by every Kimi model measured and is routed away before provider I/O, while required together with a depth is refused by the K2.x line and accepted by kimi-k3, which answers with a tool call and a reasoning span in one response. That second half is a per-model limit this profile-scoped declaration cannot express, so it is refused after the reservation rather than routed away with the kimi-k3 request that works"
+          "tool_choice is value-dependent, and the two ways of forcing a tool call are not the same value: a named function together with a depth is refused by every Kimi model measured and is routed away before provider I/O, while required together with a depth is refused by the K2.x line and accepted by kimi-k3, which answers with a tool call and a reasoning span in one response. That second half is a per-model limit this profile-scoped declaration cannot express, so it is refused after the reservation rather than routed away with the kimi-k3 request that works",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -488,7 +574,8 @@
           "response_format",
           "reasoning_effort",
           "user",
-          "messages[].content[].detail"
+          "messages[].content[].detail",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "portable Chat content is mapped to Kimi's Anthropic Messages blocks",
@@ -496,7 +583,8 @@
           "reasoning_effort is unsupported at any value on this face, and that is what makes the face usable at all: a request naming no depth reaches Kimi with thinking disabled and comes back with no thinking block, which the portable decoder can read, while a request naming a depth comes back with one, which it refuses outright after the upstream has already been paid",
           "temperature and top_p are rejected because Kimi pins each per model and answers any other value with an error",
           "response_format is value-dependent: output_config.format takes a json_schema and enforces it, and there is no schema-less mode",
-          "stop is carried: measured honored on this face, unlike MiniMax's, which documents the member as ignored"
+          "stop is carried: measured honored on this face, unlike MiniMax's, which documents the member as ignored",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -512,7 +600,8 @@
           "max_tokens",
           "parallel_tool_calls",
           "reasoning_effort",
-          "user"
+          "user",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "Chat messages are mapped to stateless Responses input items",
@@ -520,7 +609,8 @@
           "this profile binds no stream primitive, so a streaming request is routed away rather than refused by field — Kimi itself documents stream on /v1/responses, so this is a Halro scope decision and not an upstream limit",
           "the schema-less json_object mode is unavailable here and available on the Kimi Chat profile: this endpoint models structured output as text.format and accepts the json_schema type alone, so a json_object request is routed away by the absent json_object capability rather than by field",
           "reasoning is unsupported here and supported on the Kimi Chat profile: the canonical response mapper cannot preserve the reasoning items this endpoint returns",
-          "this endpoint serves kimi-k3 alone, which the model catalog records per model rather than this profile-scoped declaration"
+          "this endpoint serves kimi-k3 alone, which the model catalog records per model rather than this profile-scoped declaration",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -537,13 +627,15 @@
           "temperature",
           "tool_choice",
           "top_p",
-          "user"
+          "user",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "Kimi Code's OpenAI-compatible face is rendered by its own request renderer, not the OpenAI one: the shared wire shape does not extend to the accepted member list",
           "reasoning is switched off explicitly on every request that asks for no depth, because each model this product serves reasons by default and bills for it",
           "the single output bound counts reasoning, so an answer-only max_tokens is carried only while nothing is thinking",
-          "the published depth ladder is low/high/max and the upstream enforces none of it, so a depth this face does not publish is refused rather than served as the product's default depth"
+          "the published depth ladder is low/high/max and the upstream enforces none of it, so a depth this face does not publish is refused rather than served as the product's default depth",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -559,11 +651,13 @@
           "stop",
           "temperature",
           "top_p",
-          "user"
+          "user",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "MiniMax Subscription Access reuses the Anthropic Messages wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
-          "portable optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+          "portable optional fields remain fail-closed until a subscription-key fixture establishes their behavior",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -579,11 +673,13 @@
           "stop",
           "temperature",
           "top_p",
-          "user"
+          "user",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "MiniMax Subscription Access reuses the Anthropic Messages wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
-          "portable optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+          "portable optional fields remain fail-closed until a subscription-key fixture establishes their behavior",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -596,11 +692,13 @@
           "response_format",
           "parallel_tool_calls",
           "user",
-          "max_tokens"
+          "max_tokens",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
-          "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+          "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -613,11 +711,13 @@
           "response_format",
           "parallel_tool_calls",
           "user",
-          "max_tokens"
+          "max_tokens",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
-          "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+          "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       },
       {
@@ -632,13 +732,15 @@
           "response_format",
           "reasoning_effort",
           "user",
-          "messages[].content[].detail"
+          "messages[].content[].detail",
+          "messages[].encrypted_content"
         ],
         "declared_transforms": [
           "Kimi Code reuses the Anthropic Messages wire renderer on its isolated membership surface; no Kimi Open Platform fixture is credited to this profile",
           "thinking disabled is sent on every portable request that asks for no depth, and was measured honoured on k3, k3-256k and kimi-for-coding, non-streaming and streaming alike",
           "temperature and top_k are refused here because this face accepts them and answers 200 without establishing that either was read, where the Chat face refuses them outright",
-          "stop_sequences is carried and was measured honoured, but a cut answer reports stop_reason end_turn with a null stop_sequence rather than naming the sequence"
+          "stop_sequences is carried and was measured honoured, but a cut answer reports stop_reason end_turn with a null stop_sequence rather than naming the sequence",
+          "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
         ]
       }
     ]
@@ -916,6 +1018,7 @@
       "anthropic.messages.2023-06-01",
       "anthropic.subscription.messages.v1",
       "azure-openai.chat-embeddings.v1",
+      "volcengine.ark.chat.v1",
       "deepseek.chat.v1",
       "bigmodel.cn.chat-embeddings.v1",
       "bigmodel.global.chat.v1",
@@ -990,6 +1093,16 @@
         "status": "compatible",
         "declared_transforms": [
           "Responses items are mapped through the Azure Chat Completions ProviderPrimitive"
+        ]
+      },
+      {
+        "profile_id": "volcengine.ark.chat.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "user"
+        ],
+        "declared_transforms": [
+          "Responses items are mapped through Ark Chat; reasoning is disabled when not requested, and forced-thinking models are routed away from endpoints unable to carry reasoning"
         ]
       },
       {
@@ -1453,6 +1566,7 @@
       "anthropic.messages.2023-06-01",
       "anthropic.subscription.messages.v1",
       "azure-openai.chat-embeddings.v1",
+      "volcengine.ark.chat.v1",
       "deepseek.chat.v1",
       "bigmodel.cn.chat-embeddings.v1",
       "bigmodel.global.chat.v1",
@@ -1534,6 +1648,21 @@
         ],
         "declared_transforms": [
           "portable Messages content is mapped through Azure Chat Completions"
+        ]
+      },
+      {
+        "profile_id": "volcengine.ark.chat.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "max_tokens",
+          "metadata",
+          "output_config.effort",
+          "service_tier",
+          "thinking",
+          "top_k"
+        ],
+        "declared_transforms": [
+          "portable Messages content is mapped through Ark Chat; its endpoint cannot represent reasoning output and therefore excludes thinking requests"
         ]
       },
       {
@@ -2068,6 +2197,7 @@
       "anthropic.messages.2023-06-01",
       "anthropic.subscription.messages.v1",
       "azure-openai.chat-embeddings.v1",
+      "volcengine.ark.chat.v1",
       "deepseek.chat.v1",
       "bigmodel.cn.chat-embeddings.v1",
       "bigmodel.global.chat.v1",
@@ -2113,6 +2243,10 @@
       },
       {
         "profile_id": "azure-openai.chat-embeddings.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "volcengine.ark.chat.v1",
         "status": "experimental"
       },
       {
@@ -2288,6 +2422,7 @@
       "anthropic.messages.2023-06-01",
       "anthropic.subscription.messages.v1",
       "azure-openai.chat-embeddings.v1",
+      "volcengine.ark.chat.v1",
       "deepseek.chat.v1",
       "bigmodel.cn.chat-embeddings.v1",
       "bigmodel.global.chat.v1",
@@ -2333,6 +2468,10 @@
       },
       {
         "profile_id": "azure-openai.chat-embeddings.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "volcengine.ark.chat.v1",
         "status": "experimental"
       },
       {
@@ -2501,6 +2640,7 @@
       "anthropic.messages.2023-06-01",
       "anthropic.subscription.messages.v1",
       "azure-openai.chat-embeddings.v1",
+      "volcengine.ark.chat.v1",
       "deepseek.chat.v1",
       "bigmodel.cn.chat-embeddings.v1",
       "bigmodel.global.chat.v1",
@@ -2546,6 +2686,10 @@
       },
       {
         "profile_id": "azure-openai.chat-embeddings.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "volcengine.ark.chat.v1",
         "status": "experimental"
       },
       {

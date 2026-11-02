@@ -52,7 +52,7 @@ import { useIsReadOnly } from "../session";
 import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../OnboardingContext";
 
 const providerTypes: ProviderType[] = [
-  "openai", "anthropic", "azure_openai", "deepseek", "gemini", "bedrock", "minimax", "kimi", "bigmodel", "openai_compatible",
+  "openai", "anthropic", "azure_openai", "deepseek", "volcengine", "gemini", "bedrock", "minimax", "kimi", "bigmodel", "openai_compatible",
 ];
 
 import { RouteSuspensionsPanel, TabRefusalMark, refusalCountsByTab } from "./RouteSuspensionsPanel";

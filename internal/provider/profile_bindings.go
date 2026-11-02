@@ -96,6 +96,8 @@ var profileOperationTable = map[domain.ProviderProfileID]profileOperations{
 		operationBinding{OperationEmbeddings, PrimitiveAzureEmbeddings})},
 	domain.ProfileDeepSeekChat: {Revision: 1, Bindings: chatPair(
 		PrimitiveDeepSeekChat, PrimitiveDeepSeekChatStream)},
+	domain.ProfileVolcengineChat: {Revision: 2, Bindings: chatPair(
+		PrimitiveVolcengineChat, PrimitiveVolcengineChatStream)},
 	domain.ProfileBigModelCNChatEmbeddings: {Revision: 1, Bindings: append(
 		chatPair(PrimitiveBigModelChat, PrimitiveBigModelChatStream),
 		operationBinding{OperationEmbeddings, PrimitiveBigModelEmbeddings})},

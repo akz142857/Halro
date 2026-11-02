@@ -563,6 +563,7 @@ func TestTheReasoningProbeAsksForADepthItsOwnWireFormatAccepts(t *testing.T) {
 		domain.ProfileMiniMaxChat:                         openaiapi.ReasoningEffortLevels,
 		domain.ProfileMiniMaxCNSubscriptionOpenAIChat:     openaiapi.ReasoningEffortLevels,
 		domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat: openaiapi.ReasoningEffortLevels,
+		domain.ProfileVolcengineChat:                      compatibility.VolcengineEffortLevels,
 		domain.ProfileDeepSeekChat:                        compatibility.DeepSeekEffortLevels,
 		domain.ProfileKimiChat:                            compatibility.KimiEffortLevels,
 		domain.ProfileBigModelCNChatEmbeddings:            compatibility.BigModelEffortLevels,

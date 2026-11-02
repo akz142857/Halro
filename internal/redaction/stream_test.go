@@ -273,6 +273,23 @@ func TestRollingStreamRedactsReasoningAcrossChunks(t *testing.T) {
 	}
 }
 
+func TestRollingStreamPreservesStandaloneEncryptedReasoning(t *testing.T) {
+	stream, err := NewDefault().NewStream("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const opaque = "authenticated+/=state"
+	chunk := openaiapi.ChatCompletionResponse{ID: "chunk", Model: "ark", Choices: []openaiapi.Choice{{Index: 0, Delta: &openaiapi.Message{EncryptedContent: opaque}}}}
+	chunks, err := stream.Process(chunk)
+	if err != nil || len(chunks) != 1 || chunks[0].Choices[0].Delta.EncryptedContent != opaque {
+		t.Fatalf("standalone encrypted state was dropped: chunks=%d err=%v", len(chunks), err)
+	}
+	remaining, err := stream.Flush()
+	if err != nil || len(remaining) != 0 {
+		t.Fatalf("opaque state was buffered or repeated: chunks=%d err=%v", len(remaining), err)
+	}
+}
+
 func appendReasoning(output *strings.Builder, chunks []openaiapi.ChatCompletionResponse) {
 	for _, chunk := range chunks {
 		for _, choice := range chunk.Choices {

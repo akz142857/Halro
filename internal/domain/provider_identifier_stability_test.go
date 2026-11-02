@@ -12,6 +12,7 @@ import (
 func TestProviderProfileIdentifiersAndBindingsAreStable(t *testing.T) {
 	type contract struct{ group, surface, scheme string }
 	want := map[string]contract{
+		"volcengine.ark.chat.v1":                            {"volcengine-ark-api", "volcengine-ark-api", "bearer.static"},
 		"openai.chat-embeddings.v1":                         {"openai-api", "openai-api", "bearer.static"},
 		"openai.responses.v1":                               {"openai-api", "openai-api", "bearer.static"},
 		"anthropic.messages.2023-06-01":                     {"anthropic-api", "anthropic-api", "anthropic.x-api-key"},
@@ -68,6 +69,7 @@ func TestAccessSurfaceIdentifiersAndProductBindingsAreStable(t *testing.T) {
 		hosts                   []string
 	}
 	want := map[string]contract{
+		"volcengine-ark-api":                 {"volcengine.ark-api", "none", "", nil},
 		"openai-api":                         {"openai.api-platform", "none", "", nil},
 		"anthropic-api":                      {"anthropic.console-api", "none", "", nil},
 		"azure-openai":                       {"azure-openai.resource", "none", "", nil},
@@ -110,6 +112,7 @@ func TestAccessSurfaceIdentifiersAndProductBindingsAreStable(t *testing.T) {
 
 func TestProviderOfferingIdentifiersAreStable(t *testing.T) {
 	want := map[string]string{
+		"volcengine.ark-api":  "metered_api",
 		"openai.api-platform": "metered_api", "anthropic.console-api": "metered_api",
 		"azure-openai.resource": "metered_api", "deepseek.api-platform": "metered_api",
 		"google.gemini-api": "metered_api", "aws.bedrock-runtime": "metered_api",

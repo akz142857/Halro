@@ -26,6 +26,8 @@ const (
 	PrimitiveAzureEmbeddings                      Primitive = "azure-openai.embeddings"
 	PrimitiveDeepSeekChat                         Primitive = "deepseek.chat-completions"
 	PrimitiveDeepSeekChatStream                   Primitive = "deepseek.chat-completions.stream"
+	PrimitiveVolcengineChat                       Primitive = "volcengine.ark.chat-completions"
+	PrimitiveVolcengineChatStream                 Primitive = "volcengine.ark.chat-completions.stream"
 	PrimitiveBigModelChat                         Primitive = "bigmodel.chat-completions"
 	PrimitiveBigModelChatStream                   Primitive = "bigmodel.chat-completions.stream"
 	PrimitiveBigModelEmbeddings                   Primitive = "bigmodel.embeddings"
@@ -137,9 +139,10 @@ type OperationAdapter interface {
 }
 
 type GenerateCall struct {
-	RequestID     string
-	ProviderModel string
-	Request       semantic.GenerateRequest
+	CanonicalModelRef string
+	RequestID         string
+	ProviderModel     string
+	Request           semantic.GenerateRequest
 }
 
 type EmbedCall struct {
@@ -175,9 +178,16 @@ func (adapter legacyGenerationPrimitive) Generate(ctx context.Context, call Gene
 	if err != nil {
 		return semantic.GenerateResult{}, &Error{Class: ErrorBadRequest, Message: "render canonical generate request", Cause: err}
 	}
-	wireResult, err := adapter.adapter.Chat(ctx, ChatCall{RequestID: call.RequestID, ProviderModel: call.ProviderModel, Request: wireRequest})
+	wireResult, err := adapter.adapter.Chat(ctx, ChatCall{RequestID: call.RequestID, ProviderModel: call.ProviderModel, CanonicalModelRef: call.CanonicalModelRef, Request: wireRequest})
 	if err != nil {
 		return semantic.GenerateResult{}, err
+	}
+	if adapter.primitive != PrimitiveVolcengineChat {
+		for _, choice := range wireResult.Choices {
+			if choice.Message != nil && choice.Message.EncryptedContent != "" {
+				return semantic.GenerateResult{}, &Error{Class: ErrorMalformed, Ambiguous: true, Message: "provider profile cannot return opaque reasoning state"}
+			}
+		}
 	}
 	result, err := openaiwire.DecodeGenerateResult(wireResult)
 	if err != nil {
@@ -195,7 +205,17 @@ func (adapter legacyGenerationPrimitive) GenerateStream(ctx context.Context, cal
 	usageEmitted := false
 	var downstreamErr error
 	var observedUsage *semantic.Usage
-	usage, err := adapter.adapter.ChatStream(ctx, ChatCall{RequestID: call.RequestID, ProviderModel: call.ProviderModel, Request: wireRequest}, func(event semantic.Event) error {
+	usage, err := adapter.adapter.ChatStream(ctx, ChatCall{RequestID: call.RequestID, ProviderModel: call.ProviderModel, CanonicalModelRef: call.CanonicalModelRef, Request: wireRequest}, func(event semantic.Event) error {
+		if adapter.primitive != PrimitiveVolcengineChatStream {
+			for _, output := range event.Outputs {
+				for _, part := range output.Content {
+					if part.EncryptedContent != "" {
+						downstreamErr = &Error{Class: ErrorMalformed, Ambiguous: true, Message: "provider profile cannot return opaque reasoning state"}
+						return downstreamErr
+					}
+				}
+			}
+		}
 		event.MappingRevision = openaiwire.MappingRevision
 		event.Translation = translationForPrimitive(adapter.primitive)
 		last = event
@@ -279,6 +299,7 @@ func translationForPrimitive(primitive Primitive) semantic.TranslationLoss {
 		PrimitiveBedrockMantleAnthropicMessages, PrimitiveBedrockMantleAnthropicMessagesStream,
 		PrimitiveAzureChatCompletions, PrimitiveAzureChatStream, PrimitiveAzureEmbeddings,
 		PrimitiveDeepSeekChat, PrimitiveDeepSeekChatStream,
+		PrimitiveVolcengineChat, PrimitiveVolcengineChatStream,
 		PrimitiveBigModelChat, PrimitiveBigModelChatStream, PrimitiveBigModelEmbeddings,
 		PrimitiveCompatibleChat, PrimitiveCompatibleChatStream, PrimitiveCompatibleEmbeddings:
 		return semantic.TranslationNone

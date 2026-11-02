@@ -1408,7 +1408,7 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存",  saveDisable
     editCapabilities: "去编辑能力",
     lastTest: "最近手动测试",
     lastUpdated: "最近更新",
-    accessSurfaces: { "openai-api": "OpenAI 接口", "azure-openai": "Azure OpenAI 接口", "deepseek-api": "DeepSeek 接口", "openai-compatible": "OpenAI 兼容接口", "gemini-generate-content": "Gemini 接口", "anthropic-api": "Anthropic 接口", "bedrock-runtime": "Bedrock Runtime", "bedrock-agent-runtime": "Bedrock Agent Runtime", "bedrock-mantle": "Bedrock Mantle", "minimax-api": "MiniMax 接口", "minimax-cn-subscription-access": "MiniMax Subscription Access（中国大陆）", "minimax-global-subscription-access": "MiniMax Subscription Access（海外）", "kimi-api": "Kimi 接口", "kimi-code": "Kimi Code 订阅接口", "bigmodel-cn-general-api": "BigModel 通用接口（中国大陆）", "bigmodel-global-general-api": "Z.AI 通用接口（海外）", "bigmodel-cn-coding-api": "GLM Coding Plan 接口（中国大陆）", "bigmodel-global-coding-api": "GLM Coding Plan 接口（海外）" },
+    accessSurfaces: { "openai-api": "OpenAI 接口", "azure-openai": "Azure OpenAI 接口", "volcengine-ark-api": "火山方舟按量付费 API", "deepseek-api": "DeepSeek 接口", "openai-compatible": "OpenAI 兼容接口", "gemini-generate-content": "Gemini 接口", "anthropic-api": "Anthropic 接口", "bedrock-runtime": "Bedrock Runtime", "bedrock-agent-runtime": "Bedrock Agent Runtime", "bedrock-mantle": "Bedrock Mantle", "minimax-api": "MiniMax 接口", "minimax-cn-subscription-access": "MiniMax Subscription Access（中国大陆）", "minimax-global-subscription-access": "MiniMax Subscription Access（海外）", "kimi-api": "Kimi 接口", "kimi-code": "Kimi Code 订阅接口", "bigmodel-cn-general-api": "BigModel 通用接口（中国大陆）", "bigmodel-global-general-api": "Z.AI 通用接口（海外）", "bigmodel-cn-coding-api": "GLM Coding Plan 接口（中国大陆）", "bigmodel-global-coding-api": "GLM Coding Plan 接口（海外）" },
     compatibleInterface: "兼容接口",
     activeRoutesEnabled: "{{count}} 条启用路由",
     uniformEvidence: "全部为{{evidence}}",
@@ -1541,7 +1541,7 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存",  saveDisable
   providers: {
     notifyCreated: "服务商已创建并热加载", notifyUpdated: "服务商已保存", notifyDeleted: "服务商已删除", notifyEnabled: "服务商已启用", notifyDisabled: "服务商已禁用",
     notifyCredentialSaved: "凭据已加密保存", notifyCredentialRotated: "凭据已轮换", notifyCredentialDeleted: "凭据已删除",
-    types: { openai: "OpenAI", anthropic: "Anthropic", azure_openai: "Azure OpenAI", deepseek: "DeepSeek", gemini: "Gemini", bedrock: "AWS Bedrock", minimax: "MiniMax", kimi: "Kimi", bigmodel: "BigModel / Z.AI", openai_compatible: "OpenAI 兼容服务" },
+    types: { openai: "OpenAI", anthropic: "Anthropic", azure_openai: "Azure OpenAI", deepseek: "DeepSeek", volcengine: "火山引擎 / 火山方舟", gemini: "Gemini", bedrock: "AWS Bedrock", minimax: "MiniMax", kimi: "Kimi", bigmodel: "BigModel / Z.AI", openai_compatible: "OpenAI 兼容服务" },
     // 这一块回答的是运维的问题——"我的请求为什么没走这个上游"，不是"网关内部把什么挂起了"。
     // 标题用前者的说法。
     suspensions: {
@@ -1616,6 +1616,7 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存",  saveDisable
       "openai.api-platform": "OpenAI API 平台",
       "anthropic.console-api": "Anthropic Console API",
       "azure-openai.resource": "Azure OpenAI 资源",
+      "volcengine.ark-api": "火山方舟按量付费 API",
       "deepseek.api-platform": "DeepSeek API 平台",
       "google.gemini-api": "Gemini API",
       "aws.bedrock-mantle": "Amazon Bedrock Mantle",

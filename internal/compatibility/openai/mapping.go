@@ -12,7 +12,8 @@ import (
 	"github.com/akz142857/Halro/internal/semantic"
 )
 
-const MappingRevision uint64 = 1
+// Revision 2 preserves authenticated encrypted reasoning state in both directions.
+const MappingRevision uint64 = 2
 
 func DecodeGenerate(request openaiapi.ChatCompletionRequest) (semantic.GenerateRequest, error) {
 	result := semantic.GenerateRequest{
@@ -200,8 +201,8 @@ func DecodeEvent(chunk openaiapi.ChatCompletionResponse) (semantic.Event, error)
 				}
 				output.Content = append(output.Content, semantic.ContentDelta{Kind: semantic.ContentText, Text: text})
 			}
-			if source.Delta.ReasoningContent != "" {
-				output.Content = append(output.Content, semantic.ContentDelta{Kind: semantic.ContentReasoning, Text: source.Delta.ReasoningContent})
+			if source.Delta.ReasoningContent != "" || source.Delta.EncryptedContent != "" {
+				output.Content = append(output.Content, semantic.ContentDelta{Kind: semantic.ContentReasoning, Text: source.Delta.ReasoningContent, EncryptedContent: source.Delta.EncryptedContent})
 			}
 			for _, call := range source.Delta.ToolCalls {
 				output.Content = append(output.Content, semantic.ContentDelta{Kind: semantic.ContentToolCall, ToolIndex: cloneInt(call.Index), CallID: call.ID, Name: call.Function.Name, ArgumentsFragment: call.Function.Arguments})
@@ -235,6 +236,7 @@ func RenderEvent(event semantic.Event) (openaiapi.ChatCompletionResponse, error)
 				delta.Content = openaiapi.TextContent(content.Text)
 			case semantic.ContentReasoning:
 				delta.ReasoningContent = content.Text
+				delta.EncryptedContent = content.EncryptedContent
 			case semantic.ContentToolCall:
 				delta.ToolCalls = append(delta.ToolCalls, openaiapi.ToolCall{Index: cloneInt(content.ToolIndex), ID: content.CallID, Type: "function", Function: openaiapi.ToolCallFunction{Name: content.Name, Arguments: content.ArgumentsFragment}})
 			}
@@ -288,8 +290,8 @@ func decodeMessage(message openaiapi.Message) (semantic.Message, error) {
 			}
 		}
 	}
-	if message.ReasoningContent != "" {
-		result.Content = append(result.Content, semantic.Content{Kind: semantic.ContentReasoning, Text: message.ReasoningContent})
+	if message.ReasoningContent != "" || message.EncryptedContent != "" {
+		result.Content = append(result.Content, semantic.Content{Kind: semantic.ContentReasoning, Text: message.ReasoningContent, EncryptedContent: message.EncryptedContent})
 	}
 	for _, call := range message.ToolCalls {
 		result.Content = append(result.Content, semantic.Content{Kind: semantic.ContentToolCall, CallID: call.ID, Name: call.Function.Name, Arguments: call.Function.Arguments})
@@ -327,6 +329,7 @@ func renderMessage(message semantic.Message) (openaiapi.Message, error) {
 			rich = append(rich, map[string]any{"type": "image_url", "image_url": image})
 		case semantic.ContentReasoning:
 			result.ReasoningContent = part.Text
+			result.EncryptedContent = part.EncryptedContent
 		case semantic.ContentToolCall:
 			result.ToolCalls = append(result.ToolCalls, openaiapi.ToolCall{ID: part.CallID, Type: "function", Function: openaiapi.ToolCallFunction{Name: part.Name, Arguments: part.Arguments}})
 		case semantic.ContentToolResult:

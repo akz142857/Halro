@@ -60,3 +60,38 @@ func TestLegacyGenerationPrimitiveNormalizesUsageAndAddsAuditMetadata(t *testing
 		t.Fatal(err)
 	}
 }
+
+type opaqueReasoningAdapter struct{ usageOnDeltaAdapter }
+
+func (*opaqueReasoningAdapter) Chat(context.Context, ChatCall) (openaiapi.ChatCompletionResponse, error) {
+	return openaiapi.ChatCompletionResponse{ID: "response", Model: "model", Choices: []openaiapi.Choice{{Message: &openaiapi.Message{Role: "assistant", EncryptedContent: "opaque"}}}}, nil
+}
+
+func (*opaqueReasoningAdapter) ChatStream(_ context.Context, _ ChatCall, emit func(semantic.Event) error) (*openaiapi.Usage, error) {
+	return nil, emit(semantic.Event{Kind: semantic.EventDelta, ID: "response", Model: "model", Outputs: []semantic.OutputDelta{{Content: []semantic.ContentDelta{{Kind: semantic.ContentReasoning, EncryptedContent: "opaque"}}}}})
+}
+
+func TestOpaqueReasoningOutputRequiresArkPrimitive(t *testing.T) {
+	for _, ark := range []bool{false, true} {
+		unary, stream := PrimitiveCompatibleChat, PrimitiveCompatibleChatStream
+		if ark {
+			unary, stream = PrimitiveVolcengineChat, PrimitiveVolcengineChatStream
+		}
+		adapter := legacyGenerationPrimitive{adapter: &opaqueReasoningAdapter{}, primitive: unary}
+		canonical, err := openaiwire.DecodeGenerate(openaiapi.ChatCompletionRequest{Model: "model", Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := GenerateCall{ProviderModel: "model", Request: canonical}
+		_, err = adapter.Generate(context.Background(), request)
+		if (err == nil) != ark {
+			t.Fatalf("unary Ark=%v: %v", ark, err)
+		}
+		adapter.primitive = stream
+		emitted := false
+		_, err = adapter.GenerateStream(context.Background(), request, func(event semantic.Event) error { emitted = true; return nil })
+		if (err == nil) != ark || emitted != ark {
+			t.Fatalf("stream Ark=%v emitted=%v: %v", ark, emitted, err)
+		}
+	}
+}

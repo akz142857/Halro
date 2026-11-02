@@ -48,7 +48,7 @@ func TestExportedCanonicalSchemaMatchesReviewedSnapshot(t *testing.T) {
 		// cannot express it declare the loss instead of feeding a model a failed
 		// result dressed as a successful one.
 		"Citation":         {"URL=url", "Title=title", "StartIndex=start_index", "EndIndex=end_index"},
-		"Content":          {"Kind=kind", "Text=text", "URL=url", "Detail=detail", "CallID=call_id", "Name=name", "Arguments=arguments", "ToolError=tool_error", "Status=status", "Citations=citations"},
+		"Content":          {"Kind=kind", "Text=text", "EncryptedContent=encrypted_content", "URL=url", "Detail=detail", "CallID=call_id", "Name=name", "Arguments=arguments", "ToolError=tool_error", "Status=status", "Citations=citations"},
 		"Message":          {"Role=role", "Name=name", "Content=content"},
 		"Source":           {"ProfileID=profile_id", "ProfileRevision=profile_revision"},
 		"Requirements":     {"Streaming=streaming", "StreamUsage=stream_usage", "Tools=tools", "ParallelTools=parallel_tools", "Vision=vision", "FetchedImage=fetched_image", "JSONObject=json_object", "StructuredOutputs=structured_outputs", "DeveloperRole=developer_role", "Reasoning=reasoning", "Seed=seed", "MultipleCandidates=multiple_candidates", "EndUserReference=end_user_reference", "ProviderExecutedTools=provider_executed_tools"},
@@ -64,7 +64,7 @@ func TestExportedCanonicalSchemaMatchesReviewedSnapshot(t *testing.T) {
 		"EmbeddingResult":  {"Model=model", "Data=data", "Usage=usage", "ProviderRequestID=provider_request_id", "ProviderID=provider_id", "DeploymentID=deployment_id", "Translation=translation", "MappingRevision=mapping_revision"},
 		"Event":            {"Kind=kind", "ID=id", "Created=created", "Model=model", "Outputs=outputs", "Usage=usage", "Translation=translation", "MappingRevision=mapping_revision"},
 		"OutputDelta":      {"Index=index", "Role=role", "Content=content", "Termination=termination", "NativeTermination=native_termination"},
-		"ContentDelta":     {"Kind=kind", "Text=text", "ToolIndex=tool_index", "CallID=call_id", "Name=name", "ArgumentsFragment=arguments_fragment"},
+		"ContentDelta":     {"Kind=kind", "Text=text", "EncryptedContent=encrypted_content", "ToolIndex=tool_index", "CallID=call_id", "Name=name", "ArgumentsFragment=arguments_fragment"},
 	}
 	got := exportedStructFields(t)
 	if !reflect.DeepEqual(got, want) {

@@ -171,3 +171,23 @@ func TestOutboundRedactionCoversReasoningText(t *testing.T) {
 		t.Fatalf("reasoning text was served unredacted: %q", text)
 	}
 }
+
+func TestReasoningRedactionPreservesAuthenticatedEncryptedState(t *testing.T) {
+	engine := NewDefault()
+	opaque := "opaque-authenticated-" + leakedKey
+	result := semantic.GenerateResult{ID: "reply", Model: "ark", Choices: []semantic.GenerateChoice{{Message: semantic.Message{Role: semantic.RoleAssistant, Content: []semantic.Content{{Kind: semantic.ContentReasoning, Text: "key " + leakedKey, EncryptedContent: opaque}}}}}}
+	processed, err := engine.ProcessOutboundGenerateResult("", result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	part := processed.Choices[0].Message.Content[0]
+	if strings.Contains(part.Text, leakedKey) {
+		t.Fatal("visible reasoning was not redacted")
+	}
+	if part.EncryptedContent != opaque {
+		t.Fatal("opaque authenticated reasoning state was corrupted")
+	}
+	if result.Choices[0].Message.Content[0].Text != "key "+leakedKey {
+		t.Fatal("redaction mutated the caller's message")
+	}
+}

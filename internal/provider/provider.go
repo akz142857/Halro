@@ -394,9 +394,10 @@ func Unsent(err error) bool {
 }
 
 type ChatCall struct {
-	RequestID     string
-	ProviderModel string
-	Request       openaiapi.ChatCompletionRequest
+	CanonicalModelRef string
+	RequestID         string
+	ProviderModel     string
+	Request           openaiapi.ChatCompletionRequest
 }
 
 type EmbeddingCall struct {
@@ -517,16 +518,17 @@ const (
 )
 
 type Target struct {
-	ID              string
-	DeploymentID    string
-	ProviderID      string
-	BindingID       string
-	PublicModel     string
-	ProviderModel   string
-	AccessSurface   domain.AccessSurface
-	ProfileID       domain.ProviderProfileID
-	OfferingID      domain.ProviderOfferingID
-	AccountRegionID domain.ProviderRegionID
+	CanonicalModelRef string
+	ID                string
+	DeploymentID      string
+	ProviderID        string
+	BindingID         string
+	PublicModel       string
+	ProviderModel     string
+	AccessSurface     domain.AccessSurface
+	ProfileID         domain.ProviderProfileID
+	OfferingID        domain.ProviderOfferingID
+	AccountRegionID   domain.ProviderRegionID
 	// CredentialID and CredentialRevision identify the secret this target
 	// authenticates with, and which version of it was in force when the registry
 	// was built.
@@ -1187,4 +1189,14 @@ func (r *Registry) Close() {
 	for adapter := range adapters {
 		adapter.Close()
 	}
+}
+
+// CapabilityModel preserves a reviewed model mapping for an opaque Ark Endpoint
+// ID. The wire still addresses ProviderModel; only parameter semantics use this
+// identity. Other providers keep their existing exact-target contracts.
+func (target Target) CapabilityModel() string {
+	if target.ProfileID == domain.ProfileVolcengineChat && target.CanonicalModelRef != "" {
+		return target.CanonicalModelRef
+	}
+	return target.ProviderModel
 }

@@ -23,6 +23,7 @@ func TestBuiltinProfilePrimitivesMatchIndependentAdapterContract(t *testing.T) {
 			anthropicContract(PrimitiveAnthropicMessages, PrimitiveAnthropicMessagesStream),
 			pair{OperationFiles, PrimitiveHalroLocalFiles}, pair{OperationBatches, PrimitiveAnthropicMessageBatches}),
 		domain.ProfileAzureChatEmbeddings:       bindings(chatPairContract(PrimitiveAzureChatCompletions, PrimitiveAzureChatStream), pair{OperationEmbeddings, PrimitiveAzureEmbeddings}),
+		domain.ProfileVolcengineChat:            bindings(chatPairContract(PrimitiveVolcengineChat, PrimitiveVolcengineChatStream)),
 		domain.ProfileDeepSeekChat:              bindings(chatPairContract(PrimitiveDeepSeekChat, PrimitiveDeepSeekChatStream)),
 		domain.ProfileBigModelCNChatEmbeddings:  bindings(chatPairContract(PrimitiveBigModelChat, PrimitiveBigModelChatStream), pair{OperationEmbeddings, PrimitiveBigModelEmbeddings}),
 		domain.ProfileBigModelGlobalChat:        bindings(chatPairContract(PrimitiveBigModelChat, PrimitiveBigModelChatStream)),

@@ -40,7 +40,16 @@ func TestTheManifestDeclaresEverythingTheRulesRefuse(t *testing.T) {
 			}
 			refused := map[string]struct{}{}
 			for _, probe := range coverageProbes(manifest.ID) {
-				for _, field := range UnsupportedGenerateFields(coverage.ProfileID, probe) {
+				fields := UnsupportedGenerateFields(coverage.ProfileID, probe)
+				// Representative parameter contracts, not a model inventory. Ark's
+				// answer budget changes meaning on these targets with thinking on;
+				// the profile-only rules cannot see that routing restriction.
+				if coverage.ProfileID == domain.ProfileVolcengineChat {
+					for _, model := range []string{"doubao-seed-2-0-lite-260428", "deepseek-v4-1-flash-261017"} {
+						fields = append(fields, UnsupportedGenerateFieldsForTarget(coverage.ProfileID, model, probe)...)
+					}
+				}
+				for _, field := range fields {
 					name := endpointSpelling(manifest.ID, field)
 					// A field this endpoint does not model has nowhere to be
 					// declared: Validate refuses a coverage entry naming one.
@@ -165,6 +174,9 @@ func coverageProbes(northbound string) []semantic.GenerateRequest {
 		return request
 	}
 	probes := []semantic.GenerateRequest{
+		with(func(r *semantic.GenerateRequest) {
+			r.Messages = []semantic.Message{{Role: semantic.RoleAssistant, Content: []semantic.Content{{Kind: semantic.ContentReasoning, EncryptedContent: "opaque"}}}}
+		}),
 		with(func(r *semantic.GenerateRequest) { r.Messages[0].Name = "named" }),
 		with(func(r *semantic.GenerateRequest) { r.Messages[0].Role = semantic.RoleDeveloper }),
 		with(func(r *semantic.GenerateRequest) { r.Seed = &seed }),

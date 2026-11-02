@@ -156,7 +156,10 @@ func (s *Stream) processMessage(state *streamChoice, message *openaiapi.Message)
 	if message.ToolCallID != "" {
 		state.messageMeta.ToolCallID = message.ToolCallID
 	}
-	hasSafeContent := false
+	// Opaque authenticated state is returned only by an allowlisted provider
+	// primitive. Keep its bytes intact; visible reasoning still follows the
+	// rolling text policy below, including secrets spanning chunk boundaries.
+	hasSafeContent := message.EncryptedContent != ""
 	if text, ok := openaiapi.DecodeTextContent(message.Content); ok {
 		if state.content == nil {
 			state.content = s.newRolling(false)
@@ -450,7 +453,7 @@ func deltaCarriesOutput(message *openaiapi.Message) bool {
 	if message == nil {
 		return false
 	}
-	return len(message.Content) > 0 || message.ReasoningContent != "" || len(message.ToolCalls) > 0
+	return len(message.Content) > 0 || message.ReasoningContent != "" || message.EncryptedContent != "" || len(message.ToolCalls) > 0
 }
 
 func meaningfulStreamChunk(chunk openaiapi.ChatCompletionResponse) bool {
@@ -465,7 +468,7 @@ func meaningfulStreamChunk(chunk openaiapi.ChatCompletionResponse) bool {
 			if message == nil {
 				continue
 			}
-			if len(message.Content) > 0 || message.ReasoningContent != "" || message.Role != "" || message.Name != "" ||
+			if len(message.Content) > 0 || message.ReasoningContent != "" || message.EncryptedContent != "" || message.Role != "" || message.Name != "" ||
 				message.ToolCallID != "" || len(message.ToolCalls) > 0 {
 				return true
 			}

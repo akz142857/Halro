@@ -1,8 +1,10 @@
 package gateway
 
 import (
+	"context"
 	"testing"
 
+	"github.com/akz142857/Halro/internal/anthropicapi"
 	"github.com/akz142857/Halro/internal/compatibility"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/provider"
@@ -77,6 +79,37 @@ func TestATargetThatReasonsUnaskedIsRoutedAwayOnlyWhereItCannotBeRendered(t *tes
 		kept := filterUnrenderableReasoning([]provider.Target{test.target}, request(test.northbound))
 		if dropped := len(kept) == 0; dropped != test.dropped {
 			t.Errorf("%s: dropped = %v, want %v", test.name, dropped, test.dropped)
+		}
+	}
+}
+
+func TestArkThinkingIsRefusedBeforeProviderIOOnPortableMessages(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		for _, model := range []string{"doubao-seed-2-0-lite-260428", "glm-5-3-flash-260828", "kimi-k3-1-pro-261024"} {
+			t.Run(model+map[bool]string{false: "/unary", true: "/stream"}[streaming], func(t *testing.T) {
+				f := newFixture(t, 1_000_000)
+				defer f.close()
+				f.adapter.profileID = domain.ProfileVolcengineChat
+				capabilities := provider.Capabilities{Chat: true, Streaming: true, StreamUsage: true, Reasoning: true}
+				registry := provider.NewRegistry()
+				if err := registry.Register(provider.Target{ID: "ark", DeploymentID: "dep_target_1", PublicModel: "chat", ProviderModel: model, Adapter: f.adapter, ReasonsUnasked: compatibility.VolcengineReasonsUnasked(model), Capabilities: capabilities, CapabilityEvidence: domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared)}); err != nil {
+					t.Fatal(err)
+				}
+				f.registry.Replace(registry)
+				request := anthropicapi.MessageRequest{Model: "chat", MaxTokens: 64, Stream: streaming, Messages: []anthropicapi.MessageParam{{Role: "user", Content: anthropicapi.ContentBlocks{{Type: "text", Text: "hi"}}}}}
+				if !compatibility.VolcengineReasonsUnasked(model) {
+					request.OutputConfig = &anthropicapi.OutputConfig{Effort: "low"}
+				}
+				var err error
+				if streaming {
+					err = f.service.MessagesStream(context.Background(), f.plaintext, request, func(anthropicapi.StreamEvent) error { t.Fatal("unrenderable payload reached caller"); return nil })
+				} else {
+					_, err = f.service.Messages(context.Background(), f.plaintext, request)
+				}
+				if err == nil || f.adapter.calls != 0 {
+					t.Fatalf("err=%v provider_calls=%d", err, f.adapter.calls)
+				}
+			})
 		}
 	}
 }
