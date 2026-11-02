@@ -10,6 +10,14 @@ if [ "$node_major" != "22" ]; then
 	exit 2
 fi
 
+# A repeatable build with an old node_modules tree proves only that the old
+# compiler/dependencies are repeatable. CI installs from the lockfile first.
+# Refuse a stale direct dependency before rebuilding or replacing any assets.
+if ! (cd "$repo_dir/web" && npm ls --depth=0 >/dev/null); then
+	echo "frontend dependencies do not match package.json; run cd web && npm ci --ignore-scripts before rebuilding the committed bundle" >&2
+	exit 2
+fi
+
 snapshot_dir=$(mktemp -d "${TMPDIR:-/tmp}/halro-web-dist.XXXXXX")
 
 cleanup() {
