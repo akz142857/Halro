@@ -21,8 +21,13 @@ mirrored the Makefile line for line would fail on every reordering and teach
 people to edit it without reading it.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
+import os
 import re
+import subprocess
+import tempfile
 import unittest
 
 
@@ -119,6 +124,50 @@ class DocumentedGateContractTests(unittest.TestCase):
             "CLAUDE.md no longer names a single gate target; this contract has nothing to check",
         )
         return match.group(1)
+
+
+class FrontendDependencyGateTests(unittest.TestCase):
+    def run_gate(self, tree_status: int):
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            marker = temporary / "build-ran"
+            node = temporary / "node"
+            node.write_text("#!/bin/sh\nprintf '22\\n'\n", encoding="utf-8")
+            node.chmod(0o755)
+            npm = temporary / "npm"
+            npm.write_text(
+                '#!/bin/sh\n'
+                'if [ "$1" = "ls" ]; then exit "$HALRO_GATE_TEST_TREE_STATUS"; fi\n'
+                'if [ "$1" = "run" ] && [ "$2" = "build" ]; then\n'
+                '  touch "$HALRO_GATE_TEST_BUILD_MARKER"\n'
+                '  exit 0\n'
+                'fi\n'
+                'exit 99\n',
+                encoding="utf-8",
+            )
+            npm.chmod(0o755)
+            env = os.environ.copy()
+            env.update(
+                PATH=str(temporary) + os.pathsep + os.defpath,
+                HALRO_GATE_TEST_TREE_STATUS=str(tree_status),
+                HALRO_GATE_TEST_BUILD_MARKER=str(marker),
+            )
+            result = subprocess.run(
+                ["sh", str(ROOT / "scripts/check-web-bundle.sh")],
+                env=env, capture_output=True, text=True, check=False,
+            )
+            return result, marker.exists()
+
+    def test_stale_dependencies_are_refused_before_the_build(self):
+        result, built = self.run_gate(1)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse(built, "stale dependencies reached the production build")
+        self.assertIn("npm ci --ignore-scripts", result.stderr)
+
+    def test_current_dependencies_still_reach_the_bundle_check(self):
+        result, built = self.run_gate(0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(built)
 
 
 if __name__ == "__main__":
