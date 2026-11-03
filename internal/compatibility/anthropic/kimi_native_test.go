@@ -191,3 +191,27 @@ func TestKimiNativeRefusesAPayloadItCannotRead(t *testing.T) {
 		t.Fatalf("a truncated body was reported as a cache_control refusal: %v", err)
 	}
 }
+
+func TestKimiTopLevelCacheTTLIsPreserved(t *testing.T) {
+	for _, config := range []string{`{"type":"ephemeral"}`, `{"type":"ephemeral","ttl":"5m"}`, `{"type":"ephemeral","ttl":"1h"}`} {
+		body := kimiNativeBody(`"cache_control":` + config)
+		registry, _ := NewNativeSchemaRegistry()
+		identity := compatibility.NativeIdentity{ProjectID: "project", PrincipalID: "key", CredentialRef: "cred_provider_1", RouteID: "route", RequestedModel: "public"}
+		envelope, err := compatibility.NewNativeEnvelope(registry, domain.ProfileKimiAnthropicMessages, 1, NativeHeaders(anthropicapi.SupportedVersion, nil), body, identity)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := envelope.PayloadFor(domain.ProfileKimiAnthropicMessages, 1, compatibility.NativeRequest)
+		if err != nil || string(got) != string(body) {
+			t.Fatalf("cache request changed: %s %v", got, err)
+		}
+	}
+	for _, config := range []string{`null`, `{}`, `{"type":"ephemeral","ttl":"24h"}`, `{"type":"ephemeral","ttl":null}`, `{"type":"ephemeral","unknown":true}`} {
+		if err := kimiNativeEnvelope(t, kimiNativeBody(`"cache_control":`+config)); err == nil {
+			t.Fatalf("invalid cache config accepted: %s", config)
+		}
+	}
+	if err := kimiNativeEnvelope(t, kimiNativeBody(`"cache_control":{"type":"ephemeral","ttl":"1h"},"system":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}]`)); err == nil {
+		t.Fatal("top-level config bypassed nested breakpoint rejection")
+	}
+}

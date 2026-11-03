@@ -27,6 +27,7 @@ func DecodeResponseGenerate(request openaiapi.ResponseRequest) (semantic.Generat
 	}
 	if request.Reasoning != nil {
 		result.ReasoningEffort = request.Reasoning.Effort
+		result.ReasoningSummary = request.Reasoning.Summary
 	}
 	if request.Instructions != "" {
 		result.Messages = append(result.Messages, semantic.Message{Role: semantic.RoleDeveloper, Content: []semantic.Content{{Kind: semantic.ContentText, Text: request.Instructions}}})
@@ -43,7 +44,7 @@ func DecodeResponseGenerate(request openaiapi.ResponseRequest) (semantic.Generat
 			})
 			continue
 		}
-		result.Tools = append(result.Tools, semantic.Tool{Name: tool.Name, Description: tool.Description, Schema: bytes.Clone(tool.Parameters)})
+		result.Tools = append(result.Tools, semantic.Tool{Name: tool.Name, Description: tool.Description, Schema: bytes.Clone(tool.Parameters), Strict: cloneBool(tool.Strict)})
 	}
 	result.ToolChoice, err = decodeResponseToolChoice(request.ToolChoice)
 	if err != nil {
@@ -114,9 +115,12 @@ func decodeResponseInput(raw json.RawMessage) ([]semantic.Message, error) {
 		if err := strictUnmarshal(itemRaw, &item); err != nil {
 			return nil, fmt.Errorf("input[%d] is invalid: %w", index, err)
 		}
+		if item.Type != "reasoning" && (item.EncryptedContent != "" || item.Summary != nil) {
+			return nil, fmt.Errorf("input[%d] has reasoning fields on another item type", index)
+		}
 		switch item.Type {
 		case "", "message":
-			if item.ID != "" {
+			if item.ID != "" && len(item.Content) == 0 {
 				return nil, fmt.Errorf("input[%d].id requires stored item ownership", index)
 			}
 			message, err := decodeResponseMessage(item)
@@ -124,8 +128,31 @@ func decodeResponseInput(raw json.RawMessage) ([]semantic.Message, error) {
 				return nil, fmt.Errorf("input[%d]: %w", index, err)
 			}
 			result = append(result, message)
+		case "reasoning":
+			if item.Role != "" || item.CallID != "" || item.Name != "" || item.Arguments != "" || len(item.Content) > 0 || len(item.Output) > 0 {
+				return nil, fmt.Errorf("input[%d] is invalid reasoning", index)
+			}
+			part := semantic.Content{Kind: semantic.ContentReasoning, EncryptedContent: item.EncryptedContent}
+			if strings.HasPrefix(item.EncryptedContent, responseReasoningPrefix) {
+				if _, err := ResponseReasoningItems(part); err != nil {
+					return nil, err
+				}
+				for _, summary := range item.Summary {
+					if summary.Type != "summary_text" {
+						return nil, errors.New("unsupported reasoning summary")
+					}
+					part.Text += summary.Text
+				}
+			} else {
+				var err error
+				part, err = ResponseReasoningContent([]openaiapi.ResponseOutputItem{{Type: "reasoning", ID: item.ID, EncryptedContent: item.EncryptedContent, Summary: item.Summary}})
+				if err != nil {
+					return nil, err
+				}
+			}
+			result = append(result, semantic.Message{Role: semantic.RoleAssistant, Content: []semantic.Content{part}})
 		case "function_call":
-			if item.ID != "" || item.CallID == "" || item.Name == "" || item.Arguments == "" || len(item.Content) > 0 || len(item.Output) > 0 || item.Role != "" {
+			if item.CallID == "" || item.Name == "" || item.Arguments == "" || len(item.Content) > 0 || len(item.Output) > 0 || item.Role != "" {
 				return nil, fmt.Errorf("input[%d] is an invalid function_call", index)
 			}
 			result = append(result, semantic.Message{Role: semantic.RoleAssistant, Content: []semantic.Content{{Kind: semantic.ContentToolCall, CallID: item.CallID, Name: item.Name, Arguments: item.Arguments}}})
@@ -152,7 +179,7 @@ func decodeResponseMessage(item openaiapi.ResponseInputItem) (semantic.Message, 
 	default:
 		return semantic.Message{}, errors.New("message role is unsupported")
 	}
-	if item.CallID != "" || item.Name != "" || item.Arguments != "" || len(item.Output) > 0 {
+	if item.CallID != "" || item.Name != "" || item.Arguments != "" || len(item.Output) > 0 || item.EncryptedContent != "" || len(item.Summary) > 0 {
 		return semantic.Message{}, errors.New("message contains unrelated fields")
 	}
 	var text string
@@ -169,14 +196,22 @@ func decodeResponseMessage(item openaiapi.ResponseInputItem) (semantic.Message, 
 		if err := strictUnmarshal(partRaw, &part); err != nil {
 			return semantic.Message{}, fmt.Errorf("content[%d] is invalid", index)
 		}
+		if len(part.Annotations) > 0 || len(part.Logprobs) > 0 {
+			return semantic.Message{}, errors.New("replay annotations and logprobs are unsupported")
+		}
 		switch part.Type {
+		case "refusal":
+			if role != semantic.RoleAssistant || part.Text != "" || part.ImageURL != "" || part.Detail != "" {
+				return semantic.Message{}, errors.New("invalid refusal replay")
+			}
+			message.Content = append(message.Content, semantic.Content{Kind: semantic.ContentText, Text: part.Refusal})
 		case "input_text", "output_text":
-			if part.ImageURL != "" || part.Detail != "" {
+			if part.ImageURL != "" || part.Detail != "" || part.Refusal != "" {
 				return semantic.Message{}, fmt.Errorf("content[%d] text contains image fields", index)
 			}
 			message.Content = append(message.Content, semantic.Content{Kind: semantic.ContentText, Text: part.Text})
 		case "input_image":
-			if role != semantic.RoleUser || part.ImageURL == "" || part.Text != "" {
+			if role != semantic.RoleUser || part.ImageURL == "" || part.Text != "" || part.Refusal != "" {
 				return semantic.Message{}, fmt.Errorf("content[%d] is an invalid input_image", index)
 			}
 			message.Content = append(message.Content, semantic.Content{Kind: semantic.ContentInputImage, URL: part.ImageURL, Detail: part.Detail})
@@ -300,6 +335,12 @@ func renderResponseOutput(responseIDValue string, message semantic.Message, term
 				})
 			}
 			text.WriteString(content.Text)
+		case semantic.ContentReasoning:
+			summary := []openaiapi.ResponseReasoningSummary{}
+			if content.Text != "" {
+				summary = append(summary, openaiapi.ResponseReasoningSummary{Type: "summary_text", Text: content.Text})
+			}
+			items = append(items, openaiapi.ResponseOutputItem{ID: responseItemID("rs", responseIDValue, 0), Type: "reasoning", Summary: summary, EncryptedContent: content.EncryptedContent})
 		case semantic.ContentToolCall:
 			items = append(items, openaiapi.ResponseOutputItem{ID: responseItemID("fc", responseIDValue, toolNumber), Type: "function_call", Status: "completed", CallID: content.CallID, Name: content.Name, Arguments: content.Arguments})
 			toolNumber++
@@ -315,10 +356,7 @@ func renderResponseOutput(responseIDValue string, message semantic.Message, term
 			}
 			items = append(items, item)
 		default:
-			// Reasoning is the kind this reaches today, and Phase 1A rejects a
-			// request that could produce it. Returning the answer without it would
-			// be this endpoint deciding on the caller's behalf that the part it
-			// cannot render did not matter.
+
 			return nil, errors.New("content kind cannot be represented by Responses")
 		}
 	}
@@ -342,7 +380,7 @@ func renderResponseUsage(usage *semantic.Usage) *openaiapi.ResponseUsage {
 	if usage == nil {
 		return nil
 	}
-	return &openaiapi.ResponseUsage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, TotalTokens: usage.TotalTokens, OutputTokensDetails: openaiapi.ResponseTokenDetails{ReasoningTokens: usage.ReasoningTokens}}
+	return &openaiapi.ResponseUsage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, TotalTokens: usage.TotalTokens, InputTokensDetails: openaiapi.ResponseTokenDetails{CachedTokens: usage.CachedInputTokens, CacheWriteTokens: usage.CacheWriteInputTokens}, OutputTokensDetails: openaiapi.ResponseTokenDetails{ReasoningTokens: usage.ReasoningTokens}}
 }
 
 func responseStatus(termination string) string {
@@ -367,152 +405,4 @@ func responseID(value string) string {
 
 func responseItemID(prefix, id string, index int) string {
 	return fmt.Sprintf("%s_%s_%d", prefix, strings.TrimPrefix(responseID(id), "resp_"), index)
-}
-
-type ResponseStreamRenderer struct {
-	request     openaiapi.ResponseRequest
-	sequence    int64
-	id          string
-	created     int64
-	model       string
-	itemStarted bool
-	text        strings.Builder
-	usage       *semantic.Usage
-	termination string
-}
-
-func NewResponseStreamRenderer(request openaiapi.ResponseRequest) *ResponseStreamRenderer {
-	return &ResponseStreamRenderer{request: request}
-}
-
-func (renderer *ResponseStreamRenderer) Accept(event semantic.Event) ([]openaiapi.ResponseStreamEvent, error) {
-	if renderer == nil {
-		return nil, errors.New("response stream renderer is nil")
-	}
-	if renderer.id == "" {
-		renderer.id, renderer.created, renderer.model = responseID(event.ID), event.Created, event.Model
-	}
-	if renderer.id != responseID(event.ID) || renderer.model != event.Model {
-		return nil, errors.New("response stream identity changed")
-	}
-	events := make([]openaiapi.ResponseStreamEvent, 0, 4)
-	if renderer.sequence == 0 {
-		created := baseResponse(renderer.id, renderer.created, renderer.model, renderer.request)
-		events = append(events, renderer.event("response.created", func(output *openaiapi.ResponseStreamEvent) { output.Response = &created }))
-		inProgress := created
-		events = append(events, renderer.event("response.in_progress", func(output *openaiapi.ResponseStreamEvent) { output.Response = &inProgress }))
-	}
-	if event.Kind == semantic.EventUsage {
-		renderer.usage = event.Usage
-		return events, nil
-	}
-	for _, output := range event.Outputs {
-		if output.Index != 0 {
-			return nil, errors.New("Responses streaming supports exactly one candidate")
-		}
-		if output.Termination != "" {
-			if output.Termination != "complete" && output.Termination != "max_output" {
-				return nil, errors.New("provider stream termination is unsupported by the Phase 1A text contract")
-			}
-			renderer.termination = output.Termination
-		}
-		for _, content := range output.Content {
-			// The kind is named because without it this refusal says only that
-			// something was wrong with a stream the caller cannot see. A DeepSeek
-			// route reached it by thinking on a request that was never allowed to
-			// ask for reasoning, and "only supports output text" gave no way to
-			// tell that from a tool call or a malformed chunk. A content kind is a
-			// fixed enum, not provider text, so naming it leaks nothing.
-			if content.Kind != semantic.ContentText {
-				return nil, fmt.Errorf("Phase 1A Responses streaming only supports output text, and the provider stream carried %s", content.Kind)
-			}
-			if !renderer.itemStarted {
-				events = append(events, renderer.startItemEvents()...)
-			}
-			renderer.text.WriteString(content.Text)
-			outputIndex, contentIndex := 0, 0
-			events = append(events, renderer.event("response.output_text.delta", func(event *openaiapi.ResponseStreamEvent) {
-				event.OutputIndex, event.ContentIndex = &outputIndex, &contentIndex
-				event.ItemID = renderer.itemID()
-				event.Delta = content.Text
-				empty := []any{}
-				event.Logprobs = &empty
-			}))
-		}
-	}
-	return events, nil
-}
-
-func (renderer *ResponseStreamRenderer) Complete() ([]openaiapi.ResponseStreamEvent, error) {
-	if renderer == nil || renderer.id == "" {
-		return nil, errors.New("response stream completed before any provider event")
-	}
-	events := make([]openaiapi.ResponseStreamEvent, 0, 6)
-	if !renderer.itemStarted {
-		events = append(events, renderer.startItemEvents()...)
-	}
-	outputIndex, contentIndex := 0, 0
-	content := openaiapi.ResponseOutputContent{Type: "output_text", Text: renderer.text.String(), Annotations: []openaiapi.ResponseAnnotation{}, Logprobs: []any{}}
-	item := renderer.item("completed")
-	events = append(events,
-		renderer.event("response.output_text.done", func(event *openaiapi.ResponseStreamEvent) {
-			event.OutputIndex, event.ContentIndex, event.ItemID, event.Text = &outputIndex, &contentIndex, renderer.itemID(), renderer.text.String()
-			empty := []any{}
-			event.Logprobs = &empty
-		}),
-		renderer.event("response.content_part.done", func(event *openaiapi.ResponseStreamEvent) {
-			event.OutputIndex, event.ContentIndex, event.ItemID, event.Part = &outputIndex, &contentIndex, renderer.itemID(), &content
-		}),
-		renderer.event("response.output_item.done", func(event *openaiapi.ResponseStreamEvent) {
-			event.OutputIndex, event.Item = &outputIndex, &item
-		}),
-	)
-	response := baseResponse(renderer.id, renderer.created, renderer.model, renderer.request)
-	response.Status = responseStatus(renderer.termination)
-	if response.Status == "" {
-		return nil, errors.New("provider stream termination cannot be represented by Responses")
-	}
-	if response.Status == "incomplete" {
-		response.IncompleteDetails = map[string]string{"reason": "max_output_tokens"}
-	}
-	completedAt := renderer.created
-	if response.Status == "completed" {
-		response.CompletedAt = &completedAt
-	}
-	response.Output = []openaiapi.ResponseOutputItem{item}
-	response.Usage = renderResponseUsage(renderer.usage)
-	eventType := "response.completed"
-	if response.Status == "incomplete" {
-		eventType = "response.incomplete"
-	}
-	events = append(events, renderer.event(eventType, func(event *openaiapi.ResponseStreamEvent) { event.Response = &response }))
-	return events, nil
-}
-
-func (renderer *ResponseStreamRenderer) startItemEvents() []openaiapi.ResponseStreamEvent {
-	renderer.itemStarted = true
-	outputIndex, contentIndex := 0, 0
-	item := renderer.item("in_progress")
-	part := openaiapi.ResponseOutputContent{Type: "output_text", Text: "", Annotations: []openaiapi.ResponseAnnotation{}, Logprobs: []any{}}
-	return []openaiapi.ResponseStreamEvent{
-		renderer.event("response.output_item.added", func(event *openaiapi.ResponseStreamEvent) { event.OutputIndex, event.Item = &outputIndex, &item }),
-		renderer.event("response.content_part.added", func(event *openaiapi.ResponseStreamEvent) {
-			event.OutputIndex, event.ContentIndex, event.ItemID, event.Part = &outputIndex, &contentIndex, renderer.itemID(), &part
-		}),
-	}
-}
-
-func (renderer *ResponseStreamRenderer) item(status string) openaiapi.ResponseOutputItem {
-	return openaiapi.ResponseOutputItem{ID: renderer.itemID(), Type: "message", Status: status, Role: "assistant", Content: []openaiapi.ResponseOutputContent{{Type: "output_text", Text: renderer.text.String(), Annotations: []openaiapi.ResponseAnnotation{}, Logprobs: []any{}}}}
-}
-
-func (renderer *ResponseStreamRenderer) itemID() string {
-	return responseItemID("msg", renderer.id, 0)
-}
-
-func (renderer *ResponseStreamRenderer) event(kind string, apply func(*openaiapi.ResponseStreamEvent)) openaiapi.ResponseStreamEvent {
-	event := openaiapi.ResponseStreamEvent{Type: kind, SequenceNumber: renderer.sequence}
-	renderer.sequence++
-	apply(&event)
-	return event
 }

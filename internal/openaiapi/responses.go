@@ -12,6 +12,7 @@ import (
 // implemented by Halro. Unknown fields are rejected by DecodeResponseRequest.
 type ResponseRequest struct {
 	Model             string          `json:"model"`
+	Include           []string        `json:"include,omitempty"`
 	Input             json.RawMessage `json:"input"`
 	Instructions      string          `json:"instructions,omitempty"`
 	MaxOutputTokens   *int64          `json:"max_output_tokens,omitempty"`
@@ -59,25 +60,32 @@ type ResponseTextFormat struct {
 }
 
 type ResponseReasoning struct {
-	Effort string `json:"effort,omitempty"`
+	Effort  string `json:"effort,omitempty"`
+	Summary string `json:"summary,omitempty"`
 }
 
 type ResponseInputItem struct {
-	Type      string          `json:"type,omitempty"`
-	Role      string          `json:"role,omitempty"`
-	Content   json.RawMessage `json:"content,omitempty"`
-	ID        string          `json:"id,omitempty"`
-	CallID    string          `json:"call_id,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Arguments string          `json:"arguments,omitempty"`
-	Output    json.RawMessage `json:"output,omitempty"`
+	Type             string                     `json:"type,omitempty"`
+	Role             string                     `json:"role,omitempty"`
+	Content          json.RawMessage            `json:"content,omitempty"`
+	ID               string                     `json:"id,omitempty"`
+	CallID           string                     `json:"call_id,omitempty"`
+	Name             string                     `json:"name,omitempty"`
+	Arguments        string                     `json:"arguments,omitempty"`
+	Output           json.RawMessage            `json:"output,omitempty"`
+	EncryptedContent string                     `json:"encrypted_content,omitempty"`
+	Summary          []ResponseReasoningSummary `json:"summary,omitempty"`
+	Status           string                     `json:"status,omitempty"`
 }
 
 type ResponseInputContent struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	ImageURL string `json:"image_url,omitempty"`
-	Detail   string `json:"detail,omitempty"`
+	Annotations []ResponseAnnotation `json:"annotations,omitempty"`
+	Logprobs    []any                `json:"logprobs,omitempty"`
+	Refusal     string               `json:"refusal,omitempty"`
+	Type        string               `json:"type"`
+	Text        string               `json:"text,omitempty"`
+	ImageURL    string               `json:"image_url,omitempty"`
+	Detail      string               `json:"detail,omitempty"`
 }
 
 func DecodeResponseRequest(decoder *json.Decoder) (ResponseRequest, error) {
@@ -128,7 +136,7 @@ func (r ResponseRequest) Validate() error {
 	}
 	if r.Reasoning != nil && r.Reasoning.Effort != "" {
 		switch r.Reasoning.Effort {
-		case "none", "minimal", "low", "medium", "high", "xhigh":
+		case "none", "minimal", "low", "medium", "high", "xhigh", "max":
 		default:
 			problems = append(problems, errors.New("reasoning.effort is invalid"))
 		}
@@ -150,15 +158,15 @@ func (r ResponseRequest) Validate() error {
 		if len(tool.Parameters) > 0 && (!json.Valid(tool.Parameters) || bytes.TrimSpace(tool.Parameters)[0] != '{') {
 			problems = append(problems, fmt.Errorf("tools[%d].parameters must be a JSON object", index))
 		}
-		if tool.Strict != nil && *tool.Strict {
-			problems = append(problems, fmt.Errorf("tools[%d].strict=true cannot be represented losslessly", index))
+
+	}
+	for _, include := range r.Include {
+		if include != "reasoning.encrypted_content" {
+			problems = append(problems, errors.New("include value is not supported"))
 		}
 	}
-	if r.Stream && len(r.Tools) > 0 {
-		problems = append(problems, errors.New("streaming tools are not available yet"))
-	}
-	if r.Reasoning != nil {
-		problems = append(problems, errors.New("reasoning output cannot be represented losslessly in Phase 1A"))
+	if r.Reasoning != nil && r.Reasoning.Summary != "" && r.Reasoning.Summary != "auto" && r.Reasoning.Summary != "concise" && r.Reasoning.Summary != "detailed" {
+		problems = append(problems, errors.New("reasoning.summary is invalid"))
 	}
 	if r.Text != nil {
 		switch r.Text.Format.Type {
@@ -230,15 +238,22 @@ type ResponseTextOut struct {
 const OutputItemWebSearchCall = "web_search_call"
 
 type ResponseOutputItem struct {
-	ID        string                  `json:"id"`
-	Type      string                  `json:"type"`
-	Status    string                  `json:"status"`
-	Role      string                  `json:"role,omitempty"`
-	Content   []ResponseOutputContent `json:"content,omitempty"`
-	CallID    string                  `json:"call_id,omitempty"`
-	Name      string                  `json:"name,omitempty"`
-	Arguments string                  `json:"arguments,omitempty"`
-	Action    *ResponseToolAction     `json:"action,omitempty"`
+	ID               string                     `json:"id"`
+	Type             string                     `json:"type"`
+	Status           string                     `json:"status"`
+	Role             string                     `json:"role,omitempty"`
+	Content          []ResponseOutputContent    `json:"content,omitempty"`
+	CallID           string                     `json:"call_id,omitempty"`
+	Name             string                     `json:"name,omitempty"`
+	Arguments        string                     `json:"arguments,omitempty"`
+	Action           *ResponseToolAction        `json:"action,omitempty"`
+	EncryptedContent string                     `json:"encrypted_content,omitempty"`
+	Summary          []ResponseReasoningSummary `json:"summary,omitempty"`
+}
+
+type ResponseReasoningSummary struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
 }
 
 type ResponseOutputContent struct {
@@ -297,9 +312,10 @@ type ResponseUsage struct {
 }
 
 type ResponseTokenDetails struct {
-	CachedTokens    int64 `json:"cached_tokens,omitempty"`
-	ReasoningTokens int64 `json:"reasoning_tokens,omitempty"`
-	AudioTokens     int64 `json:"audio_tokens,omitempty"`
+	CachedTokens     int64 `json:"cached_tokens,omitempty"`
+	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens  int64 `json:"reasoning_tokens,omitempty"`
+	AudioTokens      int64 `json:"audio_tokens,omitempty"`
 }
 
 type ResponseStreamEvent struct {
@@ -308,15 +324,53 @@ type ResponseStreamEvent struct {
 	Response       *Response              `json:"response,omitempty"`
 	OutputIndex    *int                   `json:"output_index,omitempty"`
 	ContentIndex   *int                   `json:"content_index,omitempty"`
+	SummaryIndex   *int                   `json:"summary_index,omitempty"`
 	ItemID         string                 `json:"item_id,omitempty"`
 	Item           *ResponseOutputItem    `json:"item,omitempty"`
 	Part           *ResponseOutputContent `json:"part,omitempty"`
 	Delta          string                 `json:"delta,omitempty"`
 	Text           string                 `json:"text,omitempty"`
 	Arguments      string                 `json:"arguments,omitempty"`
+	Refusal        string                 `json:"refusal,omitempty"`
 	Name           string                 `json:"name,omitempty"`
 	Code           string                 `json:"code,omitempty"`
 	Message        string                 `json:"message,omitempty"`
 	Param          *string                `json:"param,omitempty"`
 	Logprobs       *[]any                 `json:"logprobs,omitempty"`
+}
+
+// Reasoning's summary member is required even when empty. Other item types do
+// not accept it, so it cannot be made unconditional on the shared wire struct.
+func (item ResponseInputItem) MarshalJSON() ([]byte, error) {
+	if item.Type == "reasoning" {
+		summary := item.Summary
+		if summary == nil {
+			summary = []ResponseReasoningSummary{}
+		}
+		return json.Marshal(struct {
+			Type             string                     `json:"type"`
+			ID               string                     `json:"id,omitempty"`
+			Summary          []ResponseReasoningSummary `json:"summary"`
+			EncryptedContent string                     `json:"encrypted_content,omitempty"`
+		}{item.Type, item.ID, summary, item.EncryptedContent})
+	}
+	type alias ResponseInputItem
+	return json.Marshal(alias(item))
+}
+
+func (item ResponseOutputItem) MarshalJSON() ([]byte, error) {
+	if item.Type == "reasoning" {
+		summary := item.Summary
+		if summary == nil {
+			summary = []ResponseReasoningSummary{}
+		}
+		return json.Marshal(struct {
+			Type             string                     `json:"type"`
+			ID               string                     `json:"id"`
+			Summary          []ResponseReasoningSummary `json:"summary"`
+			EncryptedContent string                     `json:"encrypted_content,omitempty"`
+		}{item.Type, item.ID, summary, item.EncryptedContent})
+	}
+	type alias ResponseOutputItem
+	return json.Marshal(alias(item))
 }

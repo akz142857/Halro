@@ -251,6 +251,18 @@ func (h *Handler) Transcriptions(w http.ResponseWriter, r *http.Request) {
 			call.ContentType = part.Header.Get("Content-Type")
 		case "model":
 			model = string(data)
+		case "languages[]":
+			if len(call.Languages) >= 100 {
+				writeError(w, 400, "invalid_request_error", "too many languages", nil)
+				return
+			}
+			call.Languages = append(call.Languages, string(data))
+		case "keywords[]":
+			if len(call.Keywords) >= 100 {
+				writeError(w, 400, "invalid_request_error", "too many keywords", nil)
+				return
+			}
+			call.Keywords = append(call.Keywords, string(data))
 		case "language":
 			call.Language = string(data)
 		case "prompt":

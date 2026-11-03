@@ -20,7 +20,7 @@ const MappingRevision uint64 = 1
 const defaultMaxTokens int64 = 1024
 
 func DecodePortable(request anthropicapi.MessageRequest) (semantic.GenerateRequest, error) {
-	if len(request.Thinking) > 0 || len(request.Metadata) > 0 || request.ServiceTier != "" || request.TopK != nil {
+	if len(request.CacheControl) > 0 || len(request.Thinking) > 0 || len(request.Metadata) > 0 || request.ServiceTier != "" || request.TopK != nil {
 		return semantic.GenerateRequest{}, errors.New("request contains Anthropic-native fields")
 	}
 	result := semantic.GenerateRequest{

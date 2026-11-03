@@ -21,6 +21,7 @@ const (
 	PrimitiveOpenAIChatStream                     Primitive = "openai.chat-completions.stream"
 	PrimitiveOpenAIEmbeddings                     Primitive = "openai.embeddings"
 	PrimitiveOpenAIResponses                      Primitive = "openai.responses"
+	PrimitiveOpenAIResponsesStream                Primitive = "openai.responses.stream"
 	PrimitiveAzureChatCompletions                 Primitive = "azure-openai.chat-completions"
 	PrimitiveAzureChatStream                      Primitive = "azure-openai.chat-completions.stream"
 	PrimitiveAzureEmbeddings                      Primitive = "azure-openai.embeddings"
@@ -292,7 +293,7 @@ func (adapter legacyEmbeddingPrimitive) EmbedSemantic(ctx context.Context, call 
 func translationForPrimitive(primitive Primitive) semantic.TranslationLoss {
 	switch primitive {
 	case PrimitiveOpenAIChatCompletions, PrimitiveOpenAIChatStream, PrimitiveOpenAIEmbeddings,
-		PrimitiveOpenAIResponses,
+		PrimitiveOpenAIResponses, PrimitiveOpenAIResponsesStream,
 		PrimitiveAnthropicMessages, PrimitiveAnthropicMessagesStream,
 		PrimitiveBedrockMantleOpenAIChat, PrimitiveBedrockMantleOpenAIChatStream,
 		PrimitiveBedrockMantleOpenAIResponses, PrimitiveBedrockMantleOpenAIResponsesStream,
@@ -408,6 +409,11 @@ func (target Target) NativeMessages(stream bool) (NativeMessagesAdapter, error) 
 // everyone else: a member the Chat wire has no place for cannot cross it, which
 // is why provider-executed tools were unreachable on OpenAI while the Responses
 // endpoint that serves them was already implemented.
+type SemanticStreamGenerator interface {
+	SemanticGenerator
+	GenerateSemanticStream(context.Context, GenerateCall, func(semantic.Event) error) (*semantic.Usage, error)
+}
+
 type SemanticGenerator interface {
 	Adapter
 	GenerateSemantic(context.Context, GenerateCall) (semantic.GenerateResult, error)
@@ -420,7 +426,8 @@ type SemanticGenerator interface {
 // grown a method", and it is invisible in the profile table where a reader looks
 // for what a profile does.
 var semanticGenerationPrimitives = map[Primitive]bool{
-	PrimitiveOpenAIResponses: true,
+	PrimitiveOpenAIResponses:       true,
+	PrimitiveOpenAIResponsesStream: true,
 	// MiniMax's Responses profile is served by the same adapter branch.
 	//
 	// What leaving it out does, stated after checking rather than before: the
@@ -495,11 +502,15 @@ func (adapter semanticGenerationPrimitive) Generate(ctx context.Context, call Ge
 	return result, nil
 }
 
-// GenerateStream is present because GenerationAdapter requires it and absent in
-// effect because no profile binds this primitive to a streaming operation. A
-// profile that wants streaming here has to bind a stream primitive, and until
-// one does, a streaming request is refused by the target filter rather than by
-// an adapter improvising a single chunk out of a unary answer.
-func (adapter semanticGenerationPrimitive) GenerateStream(context.Context, GenerateCall, func(semantic.Event) error) (*semantic.Usage, error) {
-	return nil, &Error{Class: ErrorBadRequest, Message: "this provider primitive does not stream"}
+// Semantic streaming preserves Responses-only fields without a Chat request round trip.
+func (adapter semanticGenerationPrimitive) GenerateStream(ctx context.Context, call GenerateCall, emit func(semantic.Event) error) (*semantic.Usage, error) {
+	streamer, ok := adapter.adapter.(SemanticStreamGenerator)
+	if !ok || emit == nil {
+		return nil, &Error{Class: ErrorBadRequest, Message: "this provider primitive does not stream"}
+	}
+	return streamer.GenerateSemanticStream(ctx, call, func(event semantic.Event) error {
+		event.Translation = translationForPrimitive(adapter.primitive)
+		event.MappingRevision = openaiwire.MappingRevision
+		return emit(event)
+	})
 }

@@ -1626,6 +1626,8 @@ save: "Save and hot-reload", saveWithDeclaration: "Declare and save",  saveDisab
       "bigmodel.coding-plan": "GLM Coding Plan (subscription)",
     },
     profiles: {
+      "openai.chat-embeddings.v1": "Chat Completions and embeddings (/v1/chat/completions)",
+      "openai.responses.v1": "Responses (/v1/responses, tools with reasoning)",
       "bedrock.mantle.chat.v1": "Mantle · Chat Completions (default /v1 route)",
       "bedrock.mantle.openai.chat.v1": "Mantle · Chat Completions (/openai/v1 route)",
       "bedrock.mantle.responses.v1": "Mantle · Responses, stateless (default /v1 route)",

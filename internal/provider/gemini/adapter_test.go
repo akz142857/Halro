@@ -285,3 +285,68 @@ func TestGeminiRefusalBecomesAnUnsupportedVerdictOnlyForADependentProbe(t *testi
 		t.Fatalf("baseline probe recorded %s, want inconclusive: %#v", root.Status, root)
 	}
 }
+
+func TestGenerateContentExplicitlyDisablesStorage(t *testing.T) {
+	request := openaiapi.ChatCompletionRequest{Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}}}
+	for _, stream := range []bool{false, true} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]json.RawMessage
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if string(body["store"]) != "false" {
+				t.Fatalf("store must be explicitly false: %s", body["store"])
+			}
+			if stream {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}\n\n"))
+			} else {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`))
+			}
+		}))
+		adapter := testAdapter(t, server.URL)
+		call := provider.ChatCall{ProviderModel: "gemini-3.8-flash", Request: request}
+		var err error
+		if stream {
+			_, err = adapter.ChatStream(context.Background(), call, func(semantic.Event) error { return nil })
+		} else {
+			_, err = adapter.Chat(context.Background(), call)
+		}
+		adapter.Close()
+		server.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestNewGeminiContractsRejectRemovedControls(t *testing.T) {
+	sampling := 0.5
+	one := 1
+	for _, model := range []string{"gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"} {
+		for _, mutate := range []func(*openaiapi.ChatCompletionRequest){
+			func(r *openaiapi.ChatCompletionRequest) { r.Temperature = &sampling },
+			func(r *openaiapi.ChatCompletionRequest) { r.TopP = &sampling },
+			func(r *openaiapi.ChatCompletionRequest) { r.N = &one },
+			func(r *openaiapi.ChatCompletionRequest) {
+				r.Messages = append(r.Messages, openaiapi.Message{Role: "assistant", Content: openaiapi.TextContent("prefill")})
+			},
+			func(r *openaiapi.ChatCompletionRequest) {
+				r.Messages = append(r.Messages, openaiapi.Message{Role: "assistant", Content: openaiapi.TextContent("prefill")}, openaiapi.Message{Role: "developer", Content: openaiapi.TextContent("instruction")})
+			},
+			func(r *openaiapi.ChatCompletionRequest) {
+				r.Messages = append(r.Messages, openaiapi.Message{Role: "assistant", Content: openaiapi.TextContent("prefill")}, openaiapi.Message{Role: "user", Content: openaiapi.TextContent("")}, openaiapi.Message{Role: "system", Content: openaiapi.TextContent("instruction")})
+			},
+		} {
+			request := openaiapi.ChatCompletionRequest{Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}}}
+			mutate(&request)
+			if _, err := translateChatForModel(request, model); err == nil {
+				t.Fatalf("%s accepted removed field", model)
+			}
+			if _, err := translateChatForModel(request, "gemini-2.5-pro"); err != nil {
+				t.Fatalf("legacy model changed: %v", err)
+			}
+		}
+	}
+}

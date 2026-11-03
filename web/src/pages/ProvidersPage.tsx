@@ -1264,11 +1264,9 @@ function ProviderForm({
   const [name, setName] = useState(current?.name ?? "");
   const [type, setType] = useState<ProviderType>(initialType);
   // Which implementation this connection is anchored on. There is something to
-  // choose in exactly two situations, and the served matrix says which: a type
-  // that sells more than one product (BigModel's two regions), and a group whose
-  // routes are partitioned (Bedrock Mantle, where each model answers on exactly
-  // one route). Everywhere else the group's profiles ride one connection
-  // together and this control is not rendered.
+  // choose where the served matrix offers multiple products or explicit
+  // protocol alternatives, including OpenAI Chat versus Responses. Companion
+  // profiles such as media remain part of the selected connection group.
   const initialProfile = current?.profile_id
     && connectionChoices(catalog, initialType).some((choice) => choice.profileID === current.profile_id)
     ? current.profile_id
@@ -1367,6 +1365,12 @@ function ProviderForm({
   const submissionPending = useRef(false);
   const mutation = useMutation({
     mutationFn: () => {
+      // A protocol selector does not make Chat/Responses the anchor when all
+      // enabled operations belong to a companion such as Media. Keep the
+      // explicit anchor consistent with the capability set sent to the server.
+      const submissionProfile = combinableProfiles(catalog, type, anchorProfile).find(
+        (profile) => capabilityNames.some((name) => capabilities[name] && profile.ceiling[name]),
+      );
       const value = {
       name, type, base_url: baseURL,
       // Sent where the operator actually chose, and only there. Naming the
@@ -1375,7 +1379,7 @@ function ProviderForm({
       // option and it picked it: the server assigns capabilities across the
       // group and the anchor follows.
       ...(choices.length > 1 && selectedChoice ? {
-        profile_id: selectedChoice.profileID,
+        profile_id: submissionProfile?.id ?? selectedChoice.profileID,
         access_surface: selectedChoice.accessSurface,
         credential_scheme: selectedChoice.credentialScheme,
       } : {}),

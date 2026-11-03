@@ -6,20 +6,21 @@ const baseURL = process.env.HALRO_COMPAT_BASE_URL ?? 'http://127.0.0.1:18088/v1'
 const apiKey = 'gw_sdk_compatibility';
 const client = new OpenAI({ apiKey, baseURL, maxRetries: 0, timeout: 5_000 });
 const anthropicOptions = { apiKey, baseURL: baseURL.replace(/\/v1$/, ''), maxRetries: 0, timeout: 5_000 };
-// SDK 1.x defaults to 2026-10-21; Halro's declared contract is 2023-06-01.
+// Exercise the SDK default (2026-10-21) and the retained legacy contract.
+for (const defaultHeaders of [undefined, { 'anthropic-version': '2023-06-01' }]) {
+  const anthropic = new Anthropic({ ...anthropicOptions, defaultHeaders });
+  const message = await anthropic.messages.create({ model: 'compat-chat', max_tokens: 32, messages: [{ role: 'user', content: 'ping' }] });
+  assert.equal(message.content[0].text, 'compat-ok');
+  assert.equal(message.usage.output_tokens, 2);
+  const messageStream = await anthropic.messages.create({ model: 'compat-chat', max_tokens: 32, messages: [{ role: 'user', content: 'ping' }], stream: true });
+  let anthropicText = '';
+  for await (const event of messageStream) if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') anthropicText += event.delta.text;
+  assert.equal(anthropicText, 'compat-ok');
+}
 await assert.rejects(
-  new Anthropic(anthropicOptions).messages.create({ model: 'compat-chat', max_tokens: 32, messages: [{ role: 'user', content: 'ping' }] }),
+  new Anthropic({ ...anthropicOptions, defaultHeaders: { 'anthropic-version': '2099-01-01' } }).messages.create({ model: 'compat-chat', max_tokens: 32, messages: [{ role: 'user', content: 'ping' }] }),
   (error) => error instanceof Anthropic.BadRequestError && error.message.includes('unsupported anthropic-version'),
 );
-const anthropic = new Anthropic({ ...anthropicOptions, defaultHeaders: { 'anthropic-version': '2023-06-01' } });
-
-const message = await anthropic.messages.create({ model: 'compat-chat', max_tokens: 32, messages: [{ role: 'user', content: 'ping' }] });
-assert.equal(message.content[0].text, 'compat-ok');
-assert.equal(message.usage.output_tokens, 2);
-const messageStream = await anthropic.messages.create({ model: 'compat-chat', max_tokens: 32, messages: [{ role: 'user', content: 'ping' }], stream: true });
-let anthropicText = '';
-for await (const event of messageStream) if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') anthropicText += event.delta.text;
-assert.equal(anthropicText, 'compat-ok');
 
 const completion = await client.chat.completions.create({
   model: 'compat-chat',

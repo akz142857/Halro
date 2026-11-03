@@ -194,9 +194,7 @@ func openAIChatModels() []Entry {
 		builtinEntry(provider, profile, "gpt-4o-mini", with(chat(128_000, 16_384), vision, structuredOutputs)),
 		builtinEntry(provider, profile, "gpt-4.1", with(chat(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
 		builtinEntry(provider, profile, "gpt-4.1-mini", with(chat(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
-		builtinEntry(provider, profile, "gpt-4.1-nano", with(chat(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
 		builtinEntry(provider, profile, "o3", with(chat(200_000, 100_000), vision, structuredOutputs, developerRole, reasoning)),
-		builtinEntry(provider, profile, "o4-mini", with(chat(200_000, 100_000), vision, structuredOutputs, developerRole, reasoning)),
 		builtinEntry(provider, profile, "gpt-5", with(chat(400_000, 128_000), vision, structuredOutputs, developerRole, reasoning)),
 		builtinEntry(provider, profile, "gpt-5-mini", with(chat(400_000, 128_000), vision, structuredOutputs, developerRole, reasoning)),
 		builtinEntry(provider, profile, "gpt-5-nano", with(chat(400_000, 128_000), vision, structuredOutputs, developerRole, reasoning)),
@@ -215,40 +213,38 @@ func openAIChatModels() []Entry {
 		builtinEntry(provider, profile, "gpt-5.6-sol", with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
 		builtinEntry(provider, profile, "gpt-5.6-terra", with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
 		builtinEntry(provider, profile, "gpt-5.6-luna", with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		builtinEntry(provider, profile, "gpt-6-astra", withoutTools(with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning))),
+		builtinEntry(provider, profile, "gpt-6.1-sol", withoutTools(with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning))),
+		builtinEntry(provider, profile, "gpt-6.1-terra", withoutTools(with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning))),
+		builtinEntry(provider, profile, "gpt-6-sol", with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		builtinEntry(provider, profile, "gpt-6-luna", with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
 	}
 }
 
-// openAIResponsesModels covers the same OpenAI text models reached through the
-// Responses endpoint.
-//
-// They are separate entries rather than the chat entries reused, because a
-// model's capabilities are a property of the surface it is reached on as much as
-// of the model: nothing here claims streaming or stream usage, since this
-// profile binds no stream primitive, and nothing claims reasoning, since the
-// canonical response mapper cannot preserve reasoning items.
-//
-// provider_executed_tools is claimed by no entry. It is at the profile ceiling
-// and off in its defaults, which is where an operator accepts the upstream
-// egress it implies; a catalogue entry asserting it would make that acceptance
-// automatic for every model.
+// openAIResponsesModels carries the reviewed OpenAI text-model capabilities
+// through the native Responses endpoint, including reasoning and streaming.
+// Provider-executed tools remain an operator-controlled opt-in.
 func openAIResponsesModels() []Entry {
 	const provider, profile = domain.ProviderOpenAI, domain.ProfileOpenAIResponses
 	return []Entry{
-		builtinEntry(provider, profile, "gpt-4o", with(responses(128_000, 16_384), vision, structuredOutputs)),
-		builtinEntry(provider, profile, "gpt-4o-mini", with(responses(128_000, 16_384), vision, structuredOutputs)),
-		builtinEntry(provider, profile, "gpt-4.1", with(responses(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
-		builtinEntry(provider, profile, "gpt-4.1-mini", with(responses(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
-		builtinEntry(provider, profile, "gpt-4.1-nano", with(responses(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
-		builtinEntry(provider, profile, "o3", with(responses(200_000, 100_000), vision, structuredOutputs, developerRole)),
-		builtinEntry(provider, profile, "o4-mini", with(responses(200_000, 100_000), vision, structuredOutputs, developerRole)),
-		builtinEntry(provider, profile, "gpt-5", with(responses(400_000, 128_000), vision, structuredOutputs, developerRole)),
-		builtinEntry(provider, profile, "gpt-5-mini", with(responses(400_000, 128_000), vision, structuredOutputs, developerRole)),
-		builtinEntry(provider, profile, "gpt-5-nano", with(responses(400_000, 128_000), vision, structuredOutputs, developerRole)),
-		builtinEntry(provider, profile, "gpt-5.4", with(responses(1_050_000, 128_000), vision, structuredOutputs)),
-		builtinEntry(provider, profile, "gpt-5.5", with(responses(1_050_000, 128_000), vision, structuredOutputs)),
-		builtinEntry(provider, profile, "gpt-5.6-sol", with(responses(1_050_000, 128_000), vision, structuredOutputs)),
-		builtinEntry(provider, profile, "gpt-5.6-terra", with(responses(1_050_000, 128_000), vision, structuredOutputs)),
-		builtinEntry(provider, profile, "gpt-5.6-luna", with(responses(1_050_000, 128_000), vision, structuredOutputs)),
+		builtinEntry(provider, profile, "gpt-4o", with(openAIResponses(128_000, 16_384), vision, structuredOutputs)),
+		builtinEntry(provider, profile, "gpt-4o-mini", with(openAIResponses(128_000, 16_384), vision, structuredOutputs)),
+		builtinEntry(provider, profile, "gpt-4.1", with(openAIResponses(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
+		builtinEntry(provider, profile, "gpt-4.1-mini", with(openAIResponses(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
+		builtinEntry(provider, profile, "o3", with(openAIResponses(200_000, 100_000), vision, structuredOutputs, developerRole, reasoning)),
+		builtinEntry(provider, profile, "gpt-5", with(openAIResponses(400_000, 128_000), vision, structuredOutputs, developerRole, reasoning)),
+		builtinEntry(provider, profile, "gpt-5-mini", with(openAIResponses(400_000, 128_000), vision, structuredOutputs, developerRole, reasoning)),
+		builtinEntry(provider, profile, "gpt-5-nano", with(openAIResponses(400_000, 128_000), vision, structuredOutputs, developerRole, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.4", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.5", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.6-sol", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.6-terra", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.6-luna", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		unaskedOpenAIResponsesEntry(provider, profile, "gpt-6-astra", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		unaskedOpenAIResponsesEntry(provider, profile, "gpt-6.1-sol", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		unaskedOpenAIResponsesEntry(provider, profile, "gpt-6.1-terra", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		unaskedOpenAIResponsesEntry(provider, profile, "gpt-6-sol", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		unaskedOpenAIResponsesEntry(provider, profile, "gpt-6-luna", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
 	}
 }
 
@@ -291,8 +287,10 @@ func openAIMediaModels() []Entry {
 	speech := domain.ProviderCapabilities{Speech: true}
 	return []Entry{
 		builtinEntry(provider, profile, "omni-moderation-latest", moderations),
-		builtinEntry(provider, profile, "gpt-image-1", images),
-		builtinEntry(provider, profile, "dall-e-3", images),
+		builtinEntry(provider, profile, "gpt-image-2", images),
+		builtinEntry(provider, profile, "gpt-image-2.5-sunburst", images),
+		builtinEntry(provider, profile, "gpt-image-2.5-flare", images),
+		builtinEntry(provider, profile, "gpt-transcribe", transcriptions),
 		builtinEntry(provider, profile, "whisper-1", transcriptions),
 		builtinEntry(provider, profile, "gpt-4o-transcribe", transcriptions),
 		builtinEntry(provider, profile, "gpt-4o-mini-transcribe", transcriptions),
@@ -339,6 +337,7 @@ func openAIMediaModels() []Entry {
 func deepSeekModels() []Entry {
 	const provider, profile = domain.ProviderDeepSeek, domain.ProfileDeepSeekChat
 	return []Entry{
+		builtinEntry(provider, profile, "deepseek-flash", with(chat(1_048_576, 393_216), reasoning, vision)),
 		builtinEntry(provider, profile, "deepseek-v4-flash", with(chat(1_000_000, 384_000), reasoning)),
 		builtinEntry(provider, profile, "deepseek-v4-pro", with(chat(1_000_000, 384_000), reasoning)),
 		builtinEntry(provider, profile, "deepseek-v4-flash-vision-exp", with(chat(1_000_000, 384_000), reasoning, vision)),
@@ -400,15 +399,10 @@ func anthropicModels() []Entry {
 // A mainland account was not measured; the retirement is MiniMax's, not a
 // region's, and leaving the entries out is the fail-closed reading.
 //
-// MiniMax-M3.1-Flash appeared on the list in the same measurement and is left
-// out on evidence, measured 2026-10-24: it always thinks. thinking disabled,
-// reasoning effort none and reasoning_split false each answer 400 on every
-// face, and Halro sends thinking disabled on every Chat and Anthropic request
-// that did not ask to think — so an entry would offer a deployment that refuses
-// the ordinary request. Its Responses face returns a reasoning item unasked,
-// which DecodeProviderResponse refuses after the call is paid. Serving it would
-// take a catalogue-driven "always thinks" distinction in the renderer, not an
-// entry here. See docs/verification/provider-real-matrix.md.
+// MiniMax-M3.1-Flash was measured as always thinking on 2026-10-24. The
+// 2026-11-03 Chat renderer now preserves its effort ladder and default thinking,
+// so only that face receives an entry. Anthropic and Responses still cannot
+// carry its full contract and remain absent. See docs/verification/provider-api-review-2026-11.md.
 //
 // M3's one deliberate narrowing: Responses binds no stream primitive and
 // cannot carry reasoning items, so its Responses entry claims neither.
@@ -443,7 +437,10 @@ func minimaxModels() []Entry {
 	// window, and that reads as a missing row rather than a model that can emit
 	// its whole window.
 	const m2Context int64 = 204_800
+	m31 := builtinEntry(provider, domain.ProfileMiniMaxChat, "MiniMax-M3.1-Flash", with(openAIChat(m3Context, m3Output), reasoning, vision))
+	m31.ReasonsUnasked = true
 	entries := []Entry{
+		m31,
 		// M3 sees images and can be asked not to think.
 		builtinEntry(provider, domain.ProfileMiniMaxAnthropicMessages, "MiniMax-M3", with(anthropicChat(m3Context, m3Output), reasoning, vision)),
 		builtinEntry(provider, domain.ProfileMiniMaxChat, "MiniMax-M3", with(openAIChat(m3Context, m3Output), reasoning, vision)),
@@ -561,6 +558,8 @@ func kimiModels() []Entry {
 	}
 	entries := []Entry{
 		builtinEntry(provider, domain.ProfileKimiChat, "kimi-k3", kimiChat(k3Context, k3Output)),
+		reasonsUnasked(builtinEntry(provider, domain.ProfileKimiChat, "kimi-k3.1-pro", kimiChat(k3Context, k3Output))),
+		reasonsUnasked(builtinEntry(provider, domain.ProfileKimiChat, "kimi-k3.1-pro-highspeed", kimiChat(k3Context, k3Output))),
 		builtinEntry(provider, domain.ProfileKimiAnthropicMessages, "kimi-k3", kimiAnthropic(k3Context, k3Output)),
 		reasonsUnasked(builtinEntry(provider, domain.ProfileKimiResponses, "kimi-k3", kimiResponses(k3Context, k3Output))),
 		// Measured answering on all three faces on 2026-09-01, which is what the
@@ -787,6 +786,8 @@ func geminiModels() []Entry {
 	}
 	return []Entry{
 		builtinEntry(provider, profile, "gemini-3.6-flash", generate(0, 0)),
+		builtinEntry(provider, profile, "gemini-3.8-flash", generate(1_048_576, 65_536)),
+		builtinEntry(provider, profile, "gemini-4-argon", generate(0, 0)),
 		builtinEntry(provider, profile, "gemini-3.5-flash", generate(0, 0)),
 		builtinEntry(provider, profile, "gemini-3.5-flash-lite", generate(0, 0)),
 		builtinEntry(provider, profile, "gemini-3.1-flash-lite", generate(0, 0)),
@@ -1001,4 +1002,21 @@ func openAICompatibleModels() []Entry {
 		builtinEntry(provider, profile, "text-embedding-3-small", embeddings),
 		builtinEntry(provider, profile, "text-embedding-3-large", embeddings),
 	}
+}
+
+func openAIResponses(contextTokens, outputTokens int64) domain.ProviderCapabilities {
+	caps := responses(contextTokens, outputTokens)
+	caps.Streaming, caps.StreamUsage = true, true
+	return caps
+}
+
+func withoutTools(caps domain.ProviderCapabilities) domain.ProviderCapabilities {
+	caps.Tools = false
+	return caps
+}
+
+func unaskedOpenAIResponsesEntry(provider domain.ProviderType, profile domain.ProviderProfileID, model string, caps domain.ProviderCapabilities) Entry {
+	entry := builtinEntry(provider, profile, model, caps)
+	entry.ReasonsUnasked = true
+	return entry
 }

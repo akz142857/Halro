@@ -72,7 +72,7 @@ func TestAdminProviderProfilesServesEveryTableRow(t *testing.T) {
 			continue
 		}
 		if got.AccessSurface != want.AccessSurface || got.CredentialScheme != want.CredentialScheme ||
-			got.Immutable != want.Immutable {
+			got.Immutable != want.Immutable || got.ImplementationChoice != want.ImplementationChoice {
 			t.Errorf("%s identity differs from the table: %#v", want.ID, got)
 		}
 		if got.Defaults != want.Defaults {
@@ -218,9 +218,9 @@ func TestAdminProviderProfilesServesTheConstraintsRoutingApplies(t *testing.T) {
 		t.Errorf("the Mantle constraints were not served: %#v", mantle)
 	}
 
-	// OpenAI now states two real boundaries: portable Anthropic projection,
-	// and the Ark-only encrypted reasoning replay extension on Chat.
-	if declared := constraints[domain.ProfileOpenAIChatEmbeddings]; len(declared) != 2 {
+	// OpenAI states the portable Messages projection and the separate Chat
+	// and Responses replay/tool/summary boundaries.
+	if declared := constraints[domain.ProfileOpenAIChatEmbeddings]; len(declared) != 3 {
 		t.Errorf("the OpenAI chat profile served %d constraint rows", len(declared))
 	}
 }

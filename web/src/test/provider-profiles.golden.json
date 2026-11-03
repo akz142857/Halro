@@ -257,17 +257,29 @@
           },
           "id": "openai.chat-embeddings.v1",
           "immutable": false,
+          "implementation_choice": true,
           "offering_id": "openai.api-platform",
           "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
               "unsupported_request_fields": [
                 "messages[].encrypted_content"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "Responses items are mapped through the OpenAI Chat Completions ProviderPrimitive"
+              ],
+              "endpoint_id": "openai.responses.create.v1",
+              "path": "/v1/responses",
+              "unsupported_request_fields": [
+                "tools[].type",
+                "reasoning.summary"
               ]
             },
             {
@@ -304,11 +316,11 @@
             "max_output_tokens": 0,
             "moderations": false,
             "provider_executed_tools": true,
-            "reasoning": false,
+            "reasoning": true,
             "rerank": false,
             "speech": false,
-            "stream_usage": false,
-            "streaming": false,
+            "stream_usage": true,
+            "streaming": true,
             "structured_outputs": true,
             "tools": true,
             "transcriptions": false,
@@ -356,11 +368,11 @@
             "max_output_tokens": 0,
             "moderations": false,
             "provider_executed_tools": false,
-            "reasoning": false,
+            "reasoning": true,
             "rerank": false,
             "speech": false,
-            "stream_usage": false,
-            "streaming": false,
+            "stream_usage": true,
+            "streaming": true,
             "structured_outputs": true,
             "tools": true,
             "transcriptions": false,
@@ -383,11 +395,11 @@
             "max_output_tokens": 0,
             "moderations": false,
             "provider_executed_tools": false,
-            "reasoning": false,
+            "reasoning": true,
             "rerank": false,
             "speech": false,
-            "stream_usage": false,
-            "streaming": false,
+            "stream_usage": true,
+            "streaming": true,
             "structured_outputs": true,
             "tools": true,
             "transcriptions": false,
@@ -395,15 +407,15 @@
           },
           "id": "openai.responses.v1",
           "immutable": false,
+          "implementation_choice": true,
           "offering_id": "openai.api-platform",
           "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
-                "Chat messages are mapped to stateless Responses input items",
-                "store=false is always sent upstream",
-                "this profile binds no stream primitive, so a streaming request is routed away rather than refused by field",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "Chat messages are mapped to native stateless Responses input items with store=false",
+                "reasoning and function tools are preserved in unary and streaming calls; encrypted_content carries an opaque replay envelope",
+                "provider-executed tools remain unary only"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -412,23 +424,33 @@
                 "n",
                 "stop",
                 "seed",
-                "reasoning_effort",
-                "messages[].encrypted_content"
+                "tools"
               ]
             },
             {
               "declared_transforms": [
-                "portable Messages content is mapped through the OpenAI Responses endpoint",
-                "this profile binds no stream primitive, so a streaming Messages request is routed away rather than refused by field"
+                "stateless Responses are sent directly with store=false",
+                "tools[].type=web_search requires the selected connection to declare provider_executed_tools",
+                "url_citation annotations are carried back on the output text"
+              ],
+              "endpoint_id": "openai.responses.create.v1",
+              "path": "/v1/responses",
+              "unsupported_request_fields": [
+                "tools"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "portable Messages content is mapped through the native OpenAI Responses endpoint; provider-executed tools remain unary only"
               ],
               "endpoint_id": "anthropic.messages.2023-06-01",
               "path": "/v1/messages",
               "unsupported_request_fields": [
                 "metadata",
-                "output_config.effort",
                 "service_tier",
                 "stop_sequences",
                 "thinking",
+                "tools",
                 "top_k"
               ]
             }
@@ -481,11 +503,11 @@
             "max_output_tokens": 0,
             "moderations": true,
             "provider_executed_tools": false,
-            "reasoning": true,
+            "reasoning": false,
             "rerank": false,
             "speech": true,
-            "stream_usage": true,
-            "streaming": true,
+            "stream_usage": false,
+            "streaming": false,
             "structured_outputs": false,
             "tools": false,
             "transcriptions": true,
@@ -544,6 +566,7 @@
           },
           "id": "openai.media-resources.v1",
           "immutable": true,
+          "implementation_choice": false,
           "offering_id": "openai.api-platform",
           "region_id": "",
           "request_constraints": [],
@@ -672,6 +695,7 @@
           },
           "id": "anthropic.messages.2023-06-01",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "anthropic.console-api",
           "region_id": "",
           "request_constraints": [
@@ -681,7 +705,7 @@
                 "portable Chat content is mapped to Anthropic Messages blocks",
                 "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
                 "response_format and reasoning_effort are declared unsupported at field granularity because support is value-dependent: json_schema maps to output_config.format and the low/medium/high/xhigh/max ladder maps to output_config.effort, while json_object and any effort outside that ladder have no Anthropic representation and are routed away before provider I/O",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -693,7 +717,8 @@
                 "reasoning_effort",
                 "user",
                 "messages[].content[].detail",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -706,7 +731,11 @@
               "unsupported_request_fields": [
                 "text.format",
                 "user",
-                "input[].content[].detail"
+                "input[].content[].detail",
+                "reasoning",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             }
           ],
@@ -834,17 +863,29 @@
           },
           "id": "azure-openai.chat-embeddings.v1",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "azure-openai.resource",
           "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
               "unsupported_request_fields": [
                 "messages[].encrypted_content"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "Responses items are mapped through the Azure Chat Completions ProviderPrimitive"
+              ],
+              "endpoint_id": "openai.responses.create.v1",
+              "path": "/v1/responses",
+              "unsupported_request_fields": [
+                "tools[].type",
+                "reasoning.summary"
               ]
             },
             {
@@ -986,6 +1027,7 @@
           },
           "id": "deepseek.chat.v1",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "deepseek.api-platform",
           "region_id": "",
           "request_constraints": [
@@ -993,10 +1035,10 @@
               "declared_transforms": [
                 "DeepSeek speaks this wire format but accepts a smaller member list, so the fields it has no place for are rejected before provider I/O rather than sent and ignored",
                 "user is carried as DeepSeek's user_id",
-                "reasoning_effort and response_format are declared unsupported at field granularity because support is value-dependent: none maps to thinking.type=disabled and the low and high rungs map to thinking.reasoning_effort with thinking enabled, while minimal, medium and xhigh have no DeepSeek rung; json_object maps to response_format and json_schema has no DeepSeek counterpart",
+                "reasoning_effort and response_format are declared unsupported at field granularity because support is value-dependent: none maps to thinking.type=disabled and the low, high and max rungs map to top-level reasoning_effort with thinking enabled, while minimal, medium and xhigh have no DeepSeek rung; json_object maps to response_format and json_schema has no DeepSeek counterpart",
                 "max_completion_tokens is value-dependent too: it counts reasoning tokens and DeepSeek's max_tokens does not, so it is carried as max_tokens on a request with thinking off and rejected before provider I/O on one with thinking on, or on one that already carries max_tokens",
                 "n and parallel_tool_calls are value-dependent in the same way: n=1 and parallel_tool_calls=true are what omitting the member already means, and only n\u003e1 and a request to run tools one at a time are rejected",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -1007,7 +1049,8 @@
                 "parallel_tool_calls",
                 "response_format",
                 "reasoning_effort",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -1022,7 +1065,11 @@
               "path": "/v1/responses",
               "unsupported_request_fields": [
                 "parallel_tool_calls",
-                "text.format"
+                "text.format",
+                "reasoning",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -1168,6 +1215,7 @@
           },
           "id": "volcengine.ark.chat.v1",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "volcengine.ark-api",
           "region_id": "",
           "request_constraints": [
@@ -1186,7 +1234,8 @@
                 "user",
                 "reasoning_effort",
                 "max_tokens",
-                "max_completion_tokens"
+                "max_completion_tokens",
+                "tools[].function.strict"
               ]
             },
             {
@@ -1196,7 +1245,11 @@
               "endpoint_id": "openai.responses.create.v1",
               "path": "/v1/responses",
               "unsupported_request_fields": [
-                "user"
+                "user",
+                "reasoning",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -1366,6 +1419,7 @@
           },
           "id": "bigmodel.cn.chat-embeddings.v1",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "bigmodel.general-api",
           "region_id": "cn",
           "request_constraints": [
@@ -1378,7 +1432,7 @@
                 "json_object is preserved while json_schema is rejected",
                 "stream usage is returned by the final provider chunk without sending stream_options",
                 "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -1393,7 +1447,8 @@
                 "tool_choice",
                 "user",
                 "messages[].content[].detail",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -1423,7 +1478,10 @@
                 "text.format",
                 "tool_choice",
                 "user",
-                "input[].content[].detail"
+                "input[].content[].detail",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -1555,6 +1613,7 @@
           },
           "id": "bigmodel.global.chat.v1",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "bigmodel.general-api",
           "region_id": "global",
           "request_constraints": [
@@ -1567,7 +1626,7 @@
                 "json_object is preserved while json_schema is rejected",
                 "stream usage is returned by the final provider chunk without sending stream_options",
                 "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -1582,7 +1641,8 @@
                 "tool_choice",
                 "user",
                 "messages[].content[].detail",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -1600,7 +1660,10 @@
                 "text.format",
                 "tool_choice",
                 "user",
-                "input[].content[].detail"
+                "input[].content[].detail",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -1732,6 +1795,7 @@
           },
           "id": "bigmodel.cn.coding.chat.v1",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "bigmodel.coding-plan",
           "region_id": "cn",
           "request_constraints": [
@@ -1745,7 +1809,7 @@
                 "json_object is preserved while json_schema is rejected",
                 "stream usage is returned by the final provider chunk without sending stream_options",
                 "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -1760,7 +1824,8 @@
                 "tool_choice",
                 "user",
                 "messages[].content[].detail",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -1778,7 +1843,10 @@
                 "text.format",
                 "tool_choice",
                 "user",
-                "input[].content[].detail"
+                "input[].content[].detail",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -1910,6 +1978,7 @@
           },
           "id": "bigmodel.global.coding.chat.v1",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "bigmodel.coding-plan",
           "region_id": "global",
           "request_constraints": [
@@ -1922,7 +1991,7 @@
                 "json_object and json_schema are both routed away until the international Coding endpoint is measured",
                 "streaming is declared from the official coding-agent contract, but stream usage accounting remains unknown until a subscription response is captured",
                 "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -1937,7 +2006,8 @@
                 "tool_choice",
                 "user",
                 "messages[].content[].detail",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -1955,7 +2025,10 @@
                 "text.format",
                 "tool_choice",
                 "user",
-                "input[].content[].detail"
+                "input[].content[].detail",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -2103,17 +2176,29 @@
           },
           "id": "openai-compatible.chat-embeddings.v1",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "openai-compatible.self-declared",
           "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
               "unsupported_request_fields": [
                 "messages[].encrypted_content"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "Responses items are mapped through the compatible Chat Completions ProviderPrimitive"
+              ],
+              "endpoint_id": "openai.responses.create.v1",
+              "path": "/v1/responses",
+              "unsupported_request_fields": [
+                "tools[].type",
+                "reasoning.summary"
               ]
             },
             {
@@ -2255,13 +2340,14 @@
           },
           "id": "gemini.generate-content.text.v1beta",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "google.gemini-api",
           "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
                 "developer messages are merged into Gemini system_instruction",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -2274,7 +2360,8 @@
                 "response_format",
                 "reasoning_effort",
                 "user",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -2299,7 +2386,11 @@
                 "tool_choice",
                 "parallel_tool_calls",
                 "text.format",
-                "user"
+                "user",
+                "reasoning",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -2451,17 +2542,31 @@
           },
           "id": "bedrock.mantle.chat.v1",
           "immutable": true,
+          "implementation_choice": true,
           "offering_id": "aws.bedrock-mantle",
           "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
               "unsupported_request_fields": [
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "Responses items are mapped through Bedrock Mantle Chat Completions"
+              ],
+              "endpoint_id": "openai.responses.create.v1",
+              "path": "/v1/responses",
+              "unsupported_request_fields": [
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -2591,17 +2696,31 @@
           },
           "id": "bedrock.mantle.openai.chat.v1",
           "immutable": true,
+          "implementation_choice": true,
           "offering_id": "aws.bedrock-mantle",
           "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
               "unsupported_request_fields": [
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "Responses items are mapped through Bedrock Mantle Chat Completions"
+              ],
+              "endpoint_id": "openai.responses.create.v1",
+              "path": "/v1/responses",
+              "unsupported_request_fields": [
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -2731,6 +2850,7 @@
           },
           "id": "bedrock.mantle.responses.v1",
           "immutable": true,
+          "implementation_choice": true,
           "offering_id": "aws.bedrock-mantle",
           "region_id": "",
           "request_constraints": [
@@ -2739,7 +2859,7 @@
                 "Chat messages are mapped to stateless Responses input items",
                 "store=false is always sent upstream",
                 "streaming requests with tools are rejected before provider I/O",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -2750,7 +2870,8 @@
                 "seed",
                 "tools",
                 "reasoning_effort",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -2760,7 +2881,11 @@
               "endpoint_id": "openai.responses.create.v1",
               "path": "/v1/responses",
               "unsupported_request_fields": [
-                "tools"
+                "tools",
+                "reasoning",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -2895,6 +3020,7 @@
           },
           "id": "bedrock.mantle.openai.responses.v1",
           "immutable": true,
+          "implementation_choice": true,
           "offering_id": "aws.bedrock-mantle",
           "region_id": "",
           "request_constraints": [
@@ -2903,7 +3029,7 @@
                 "Chat messages are mapped to stateless Responses input items",
                 "store=false is always sent upstream",
                 "streaming requests with tools are rejected before provider I/O",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -2914,7 +3040,8 @@
                 "seed",
                 "tools",
                 "reasoning_effort",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -2924,7 +3051,11 @@
               "endpoint_id": "openai.responses.create.v1",
               "path": "/v1/responses",
               "unsupported_request_fields": [
-                "tools"
+                "tools",
+                "reasoning",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -3059,6 +3190,7 @@
           },
           "id": "bedrock.mantle.anthropic.messages.v1",
           "immutable": true,
+          "implementation_choice": true,
           "offering_id": "aws.bedrock-mantle",
           "region_id": "",
           "request_constraints": [
@@ -3068,7 +3200,7 @@
                 "portable Chat content is mapped to Bedrock Mantle Anthropic Messages blocks",
                 "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
                 "Anthropic states that only base64-encoded image sources are available on Amazon Bedrock, so an image_url naming an address to fetch is rejected before provider I/O while a data URL is carried as a base64 source",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -3080,7 +3212,8 @@
                 "reasoning_effort",
                 "user",
                 "messages[].content[].detail",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -3094,7 +3227,11 @@
               "unsupported_request_fields": [
                 "text.format",
                 "user",
-                "input[].content[].detail"
+                "input[].content[].detail",
+                "reasoning",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -3282,6 +3419,7 @@
           },
           "id": "minimax.anthropic.messages.v1",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "minimax.api-platform",
           "region_id": "",
           "request_constraints": [
@@ -3292,7 +3430,7 @@
                 "reasoning_effort is unsupported at any value because MiniMax's reasoning switch is the thinking member and it accepts no output_config; a request that asks for no depth still reaches MiniMax with thinking disabled, because the portable mapper emits that member on its own and MiniMax spells it the same way",
                 "stop is rejected before provider I/O rather than sent: MiniMax documents stop_sequences as ignored, so sending it would return 200 for a completion that ran past a boundary the caller set and paid for",
                 "response_format has no counterpart on this face at all: MiniMax accepts no output_config, and its Chat face was later measured serving json_object while this one was not",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -3305,7 +3443,8 @@
                 "reasoning_effort",
                 "user",
                 "messages[].content[].detail",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -3318,7 +3457,11 @@
               "unsupported_request_fields": [
                 "text.format",
                 "user",
-                "input[].content[].detail"
+                "input[].content[].detail",
+                "reasoning",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -3451,6 +3594,7 @@
           },
           "id": "minimax.chat.v1",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "minimax.api-platform",
           "region_id": "",
           "request_constraints": [
@@ -3463,7 +3607,7 @@
                 "max_completion_tokens is carried as itself and max_tokens is carried into it only while thinking is off, because MiniMax's single output bound counts reasoning; max_tokens is value-dependent for that reason — a request that also thinks, or that carries both members, is routed away by field before provider I/O rather than refused after the budget is reserved",
                 "n and parallel_tool_calls are value-dependent: n=1 and parallel_tool_calls=true are what omitting the member already means",
                 "response_format is value-dependent: json_object was measured against a real account on 2026-08-31 and is carried, text is dropped because it means what omitting the member already means, and the schema mode has never been sent and is rejected before provider I/O",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -3475,7 +3619,8 @@
                 "parallel_tool_calls",
                 "user",
                 "max_tokens",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -3489,7 +3634,10 @@
               "unsupported_request_fields": [
                 "parallel_tool_calls",
                 "text.format",
-                "user"
+                "user",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -3622,6 +3770,7 @@
           },
           "id": "minimax.responses.v1",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "minimax.api-platform",
           "region_id": "",
           "request_constraints": [
@@ -3631,7 +3780,7 @@
                 "store=false is always sent upstream",
                 "this profile binds no stream primitive, so a streaming request is routed away rather than refused by field — MiniMax itself documents stream on /v1/responses, so this is a Halro scope decision and not an upstream limit",
                 "reasoning is unsupported here and supported on the MiniMax Chat profile: the canonical response mapper cannot preserve the reasoning items this endpoint returns",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -3644,7 +3793,8 @@
                 "parallel_tool_calls",
                 "reasoning_effort",
                 "user",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -3657,7 +3807,11 @@
               "unsupported_request_fields": [
                 "parallel_tool_calls",
                 "text.format",
-                "user"
+                "user",
+                "reasoning",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -3787,6 +3941,7 @@
           },
           "id": "minimax.cn.subscription.openai.chat.v1",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "minimax.subscription-access",
           "region_id": "cn",
           "request_constraints": [
@@ -3794,7 +3949,7 @@
               "declared_transforms": [
                 "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
                 "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -3806,7 +3961,8 @@
                 "parallel_tool_calls",
                 "user",
                 "max_tokens",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -3819,7 +3975,10 @@
               "unsupported_request_fields": [
                 "parallel_tool_calls",
                 "text.format",
-                "user"
+                "user",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -3948,6 +4107,7 @@
           },
           "id": "minimax.global.subscription.openai.chat.v1",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "minimax.subscription-access",
           "region_id": "global",
           "request_constraints": [
@@ -3955,7 +4115,7 @@
               "declared_transforms": [
                 "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
                 "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -3967,7 +4127,8 @@
                 "parallel_tool_calls",
                 "user",
                 "max_tokens",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -3980,7 +4141,10 @@
               "unsupported_request_fields": [
                 "parallel_tool_calls",
                 "text.format",
-                "user"
+                "user",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -4155,6 +4319,7 @@
           },
           "id": "kimi.chat.v1",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "kimi.open-platform",
           "region_id": "",
           "request_constraints": [
@@ -4163,13 +4328,13 @@
                 "Kimi speaks this wire format but does not model the sampling parameters at all: temperature, top_p and n are absent from its request schema, and its parameter reference pins each to one value per model and answers any other with an error, so they are rejected before provider I/O rather than sent or silently replaced with the pinned value",
                 "temperature and top_p are rejected at any value rather than only at the wrong one, because the pinned value varies by model and a field rule is keyed by profile with no target in hand; carrying the pinned value is a capability-model change rather than a platform registration",
                 "max_tokens is value-dependent: Kimi has one output bound and it counts reasoning, so an answer-only bound is the same tokens exactly while nothing is thinking — which is the ordinary case, because a request that names no depth is sent with reasoning switched off. A request that does ask for depth, or that carries both output members, is routed away before provider I/O",
-                "reasoning_effort is value-dependent: none, low and high are carried, and minimal, medium, xhigh and Kimi's own max are routed away because the portable ladder and Kimi's do not share those rungs",
+                "reasoning_effort is value-dependent: none, low, high and max are carried, and minimal, medium and xhigh are routed away because the portable ladder and Kimi's do not share those rungs",
                 "the reasoning member itself depends on the model named: kimi-k3 reads a top-level reasoning_effort while the K2.x line reads thinking, and the renderer follows Kimi's own OpenAPI discriminator over exact model identifiers rather than inferring a family from a name",
                 "K2.x has one on state and no depth ladder, so an effort routed to those models is honored as on rather than preserved",
                 "a request that names no depth is sent with reasoning explicitly switched off rather than left to Kimi's default, which is on: measured 2026-09-01, kimi-k3 and kimi-k2.6 both accept the off switch, and leaving it out returned a 64-token budget spent entirely on reasoning with an empty answer. kimi-k2.7-code has no off state and keeps reasoning, which is a per-model fact this profile-scoped declaration cannot express",
                 "stop is value-dependent: Kimi documents it as honored and it is carried, but only within its published bounds of five sequences of at most 32 bytes each, and a request outside them is routed away before provider I/O rather than refused while the body is encoded",
                 "tool_choice is value-dependent, and the two ways of forcing a tool call are not the same value: a named function together with a depth is refused by every Kimi model measured and is routed away before provider I/O, while required together with a depth is refused by the K2.x line and accepted by kimi-k3, which answers with a tool call and a reasoning span in one response. That second half is a per-model limit this profile-scoped declaration cannot express, so it is refused after the reservation rather than routed away with the kimi-k3 request that works",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -4184,7 +4349,8 @@
                 "reasoning_effort",
                 "stop",
                 "tool_choice",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -4203,7 +4369,11 @@
                 "top_p",
                 "parallel_tool_calls",
                 "user",
-                "tool_choice"
+                "tool_choice",
+                "reasoning",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -4342,6 +4512,7 @@
           },
           "id": "kimi.anthropic.messages.v1",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "kimi.open-platform",
           "region_id": "",
           "request_constraints": [
@@ -4353,7 +4524,7 @@
                 "temperature and top_p are rejected because Kimi pins each per model and answers any other value with an error",
                 "response_format is value-dependent: output_config.format takes a json_schema and enforces it, and there is no schema-less mode",
                 "stop is carried: measured honored on this face, unlike MiniMax's, which documents the member as ignored",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -4367,7 +4538,8 @@
                 "reasoning_effort",
                 "user",
                 "messages[].content[].detail",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -4384,7 +4556,11 @@
                 "top_p",
                 "text.format",
                 "user",
-                "input[].content[].detail"
+                "input[].content[].detail",
+                "reasoning",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -4518,6 +4694,7 @@
           },
           "id": "kimi.code.openai.chat.v1",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "kimi.code",
           "region_id": "",
           "request_constraints": [
@@ -4527,7 +4704,7 @@
                 "reasoning is switched off explicitly on every request that asks for no depth, because each model this product serves reasons by default and bills for it",
                 "the single output bound counts reasoning, so an answer-only max_tokens is carried only while nothing is thinking",
                 "the published depth ladder is low/high/max and the upstream enforces none of it, so a depth this face does not publish is refused rather than served as the product's default depth",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -4543,7 +4720,8 @@
                 "tool_choice",
                 "top_p",
                 "user",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -4562,7 +4740,11 @@
                 "text.format",
                 "tool_choice",
                 "top_p",
-                "user"
+                "user",
+                "reasoning",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {
@@ -4698,6 +4880,7 @@
           },
           "id": "kimi.code.anthropic.messages.v1",
           "immutable": false,
+          "implementation_choice": false,
           "offering_id": "kimi.code",
           "region_id": "",
           "request_constraints": [
@@ -4707,7 +4890,7 @@
                 "thinking disabled is sent on every portable request that asks for no depth, and was measured honoured on k3, k3-256k and kimi-for-coding, non-streaming and streaming alike",
                 "temperature and top_k are refused here because this face accepts them and answers 200 without establishing that either was read, where the Chat face refuses them outright",
                 "stop_sequences is carried and was measured honoured, but a cut answer reports stop_reason end_turn with a null stop_sequence rather than naming the sequence",
-                "encrypted_content is authenticated Ark reasoning state and is refused on other provider profiles"
+                "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -4721,7 +4904,8 @@
                 "reasoning_effort",
                 "user",
                 "messages[].content[].detail",
-                "messages[].encrypted_content"
+                "messages[].encrypted_content",
+                "tools[].function.strict"
               ]
             },
             {
@@ -4738,7 +4922,11 @@
                 "top_p",
                 "text.format",
                 "user",
-                "input[].content[].detail"
+                "input[].content[].detail",
+                "reasoning",
+                "tools[].type",
+                "reasoning.summary",
+                "tools[].strict"
               ]
             },
             {

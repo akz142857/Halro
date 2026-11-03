@@ -763,3 +763,44 @@ func TestStreamingKeepsFlushingAndExtendsThroughTheWrapper(t *testing.T) {
 		t.Fatalf("expected the stream to keep extending the deadline, got %d", len(response.deadlines))
 	}
 }
+
+func TestMessagesCurrentVersionAndRemovedParameters(t *testing.T) {
+	for _, count := range []bool{false, true} {
+		for _, stream := range []bool{false, true} {
+			if count && stream {
+				continue
+			}
+			for _, removed := range []bool{false, true} {
+				service := &fakeService{}
+				handler, err := New(service, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body := `{"model":"chat","max_tokens":32,"messages":[{"role":"user","content":"hello"}]`
+				if stream {
+					body += `,"stream":true`
+				}
+				if removed {
+					body += `,"temperature":null`
+				}
+				body += `}`
+				request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+				request.Header.Set("x-api-key", "gw_test")
+				request.Header.Set("anthropic-version", anthropicapi.CurrentVersion)
+				response := httptest.NewRecorder()
+				if count {
+					handler.CountTokens(response, request)
+				} else {
+					handler.Messages(response, request)
+				}
+				if removed {
+					if response.Code != 400 || service.calls != 0 {
+						t.Fatalf("removed parameter reached service: %d calls=%d %s", response.Code, service.calls, response.Body.String())
+					}
+				} else if response.Code != 200 || service.calls != 1 {
+					t.Fatalf("new SDK version refused: %d calls=%d %s", response.Code, service.calls, response.Body.String())
+				}
+			}
+		}
+	}
+}

@@ -98,12 +98,8 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		// stated in only one of the two layers is a fact the other can contradict.
 		add(request.OutputFormat != nil && request.OutputFormat.Kind == semantic.OutputJSONObject, "response_format")
 		add(request.OutputFormat != nil && request.OutputFormat.Kind == semantic.OutputJSONSchema && !request.OutputFormat.Strict, "response_format")
-		// The ladder is bounded by the portable representation, not by Anthropic.
-		// Every portable request reaches this profile through the OpenAI wire
-		// form, whose reasoning_effort stops at xhigh, so declaring Anthropic's
-		// own `max` as routable produced a request that passed capability
-		// filtering and then failed while being rendered — after the budget
-		// reservation, naming a field the caller never sent.
+		// Carry only the intersection of the portable and Anthropic ladders;
+		// both now include max, while none/minimal remain non-portable here.
 		add(request.ReasoningEffort != "" && !slices.Contains(portableEffortLevels, request.ReasoningEffort), "reasoning_effort")
 		add(request.EndUserRef != "", "user")
 	}, domain.ProfileAnthropicMessages, domain.ProfileAnthropicSubscriptionMessages)
@@ -145,11 +141,8 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		add(request.Candidates != nil && *request.Candidates > 1, "n")
 		add(len(request.Stop) > 0, "stop")
 		add(request.Seed != nil, "seed")
-		// Reasoning is declared rather than left to the capability filter alone.
-		// The filter does drop this target for a request that asks to think — the
-		// ceiling carries no reasoning — but a caller told "no route supports
-		// this" learns less than one told which field cost them the route.
-		add(request.ReasoningEffort != "", "reasoning_effort")
+		add(request.Stream && hasProviderExecutedTool(request), "tools")
+
 	}, domain.ProfileOpenAIResponses)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// DeepSeek speaks this wire format but accepts a smaller set of members
@@ -662,7 +655,11 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 	// negative into a dozen rule sets is a dozen places for the next profile to
 	// be forgotten. The allowlist inverts that — a new profile carries it only by
 	// being named here.
-	add(hasEncryptedReasoning(request) && profileID != domain.ProfileVolcengineChat, "messages[].encrypted_content")
+	for _, tool := range request.Tools {
+		add(tool.Strict != nil && *tool.Strict && profileID != domain.ProfileOpenAIResponses && profileID != domain.ProfileOpenAIChatEmbeddings && profileID != domain.ProfileAzureChatEmbeddings && profileID != domain.ProfileOpenAICompatible, "tools[].strict")
+	}
+	add(hasEncryptedReasoning(request) && profileID != domain.ProfileVolcengineChat && profileID != domain.ProfileOpenAIResponses, "messages[].encrypted_content")
+	add(request.ReasoningSummary != "" && profileID != domain.ProfileOpenAIResponses, "reasoning.summary")
 	add(hasProviderExecutedTool(request) && !slices.Contains(providerExecutedToolProfiles, profileID), "tools[].type")
 	return unsupported
 }
@@ -674,8 +671,24 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 func UnsupportedGenerateFieldsForTarget(profileID domain.ProviderProfileID, providerModel string, request semantic.GenerateRequest) []string {
 	unsupported := UnsupportedGenerateFields(profileID, request)
 	var targetFields []string
-	if profileID == domain.ProfileVolcengineChat {
+	if profileID == domain.ProfileOpenAIChatEmbeddings || profileID == domain.ProfileOpenAIResponses {
+		targetFields = OpenAITargetUnsupportedGenerateFields(profileID, providerModel, request)
+	} else if profileID == domain.ProfileVolcengineChat {
 		targetFields = VolcengineTargetUnsupportedGenerateFields(providerModel, request)
+	} else if profileID == domain.ProfileDeepSeekChat {
+		targetFields = DeepSeekTargetUnsupportedGenerateFields(providerModel, request)
+	} else if profileID == domain.ProfileKimiChat {
+		targetFields = KimiTargetUnsupportedGenerateFields(providerModel, request)
+	} else if profileID == domain.ProfileGeminiText {
+		targetFields = GeminiTargetUnsupportedGenerateFields(providerModel, request)
+	} else if profileID == domain.ProfileMiniMaxChat && MiniMaxAlwaysReasons(providerModel) {
+		targetFields = miniMaxSamplingUnsupportedFields(providerModel, request.Temperature, request.TopP)
+		if request.ReasoningEffort == "none" || request.ReasoningEffort == "minimal" {
+			targetFields = append(targetFields, "reasoning_effort")
+		}
+		if request.VisibleOutputTokenLimit != nil {
+			targetFields = append(targetFields, "max_tokens")
+		}
 	} else if profileID == domain.ProfileBigModelCNChatEmbeddings || profileID == domain.ProfileBigModelGlobalChat ||
 		profileID == domain.ProfileBigModelCNCodingChat || profileID == domain.ProfileBigModelGlobalCodingChat {
 		targetFields = BigModelTargetUnsupportedGenerateFields(profileID, providerModel, request)

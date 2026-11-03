@@ -107,6 +107,11 @@ func (s operationSet) Resolve(operation Operation) (OperationAdapter, bool) {
 				if !ok {
 					return nil, false
 				}
+				if operation == OperationChatStream {
+					if _, ok := generator.(SemanticStreamGenerator); !ok {
+						return nil, false
+					}
+				}
 				return semanticGenerationPrimitive{adapter: generator, primitive: binding.Primitive, operation: binding.LegacyOperation}, true
 			}
 			return legacyGenerationPrimitive{adapter: s.adapter, primitive: binding.Primitive, operation: binding.LegacyOperation}, true

@@ -51,7 +51,7 @@ func TestImageInferenceResourcesRejectsAmbiguousPayload(t *testing.T) {
 	adapter := inferenceResourcesTestAdapter(t, func(request *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"created":1,"data":[{"url":"https://x","b64_json":"also"}]}`)), Request: request}, nil
 	})
-	_, err := adapter.GenerateImage(context.Background(), provider.ImageCall{ProviderModel: "gpt-image-1", Prompt: "test", Count: 1})
+	_, err := adapter.GenerateImage(context.Background(), provider.ImageCall{ProviderModel: "gpt-image-2.5-flare", Prompt: "test", Count: 1})
 	var providerErr *provider.Error
 	if err == nil || !errors.As(err, &providerErr) || providerErr.Class != provider.ErrorMalformed {
 		t.Fatalf("err=%v", err)
@@ -98,5 +98,67 @@ func TestBatchCreationIsLimitedToDeclaredEndpoints(t *testing.T) {
 	_, err := adapter.CreateBatch(context.Background(), provider.BatchCreateCall{InputFileID: "file-abc", Endpoint: "/v1/fine_tuning/jobs", CompletionWindow: "24h"})
 	if err == nil || calls != 0 {
 		t.Fatalf("err=%v calls=%d", err, calls)
+	}
+}
+
+func TestCurrentGPTImageParametersReachTheWire(t *testing.T) {
+	adapter := inferenceResourcesTestAdapter(t, func(request *http.Request) (*http.Response, error) {
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if string(body["output_format"]) != `"webp"` || string(body["background"]) != `"transparent"` || string(body["output_compression"]) != "0" || body["response_format"] != nil || body["style"] != nil {
+			t.Fatalf("incorrect image dialect: %v", body)
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"created":1,"data":[{"b64_json":"image"}]}`))}, nil
+	})
+	compression := 0
+	_, err := adapter.GenerateImage(context.Background(), provider.ImageCall{ProviderModel: "gpt-image-2.5-flare", Prompt: "test", Count: 1, OutputFormat: "webp", Background: "transparent", OutputCompression: &compression})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTranscribeLanguageAndKeywordHintsUseCurrentMultipartFields(t *testing.T) {
+	adapter := inferenceResourcesTestAdapter(t, func(request *http.Request) (*http.Response, error) {
+		reader, err := request.MultipartReader()
+		if err != nil {
+			t.Fatal(err)
+		}
+		fields := map[string][]string{}
+		for {
+			part, err := reader.NextPart()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(part)
+			fields[part.FormName()] = append(fields[part.FormName()], string(body))
+		}
+		if len(fields["languages[]"]) != 1 || fields["languages[]"][0] != "en" || len(fields["keywords[]"]) != 2 || fields["language"] != nil {
+			t.Fatalf("incorrect transcription hints: %v", fields)
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"text":"ok","languages":[{"code":"en"}]}`))}, nil
+	})
+	_, err := adapter.Transcribe(context.Background(), provider.TranscriptionCall{ProviderModel: "gpt-transcribe", Filename: "audio.wav", ContentType: "audio/wav", Data: []byte("audio"), Language: "en", Keywords: []string{"OpenAI", "Halro"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRetiredImagesAndUnsupportedMediaControlsAreRefusedBeforeIO(t *testing.T) {
+	adapter := inferenceResourcesTestAdapter(t, func(*http.Request) (*http.Response, error) {
+		t.Fatal("invalid media request reached upstream")
+		return nil, nil
+	})
+	for _, call := range []provider.ImageCall{{ProviderModel: "gpt-image-1", Prompt: "x", Count: 1}, {ProviderModel: "dall-e-3", Prompt: "x", Count: 1}, {ProviderModel: "gpt-image-2.5-flare", Prompt: "x", Count: 1, ResponseFormat: "url"}} {
+		if _, err := adapter.GenerateImage(context.Background(), call); err == nil {
+			t.Fatal("unsupported image request accepted")
+		}
+	}
+	if _, err := adapter.Transcribe(context.Background(), provider.TranscriptionCall{ProviderModel: "gpt-transcribe", Filename: "x.wav", Data: []byte("audio"), Keywords: []string{"invalid\nkeyword"}}); err == nil {
+		t.Fatal("invalid keyword accepted")
 	}
 }

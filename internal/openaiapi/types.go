@@ -13,7 +13,7 @@ import (
 // because it bounds every portable request: a request that reaches any provider
 // through the OpenAI intermediate representation cannot carry an effort outside
 // it, whatever the destination provider supports on its own surface.
-var ReasoningEffortLevels = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
+var ReasoningEffortLevels = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 type ChatCompletionRequest struct {
 	Model               string          `json:"model,omitempty"`
@@ -51,6 +51,7 @@ type Tool struct {
 }
 
 type ToolFunction struct {
+	Strict      *bool           `json:"strict,omitempty"`
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
@@ -203,10 +204,8 @@ type Usage struct {
 	// byte-identical for providers that report no breakdown.
 	PromptTokensDetails     *PromptTokenDetails     `json:"prompt_tokens_details,omitempty"`
 	CompletionTokensDetails *CompletionTokenDetails `json:"completion_tokens_details,omitempty"`
-	// CacheWriteTokens carries the cache-creation tier that Anthropic and Bedrock
-	// bill at a premium. OpenAI has no equivalent field, so it stays off the wire
-	// rather than inventing a non-standard key in an OpenAI-shaped response; the
-	// adapters that populate it construct this struct in process.
+	// CacheWriteTokens is the in-process bridge for non-OpenAI providers. New
+	// OpenAI models report the same tier in prompt_tokens_details.cache_write_tokens.
 	CacheWriteTokens int64 `json:"-"`
 	// PromptCacheHitTokens and PromptCacheMissTokens are DeepSeek's spelling of
 	// the cache-read split. It speaks this wire format but reports the tiers as
@@ -243,8 +242,9 @@ type Usage struct {
 }
 
 type PromptTokenDetails struct {
-	CachedTokens int64 `json:"cached_tokens,omitempty"`
-	AudioTokens  int64 `json:"audio_tokens,omitempty"`
+	CachedTokens     int64 `json:"cached_tokens,omitempty"`
+	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
+	AudioTokens      int64 `json:"audio_tokens,omitempty"`
 }
 
 type CompletionTokenDetails struct {
@@ -387,4 +387,11 @@ type EmbeddingData struct {
 	Object    string          `json:"object"`
 	Embedding json.RawMessage `json:"embedding"`
 	Index     int             `json:"index"`
+}
+
+func (u Usage) CacheWritePromptTokens() int64 {
+	if u.PromptTokensDetails != nil && u.PromptTokensDetails.CacheWriteTokens != 0 {
+		return u.PromptTokensDetails.CacheWriteTokens
+	}
+	return u.CacheWriteTokens
 }

@@ -118,6 +118,10 @@ func servedNatively(manifest EndpointCompatibilityManifest, profileID domain.Pro
 // routing can compare them; the manifest speaks each endpoint's own.
 func endpointSpelling(endpointID, field string) string {
 	switch endpointID {
+	case "openai.chat-completions.v1":
+		if field == "tools[].strict" {
+			return "tools[].function.strict"
+		}
 	case "openai.responses.create.v1":
 		switch field {
 		case "messages[].content[].detail":
@@ -126,6 +130,8 @@ func endpointSpelling(endpointID, field string) string {
 			return "input[].content[].image_url"
 		case "response_format":
 			return "text.format"
+		case "reasoning_effort":
+			return "reasoning"
 		}
 	case "anthropic.messages.2023-06-01":
 		switch field {
@@ -174,6 +180,15 @@ func coverageProbes(northbound string) []semantic.GenerateRequest {
 		return request
 	}
 	probes := []semantic.GenerateRequest{
+		with(func(r *semantic.GenerateRequest) { r.ReasoningSummary = "auto" }),
+		with(func(r *semantic.GenerateRequest) {
+			yes := true
+			r.Tools = []semantic.Tool{{Name: "strict", Strict: &yes}}
+		}),
+		with(func(r *semantic.GenerateRequest) {
+			r.Stream = true
+			r.Tools = []semantic.Tool{{Name: semantic.ProviderToolWebSearch, Execution: semantic.ToolExecutionProvider}}
+		}),
 		with(func(r *semantic.GenerateRequest) {
 			r.Messages = []semantic.Message{{Role: semantic.RoleAssistant, Content: []semantic.Content{{Kind: semantic.ContentReasoning, EncryptedContent: "opaque"}}}}
 		}),

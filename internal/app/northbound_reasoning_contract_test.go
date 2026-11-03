@@ -181,8 +181,11 @@ func profileDecodesReasoning(t *testing.T, profileID domain.ProviderProfileID) b
 			}},
 		})
 		return err == nil
+	case domain.ProfileOpenAIResponses:
+		_, err := openaiwire.DecodeOpenAIProviderResponse(openaiapi.Response{ID: "resp_1", Model: "m", Status: "completed", Output: []openaiapi.ResponseOutputItem{{ID: "rs_1", Type: "reasoning", EncryptedContent: "cipher"}, {ID: "msg_1", Type: "message", Content: []openaiapi.ResponseOutputContent{{Type: "output_text", Text: "answer"}}}}})
+		return err == nil
 	case domain.ProfileMiniMaxResponses, domain.ProfileKimiResponses,
-		domain.ProfileOpenAIResponses, domain.ProfileBedrockMantleResponses,
+		domain.ProfileBedrockMantleResponses,
 		domain.ProfileBedrockMantleOpenAIResponses:
 		// The Responses wire carries reasoning as an output item, and the
 		// canonical mapper has no case for one. It refuses; it does not drop.

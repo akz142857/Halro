@@ -64,6 +64,7 @@ const (
 const ProviderToolWebSearch = "web_search"
 
 type Tool struct {
+	Strict      *bool           `json:"strict,omitempty"`
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Schema      json.RawMessage `json:"schema,omitempty"`
@@ -124,6 +125,7 @@ type GenerateRequest struct {
 	Candidates              *int          `json:"candidates,omitempty"`
 	Stop                    []string      `json:"stop,omitempty"`
 	Seed                    *int64        `json:"seed,omitempty"`
+	ReasoningSummary        string        `json:"reasoning_summary,omitempty"`
 	ReasoningEffort         string        `json:"reasoning_effort,omitempty"`
 	EndUserRef              string        `json:"end_user_ref,omitempty"`
 	Stream                  bool          `json:"stream,omitempty"`
@@ -216,7 +218,7 @@ func (request GenerateRequest) DeriveRequirements() Requirements {
 		}
 		callerTools = true
 	}
-	result := Requirements{Streaming: request.Stream, StreamUsage: request.IncludeUsage, Tools: callerTools || request.ToolChoice != nil || parallelTools, ParallelTools: parallelTools, ProviderExecutedTools: providerTools, JSONObject: jsonObject, StructuredOutputs: structuredOutputs, Reasoning: request.ReasoningEffort != "", Seed: request.Seed != nil, MultipleCandidates: request.Candidates != nil && *request.Candidates > 1, EndUserReference: request.EndUserRef != ""}
+	result := Requirements{Streaming: request.Stream, StreamUsage: request.IncludeUsage, Tools: callerTools || request.ToolChoice != nil || parallelTools, ParallelTools: parallelTools, ProviderExecutedTools: providerTools, JSONObject: jsonObject, StructuredOutputs: structuredOutputs, Reasoning: request.ReasoningEffort != "" || request.ReasoningSummary != "", Seed: request.Seed != nil, MultipleCandidates: request.Candidates != nil && *request.Candidates > 1, EndUserReference: request.EndUserRef != ""}
 	for _, message := range request.Messages {
 		if message.Role == RoleDeveloper {
 			result.DeveloperRole = true

@@ -366,3 +366,38 @@ func TestAnthropicRefusalBecomesAnUnsupportedVerdictOnlyForADependentProbe(t *te
 		t.Fatalf("baseline probe recorded %s, want inconclusive: %#v", root.Status, root)
 	}
 }
+
+func TestMessagesCurrentVersionReachesUpstreamUnchanged(t *testing.T) {
+	adapter := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(anthropicapi.VersionHeader) != anthropicapi.CurrentVersion {
+			t.Fatal("API version changed")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg1","type":"message","role":"assistant","model":"claude-provider","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	})
+	payload := json.RawMessage(`{"model":"public","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+	_, err := adapter.MessagesNative(context.Background(), provider.NativeMessageCall{ProviderModel: "claude-provider", Version: anthropicapi.CurrentVersion, Payload: payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCurrentVersionIsGatedBeforeUpstreamIO(t *testing.T) {
+	adapter := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) { t.Error("invalid version contract reached upstream") })
+	payload := json.RawMessage(`{"model":"public","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+	for _, test := range []struct {
+		provider, model string
+		accepted        bool
+	}{
+		{string(domain.ProviderMiniMax), "MiniMax-M3", false},
+		{string(domain.ProviderKimi), "kimi-k3", false},
+		{string(domain.ProviderBedrock), "anthropic.claude-haiku-4-5", false},
+		{string(domain.ProviderBedrock), "anthropic.claude-opus-4-7", true},
+	} {
+		adapter.providerType = test.provider
+		_, err := adapter.requestTo(context.Background(), provider.NativeMessageCall{ProviderModel: test.model, Version: anthropicapi.CurrentVersion}, payload, false, "")
+		if (err == nil) != test.accepted {
+			t.Fatalf("%s/%s: %v", test.provider, test.model, err)
+		}
+	}
+}

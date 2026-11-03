@@ -412,7 +412,7 @@ func (h *Handler) Messages(writer http.ResponseWriter, request *http.Request) {
 		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", "anthropic-version header is required", requestID)
 		return
 	}
-	if version != anthropicapi.SupportedVersion {
+	if !anthropicapi.IsSupportedVersion(version) {
 		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", "unsupported anthropic-version", requestID)
 		return
 	}
@@ -450,6 +450,10 @@ func (h *Handler) Messages(writer http.ResponseWriter, request *http.Request) {
 			status, kind, message = http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds the configured limit"
 		}
 		writeAnthropicError(writer, status, kind, message, requestID)
+		return
+	}
+	if err := anthropicapi.ValidateVersionPayload(version, decoded.Raw); err != nil {
+		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", err.Error(), requestID)
 		return
 	}
 	request = request.WithContext(requestmeta.WithInboundRequest(request.Context(), decoded))
@@ -522,7 +526,7 @@ func (h *Handler) CountTokens(writer http.ResponseWriter, request *http.Request)
 		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", "anthropic-version header is required", requestID)
 		return
 	}
-	if version != anthropicapi.SupportedVersion {
+	if !anthropicapi.IsSupportedVersion(version) {
 		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", "unsupported anthropic-version", requestID)
 		return
 	}
@@ -558,6 +562,10 @@ func (h *Handler) CountTokens(writer http.ResponseWriter, request *http.Request)
 			status, kind, message = http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds the configured limit"
 		}
 		writeAnthropicError(writer, status, kind, message, requestID)
+		return
+	}
+	if err := anthropicapi.ValidateVersionPayload(version, decoded.Raw); err != nil {
+		writeAnthropicError(writer, http.StatusBadRequest, "invalid_request_error", err.Error(), requestID)
 		return
 	}
 	request = request.WithContext(requestmeta.WithInboundRequest(request.Context(), decoded))

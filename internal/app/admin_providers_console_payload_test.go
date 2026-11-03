@@ -299,6 +299,36 @@ func TestAnImplementationThatServesNothingIsRefused(t *testing.T) {
 	}
 }
 
+func TestMediaOnlyExplicitAnchorCreateAndRename(t *testing.T) {
+	runtime, credentialID, cookie, csrf := providerConsolePayloadFixture(t)
+	input := map[string]any{
+		"name": "Images only", "type": "openai", "base_url": "https://api.openai.com",
+		"credential_id": credentialID, "enabled": true,
+		"profile_id":     domain.ProfileOpenAIMediaResources,
+		"access_surface": domain.SurfaceOpenAI, "credential_scheme": domain.CredentialBearerStatic,
+		"capabilities": map[string]any{"images": true},
+	}
+	created := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/providers", "", input)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
+	}
+	var instance domain.ProviderInstance
+	if err := json.Unmarshal(created.Body.Bytes(), &instance); err != nil {
+		t.Fatal(err)
+	}
+	input["name"] = "Renamed images"
+	updated := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut, "/admin/api/v1/providers/"+instance.ID, `"`+strconv.FormatUint(instance.Revision, 10)+`"`, input)
+	if updated.Code != http.StatusOK {
+		t.Fatalf("edit status=%d body=%s", updated.Code, updated.Body.String())
+	}
+	if err := json.Unmarshal(updated.Body.Bytes(), &instance); err != nil {
+		t.Fatal(err)
+	}
+	if instance.Name != "Renamed images" || instance.ProfileID != domain.ProfileOpenAIMediaResources || len(instance.Bindings) != 1 || !instance.Capabilities.Images || instance.Capabilities.Chat {
+		t.Fatalf("media-only configuration changed: %+v", instance)
+	}
+}
+
 // The bindings array is not accepted alongside the flat set, and not accepted
 // instead of it. Keeping it would have left two ways to say the same thing, one
 // of which the server has to reconcile against the other — which is how the

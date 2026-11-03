@@ -164,8 +164,8 @@ export function credentialIdentities(catalog: ProviderProfilesCatalog, type: Pro
  *    products: different surfaces, different capability sets, different keys;
  *  - distinct connection groups on one credential identity, which represent
  *    protocol alternatives such as OpenAI versus Anthropic;
- *  - a route-partitioned group, which is Bedrock Mantle: one credential and
- *    models that each answer on exactly one of its routes.
+ *  - an explicit implementation choice, such as OpenAI Chat versus Responses;
+ *    route-partitioned groups such as Bedrock Mantle also expose this flag.
  *
  * Where neither holds, the group's profiles ride one connection together and
  * there is nothing to ask — which is every other provider. */
@@ -183,7 +183,7 @@ export function connectionChoices(catalog: ProviderProfilesCatalog, type: Provid
   const groupsSeen = new Set<string>();
   for (const profile of profilesForType(catalog, type)) {
     const group = profile.connection_group_id;
-    if (groupsSeen.has(group) && !profile.route_partitioned) continue;
+    if (groupsSeen.has(group) && !profile.implementation_choice) continue;
     groupsSeen.add(group);
     choices.push({
       profileID: profile.id,

@@ -152,3 +152,40 @@ func TestPortableOnlyFieldsAreTheOnesTheDecoderRejects(t *testing.T) {
 		t.Errorf("DecodePortable rejects %q and it is not declared in AnthropicPortableOnlyFields", field)
 	}
 }
+
+func TestNewVersionIsNotAssumedOnAnthropicCompatibleProviders(t *testing.T) {
+	registry, err := NewNativeSchemaRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := json.RawMessage(`{"model":"public","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+	identity := compatibility.NativeIdentity{ProjectID: "project", PrincipalID: "key", CredentialRef: "cred_provider_1", RouteID: "route", RequestedModel: "public"}
+	for _, profile := range []domain.ProviderProfileID{domain.ProfileAnthropicMessages, domain.ProfileMiniMaxAnthropicMessages, domain.ProfileKimiAnthropicMessages} {
+		_, err := compatibility.NewNativeEnvelope(registry, profile, 1, NativeHeaders(anthropicapi.CurrentVersion, nil), body, identity)
+		if (err == nil) != (profile == domain.ProfileAnthropicMessages) {
+			t.Fatalf("profile %s version gate: %v", profile, err)
+		}
+	}
+}
+
+func TestNativeEnvelopeValidatesBodyAgainstItsVersion(t *testing.T) {
+	registry, _ := NewNativeSchemaRegistry()
+	body := json.RawMessage(`{"model":"public","max_tokens":16,"temperature":null,"messages":[{"role":"user","content":"hi"}]}`)
+	identity := compatibility.NativeIdentity{ProjectID: "project", PrincipalID: "key", CredentialRef: "cred_provider_1", RouteID: "route", RequestedModel: "public"}
+	for _, version := range []string{anthropicapi.SupportedVersion, anthropicapi.CurrentVersion} {
+		_, err := compatibility.NewNativeEnvelope(registry, domain.ProfileAnthropicMessages, 1, NativeHeaders(version, nil), body, identity)
+		if (err != nil) != (version == anthropicapi.CurrentVersion) {
+			t.Fatalf("version %s: %v", version, err)
+		}
+	}
+}
+
+func TestAutomaticCachingRemainsNativeOnly(t *testing.T) {
+	request, err := anthropicapi.DecodeMessageRequest(strings.NewReader(`{"model":"public","max_tokens":16,"cache_control":{"type":"ephemeral","ttl":"1h"},"messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodePortable(request); err == nil {
+		t.Fatal("portable mapping silently discarded automatic cache control")
+	}
+}

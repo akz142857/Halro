@@ -34,7 +34,6 @@ import "github.com/akz142857/Halro/internal/domain"
 // comments in this repository said "drops" and the whole argument for serving
 // Kimi's Responses face rested on that wrong verb.
 var providerDecodeLosesReasoning = map[domain.ProviderProfileID]bool{
-	domain.ProfileOpenAIResponses:              true,
 	domain.ProfileBedrockMantleResponses:       true,
 	domain.ProfileBedrockMantleOpenAIResponses: true,
 	domain.ProfileMiniMaxResponses:             true,
@@ -47,7 +46,6 @@ var providerDecodeLosesReasoning = map[domain.ProviderProfileID]bool{
 // The Chat face is absent because it does carry one, in reasoning_content. That
 // is why Kimi's k2.7-code line is served there and not on the other two.
 var northboundCannotRenderReasoning = map[NorthboundProfileID]bool{
-	ProfileOpenAIResponses:   true,
 	ProfileAnthropicMessages: true,
 }
 

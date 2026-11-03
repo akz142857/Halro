@@ -600,6 +600,9 @@ export interface ProviderProfileDescriptor {
    * of them, so an operator picks a route; where it is false they ride one
    * connection together and there is nothing to pick. */
   route_partitioned: boolean;
+  /** Offers an explicit upstream protocol anchor, including non-partitioned
+   * alternatives such as OpenAI Chat Completions and Responses. */
+  implementation_choice: boolean;
   /** Endpoint pattern used for Admin-entered regional endpoints. A literal URL
    * has no editable region; `{region}` marks the segment the form owns. */
   base_url_template?: string;

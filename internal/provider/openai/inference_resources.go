@@ -49,15 +49,24 @@ func (a *Adapter) GenerateImage(ctx context.Context, call provider.ImageCall) (p
 	if strings.TrimSpace(call.Prompt) == "" || len(call.Prompt) > 32000 || call.Count < 1 || call.Count > 10 {
 		return provider.ImageResult{}, inferenceResourcesBadRequest("image prompt and n between 1 and 10 are required")
 	}
+	if call.ProviderModel == "gpt-image-1" || call.ProviderModel == "dall-e-2" || call.ProviderModel == "dall-e-3" {
+		return provider.ImageResult{}, inferenceResourcesBadRequest("retired image model; configure a supported GPT Image deployment")
+	}
+	if call.ResponseFormat != "" || call.Style != "" {
+		return provider.ImageResult{}, inferenceResourcesBadRequest("GPT Image uses output_format and always returns b64_json; response_format and style are unsupported")
+	}
 	payload := struct {
-		Model          string `json:"model"`
-		Prompt         string `json:"prompt"`
-		N              int    `json:"n"`
-		Quality        string `json:"quality,omitempty"`
-		Size           string `json:"size,omitempty"`
-		ResponseFormat string `json:"response_format,omitempty"`
-		Style          string `json:"style,omitempty"`
-	}{Model: call.ProviderModel, Prompt: call.Prompt, N: call.Count, Quality: call.Quality, Size: call.Size, ResponseFormat: call.ResponseFormat, Style: call.Style}
+		OutputFormat      string `json:"output_format,omitempty"`
+		Background        string `json:"background,omitempty"`
+		OutputCompression *int   `json:"output_compression,omitempty"`
+		Model             string `json:"model"`
+		Prompt            string `json:"prompt"`
+		N                 int    `json:"n"`
+		Quality           string `json:"quality,omitempty"`
+		Size              string `json:"size,omitempty"`
+		ResponseFormat    string `json:"response_format,omitempty"`
+		Style             string `json:"style,omitempty"`
+	}{Model: call.ProviderModel, Prompt: call.Prompt, N: call.Count, Quality: call.Quality, Size: call.Size, OutputFormat: call.OutputFormat, Background: call.Background, OutputCompression: call.OutputCompression}
 	var response struct {
 		Created int64                `json:"created"`
 		Data    []provider.ImageData `json:"data"`
@@ -84,6 +93,17 @@ func (a *Adapter) Transcribe(ctx context.Context, call provider.TranscriptionCal
 	if len(call.Data) == 0 || len(call.Data) > 25<<20 || strings.TrimSpace(call.Filename) == "" {
 		return provider.TranscriptionResult{}, inferenceResourcesBadRequest("audio file is required and must not exceed 25 MiB")
 	}
+	if call.ProviderModel != "gpt-transcribe" && (len(call.Languages) > 0 || len(call.Keywords) > 0) {
+		return provider.TranscriptionResult{}, inferenceResourcesBadRequest("languages and keywords require gpt-transcribe")
+	}
+	if call.Language != "" && len(call.Languages) > 0 {
+		return provider.TranscriptionResult{}, inferenceResourcesBadRequest("language and languages cannot be combined")
+	}
+	for _, keyword := range call.Keywords {
+		if strings.ContainsAny(keyword, "<>\r\n") {
+			return provider.TranscriptionResult{}, inferenceResourcesBadRequest("keywords must be single lines without angle brackets")
+		}
+	}
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	partHeader := make(map[string][]string)
@@ -97,6 +117,18 @@ func (a *Adapter) Transcribe(ctx context.Context, call provider.TranscriptionCal
 		return provider.TranscriptionResult{}, err
 	}
 	fields := map[string]string{"model": call.ProviderModel, "language": call.Language, "prompt": call.Prompt, "response_format": call.ResponseFormat}
+	if call.ProviderModel == "gpt-transcribe" {
+		delete(fields, "language")
+		if call.Language != "" {
+			call.Languages = []string{call.Language}
+		}
+	}
+	for _, language := range call.Languages {
+		_ = writer.WriteField("languages[]", language)
+	}
+	for _, keyword := range call.Keywords {
+		_ = writer.WriteField("keywords[]", keyword)
+	}
 	if call.Temperature != nil {
 		fields["temperature"] = fmt.Sprint(*call.Temperature)
 	}
@@ -116,13 +148,17 @@ func (a *Adapter) Synthesize(ctx context.Context, call provider.SpeechCall) (pro
 	if strings.TrimSpace(call.Input) == "" || len(call.Input) > 4096 || strings.TrimSpace(call.Voice) == "" {
 		return provider.SpeechResult{}, inferenceResourcesBadRequest("speech input and voice are required")
 	}
+	if call.Instructions != "" && (call.ProviderModel == "tts-1" || call.ProviderModel == "tts-1-hd") {
+		return provider.SpeechResult{}, inferenceResourcesBadRequest("instructions are unsupported by this TTS model")
+	}
 	payload := struct {
+		Instructions   string   `json:"instructions,omitempty"`
 		Model          string   `json:"model"`
 		Input          string   `json:"input"`
 		Voice          string   `json:"voice"`
 		ResponseFormat string   `json:"response_format,omitempty"`
 		Speed          *float64 `json:"speed,omitempty"`
-	}{call.ProviderModel, call.Input, call.Voice, call.ResponseFormat, call.Speed}
+	}{call.Instructions, call.ProviderModel, call.Input, call.Voice, call.ResponseFormat, call.Speed}
 	encoded, _ := json.Marshal(payload)
 	result, err := a.inferenceResourcesBinaryRequest(ctx, "audio/speech", call.RequestID, "application/json", encoded)
 	if err != nil {

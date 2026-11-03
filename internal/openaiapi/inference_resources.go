@@ -18,13 +18,16 @@ type ModerationResponse struct {
 	Results json.RawMessage `json:"results"`
 }
 type ImageGenerationRequest struct {
-	Prompt         string `json:"prompt"`
-	Model          string `json:"model,omitempty"`
-	N              int    `json:"n,omitempty"`
-	Quality        string `json:"quality,omitempty"`
-	ResponseFormat string `json:"response_format,omitempty"`
-	Size           string `json:"size,omitempty"`
-	Style          string `json:"style,omitempty"`
+	OutputFormat      string `json:"output_format,omitempty"`
+	Background        string `json:"background,omitempty"`
+	OutputCompression *int   `json:"output_compression,omitempty"`
+	Prompt            string `json:"prompt"`
+	Model             string `json:"model,omitempty"`
+	N                 int    `json:"n,omitempty"`
+	Quality           string `json:"quality,omitempty"`
+	ResponseFormat    string `json:"response_format,omitempty"`
+	Size              string `json:"size,omitempty"`
+	Style             string `json:"style,omitempty"`
 }
 type ImageGenerationResponse struct {
 	Created int64       `json:"created"`
@@ -36,6 +39,7 @@ type ImageData struct {
 	RevisedPrompt string `json:"revised_prompt,omitempty"`
 }
 type SpeechRequest struct {
+	Instructions   string   `json:"instructions,omitempty"`
 	Model          string   `json:"model"`
 	Input          string   `json:"input"`
 	Voice          string   `json:"voice"`
@@ -87,6 +91,15 @@ func DecodeImageGenerationRequest(decoder *json.Decoder) (ImageGenerationRequest
 	}
 	if value.N == 0 {
 		value.N = 1
+	}
+	if value.OutputFormat != "" && value.OutputFormat != "png" && value.OutputFormat != "jpeg" && value.OutputFormat != "webp" {
+		return value, errors.New("output_format is invalid")
+	}
+	if value.Background != "" && value.Background != "opaque" && value.Background != "transparent" && value.Background != "auto" {
+		return value, errors.New("background is invalid")
+	}
+	if value.OutputCompression != nil && (*value.OutputCompression < 0 || *value.OutputCompression > 100) {
+		return value, errors.New("output_compression must be between 0 and 100")
 	}
 	if value.N < 1 || value.N > 10 {
 		return value, errors.New("n must be between 1 and 10")

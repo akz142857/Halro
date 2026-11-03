@@ -28,7 +28,7 @@ func TestDecodeMessageRequestPreservesThinkingBlocks(t *testing.T) {
 }
 
 func TestDecodeMessageRequestRejectsUnknownTopLevelField(t *testing.T) {
-	_, err := DecodeMessageRequest(bytes.NewBufferString(`{"model":"claude","max_tokens":1,"messages":[{"role":"user","content":"hi"}],"cache_control":{}}`))
+	_, err := DecodeMessageRequest(bytes.NewBufferString(`{"model":"claude","max_tokens":1,"messages":[{"role":"user","content":"hi"}],"unknown_control":{}}`))
 	if err == nil {
 		t.Fatal("expected unknown field rejection")
 	}

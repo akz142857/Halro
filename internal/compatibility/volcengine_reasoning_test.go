@@ -57,7 +57,7 @@ func TestEncryptedReasoningCannotCrossProviderProfiles(t *testing.T) {
 	request := semantic.GenerateRequest{Messages: []semantic.Message{{Role: semantic.RoleAssistant, Content: []semantic.Content{{Kind: semantic.ContentReasoning, EncryptedContent: "opaque"}}}}}
 	for _, profile := range domain.AllProviderProfiles() {
 		fields := UnsupportedGenerateFields(profile.ID, request)
-		if slices.Contains(fields, "messages[].encrypted_content") == (profile.ID == domain.ProfileVolcengineChat) {
+		if slices.Contains(fields, "messages[].encrypted_content") == (profile.ID == domain.ProfileVolcengineChat || profile.ID == domain.ProfileOpenAIResponses) {
 			t.Errorf("wrong encrypted replay boundary for %s: %v", profile.ID, fields)
 		}
 	}

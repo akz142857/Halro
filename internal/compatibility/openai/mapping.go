@@ -43,7 +43,7 @@ func DecodeGenerate(request openaiapi.ChatCompletionRequest) (semantic.GenerateR
 		if tool.Type != "function" {
 			return semantic.GenerateRequest{}, errors.New("unsupported tool type")
 		}
-		result.Tools = append(result.Tools, semantic.Tool{Name: tool.Function.Name, Description: tool.Function.Description, Schema: bytes.Clone(tool.Function.Parameters)})
+		result.Tools = append(result.Tools, semantic.Tool{Name: tool.Function.Name, Description: tool.Function.Description, Schema: bytes.Clone(tool.Function.Parameters), Strict: cloneBool(tool.Function.Strict)})
 	}
 	result.ToolChoice, err = decodeToolChoice(request.ToolChoice)
 	if err != nil {
@@ -80,7 +80,7 @@ func RenderGenerateRequest(request semantic.GenerateRequest, providerModel strin
 		result.Messages = append(result.Messages, converted)
 	}
 	for _, tool := range request.Tools {
-		result.Tools = append(result.Tools, openaiapi.Tool{Type: "function", Function: openaiapi.ToolFunction{Name: tool.Name, Description: tool.Description, Parameters: bytes.Clone(tool.Schema)}})
+		result.Tools = append(result.Tools, openaiapi.Tool{Type: "function", Function: openaiapi.ToolFunction{Name: tool.Name, Description: tool.Description, Parameters: bytes.Clone(tool.Schema), Strict: cloneBool(tool.Strict)}})
 	}
 	result.ToolChoice = renderToolChoice(request.ToolChoice)
 	result.ResponseFormat = renderOutputFormat(request.OutputFormat)
@@ -484,7 +484,7 @@ func decodeUsage(usage *openaiapi.Usage) *semantic.Usage {
 	decoded := &semantic.Usage{
 		InputTokens:           usage.PromptTokens,
 		CachedInputTokens:     usage.CachedPromptTokens(),
-		CacheWriteInputTokens: usage.CacheWriteTokens,
+		CacheWriteInputTokens: usage.CacheWritePromptTokens(),
 		OutputTokens:          usage.CompletionTokens,
 		ReasoningTokens:       usage.ReasoningTokens(),
 		AudioTokens:           usage.AudioTokens(),
@@ -530,6 +530,12 @@ func renderUsage(usage *semantic.Usage) *openaiapi.Usage {
 		CacheWriteTokens: usage.CacheWriteInputTokens,
 	}
 	rendered.SetCachedPromptTokens(usage.CachedInputTokens)
+	if usage.CacheWriteInputTokens != 0 {
+		if rendered.PromptTokensDetails == nil {
+			rendered.PromptTokensDetails = &openaiapi.PromptTokenDetails{}
+		}
+		rendered.PromptTokensDetails.CacheWriteTokens = usage.CacheWriteInputTokens
+	}
 	rendered.SetReasoningTokens(usage.ReasoningTokens)
 	return rendered
 }

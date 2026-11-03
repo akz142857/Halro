@@ -467,7 +467,21 @@ func TestKimiPortableEffortsAreTheIntersection(t *testing.T) {
 	}
 	// `none` is prepended rather than intersected: Kimi spells "off" as a
 	// thinking type, not as a rung on the depth ladder.
-	if !slices.Equal(KimiPortableEfforts, []string{"none", "low", "high"}) {
+	if !slices.Equal(KimiPortableEfforts, []string{"none", "low", "high", "max"}) {
 		t.Fatalf("the portable reach of that ladder changed: %v", KimiPortableEfforts)
+	}
+}
+
+func TestKimiForcedReasoningConstraintsAreDeclaredBeforeAdmission(t *testing.T) {
+	limit := int64(64)
+	for _, model := range []string{"kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"} {
+		for _, request := range []semantic.GenerateRequest{{ReasoningEffort: "none"}, {VisibleOutputTokenLimit: &limit}, {ToolChoice: &semantic.ToolChoice{Mode: semantic.ToolChoiceNamed, Name: "lookup"}}} {
+			if fields := UnsupportedGenerateFieldsForTarget(domain.ProfileKimiChat, model, request); len(fields) == 0 {
+				t.Fatalf("%s admitted unrenderable request: %#v", model, request)
+			}
+		}
+		if fields := KimiTargetUnsupportedGenerateFields(model, semantic.GenerateRequest{ReasoningEffort: "max", CompletionTokenLimit: &limit, ToolChoice: &semantic.ToolChoice{Mode: semantic.ToolChoiceRequired}}); len(fields) != 0 {
+			t.Fatalf("%s refused supported reasoning/tool request: %v", model, fields)
+		}
 	}
 }

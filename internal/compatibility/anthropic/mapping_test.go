@@ -207,7 +207,7 @@ func TestNamelessSchemaIsRefusedWhereTheFieldCanBeNamed(t *testing.T) {
 // routable made the request fail while being rendered — after the reservation,
 // citing a field the caller never sent.
 func TestEffortBeyondThePortableLadderIsDeclaredUnsupported(t *testing.T) {
-	for effort, wantUnsupported := range map[string]bool{"xhigh": false, "max": true} {
+	for effort, wantUnsupported := range map[string]bool{"xhigh": false, "max": false, "minimal": true} {
 		request := semantic.GenerateRequest{ReasoningEffort: effort}
 		got := compatibility.UnsupportedGenerateFields(domain.ProfileAnthropicMessages, request)
 		if slices.Contains(got, "reasoning_effort") != wantUnsupported {

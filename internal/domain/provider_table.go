@@ -71,8 +71,11 @@ type profileRow struct {
 	// IsSubscriptionGatedProfile.
 	SubscriptionGated bool
 	RoutePartitioned  bool
-	Defaults          ProviderCapabilities
-	Ceiling           ProviderCapabilities
+	// ImplementationChoice exposes an anchor choice even when models can use
+	// either route: OpenAI Chat and Responses have different request contracts.
+	ImplementationChoice bool
+	Defaults             ProviderCapabilities
+	Ceiling              ProviderCapabilities
 }
 
 // RegionPlaceholder is what BaseURLTemplate carries where a deployment's own
@@ -167,12 +170,10 @@ var (
 	// calls that never pass through SafeTransport — so it sits at the ceiling and
 	// not in the defaults, the same shape the Anthropic profile uses.
 	//
-	// Absent on purpose: streaming, because this profile binds no stream
-	// primitive; embeddings, which live on the chat profile; and reasoning,
-	// because the canonical response mapper cannot preserve reasoning items and a
-	// claim it cannot carry is a request that fails after the budget is reserved.
+	// Streaming and reasoning use the native Responses primitive. Embeddings
+	// remain on the Chat/Embeddings profile.
 	openAIResponsesSet = ProviderCapabilities{
-		Chat: true, Tools: true, Vision: true, FetchedImage: true,
+		Chat: true, Streaming: true, StreamUsage: true, Reasoning: true, Tools: true, Vision: true, FetchedImage: true,
 		JSONObject: true, StructuredOutputs: true, DeveloperRole: true,
 	}
 	openAIMediaSet = ProviderCapabilities{
@@ -187,8 +188,9 @@ var (
 var profileTable = []profileRow{
 	{
 		ID: ProfileOpenAIChatEmbeddings, Type: ProviderOpenAI,
-		ConnectionGroup: "openai-api",
-		Surface:         SurfaceOpenAI, Scheme: CredentialBearerStatic,
+		ImplementationChoice: true,
+		ConnectionGroup:      "openai-api",
+		Surface:              SurfaceOpenAI, Scheme: CredentialBearerStatic,
 		BaseURLTemplate: "https://api.openai.com",
 		Defaults:        openAIChatSet, Ceiling: openAIChatSet,
 	},
@@ -198,8 +200,9 @@ var profileTable = []profileRow{
 		// Moving this row above it would silently re-point every existing OpenAI
 		// connection at a different endpoint.
 		ID: ProfileOpenAIResponses, Type: ProviderOpenAI,
-		ConnectionGroup: "openai-api",
-		Surface:         SurfaceOpenAI, Scheme: CredentialBearerStatic,
+		ImplementationChoice: true,
+		ConnectionGroup:      "openai-api",
+		Surface:              SurfaceOpenAI, Scheme: CredentialBearerStatic,
 		BaseURLTemplate: "https://api.openai.com",
 		Defaults:        openAIResponsesSet,
 		Ceiling:         withProviderExecutedTools(openAIResponsesSet),
@@ -985,9 +988,10 @@ type ProviderProfileSummary struct {
 	// companions: where it is true the upstream serves each model from exactly
 	// one of them, so an operator picks a route; where it is false the group's
 	// profiles ride one connection together and there is nothing to pick.
-	RoutePartitioned bool
-	Defaults         ProviderCapabilities
-	Ceiling          ProviderCapabilities
+	RoutePartitioned     bool
+	ImplementationChoice bool
+	Defaults             ProviderCapabilities
+	Ceiling              ProviderCapabilities
 }
 
 // AllProviderProfiles returns every registered profile in table order.

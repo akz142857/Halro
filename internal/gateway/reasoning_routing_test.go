@@ -45,7 +45,6 @@ func TestATargetThatReasonsUnaskedIsRoutedAwayOnlyWhereItCannotBeRendered(t *tes
 			name:       "always reasons, Chat wire, Responses endpoint",
 			northbound: compatibility.ProfileOpenAIResponses,
 			target:     provider.Target{ProfileID: domain.ProfileKimiChat, ReasonsUnasked: true},
-			dropped:    true,
 		},
 		{
 			name:       "always reasons, Chat wire, Messages endpoint",
@@ -119,7 +118,7 @@ func TestArkThinkingIsRefusedBeforeProviderIOOnPortableMessages(t *testing.T) {
 // unusual — the shape of both incidents.
 func TestTheRefusalNamesATargetThatReasonsUnasked(t *testing.T) {
 	canonical := semantic.GenerateRequest{
-		Source:   semantic.Source{ProfileID: string(compatibility.ProfileOpenAIResponses), ProfileRevision: 1},
+		Source:   semantic.Source{ProfileID: string(compatibility.ProfileAnthropicMessages), ProfileRevision: 1},
 		Messages: []semantic.Message{{Role: semantic.RoleUser, Content: []semantic.Content{{Kind: semantic.ContentText, Text: "hi"}}}},
 	}
 	target := provider.Target{ProfileID: domain.ProfileKimiChat, ReasonsUnasked: true}
