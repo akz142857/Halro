@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akz142857/Halro/internal/compatibility"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/provider"
@@ -53,6 +54,8 @@ type generationConfig struct {
 }
 
 type generateRequest struct {
+	// No omitempty: false must override the upstream project retention default.
+	Store             bool             `json:"store"`
 	Contents          []content        `json:"contents"`
 	SystemInstruction *content         `json:"systemInstruction,omitempty"`
 	GenerationConfig  generationConfig `json:"generationConfig,omitempty"`
@@ -291,7 +294,7 @@ func (a *Adapter) Probe(ctx context.Context, model string) error {
 }
 
 func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
-	payload, err := translateChat(call.Request)
+	payload, err := translateChatForModel(call.Request, call.ProviderModel)
 	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, err
 	}
@@ -306,7 +309,7 @@ func (a *Adapter) ChatStream(ctx context.Context, call provider.ChatCall, emit f
 	if emit == nil {
 		return nil, badRequest("stream callback is required", nil)
 	}
-	payload, err := translateChat(call.Request)
+	payload, err := translateChatForModel(call.Request, call.ProviderModel)
 	if err != nil {
 		return nil, err
 	}
@@ -413,6 +416,17 @@ func (a *Adapter) Embed(ctx context.Context, call provider.EmbeddingCall) (opena
 }
 
 func translateChat(request openaiapi.ChatCompletionRequest) (generateRequest, error) {
+	return translateChatForModel(request, request.Model)
+}
+
+func translateChatForModel(request openaiapi.ChatCompletionRequest, model string) (generateRequest, error) {
+	canonical := semantic.GenerateRequest{Temperature: request.Temperature, TopP: request.TopP, Candidates: request.N}
+	if len(request.Messages) > 0 {
+		canonical.Messages = []semantic.Message{{Role: semantic.Role(request.Messages[len(request.Messages)-1].Role)}}
+	}
+	if fields := compatibility.GeminiTargetUnsupportedGenerateFields(model, canonical); len(fields) > 0 {
+		return generateRequest{}, badRequest("Gemini model cannot preserve "+strings.Join(fields, ", "), nil)
+	}
 	if request.Seed != nil || len(request.Tools) != 0 || len(request.ToolChoice) != 0 || request.ParallelToolCalls != nil || len(request.ResponseFormat) != 0 || request.ReasoningEffort != "" || request.User != "" {
 		return generateRequest{}, badRequest("Gemini Beta cannot represent one or more requested OpenAI fields", nil)
 	}

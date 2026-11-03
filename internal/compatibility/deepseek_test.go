@@ -294,7 +294,7 @@ func TestDeepSeekReachesReasoningThroughTheThinkingSwitch(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if body.Thinking == nil || body.Thinking.Type != "enabled" || body.Thinking.ReasoningEffort != effort {
+		if body.Thinking == nil || body.Thinking.Type != "enabled" || body.ReasoningEffort != effort {
 			t.Fatalf("effort %q did not reach the thinking switch: %#v", effort, body.Thinking)
 		}
 	}
@@ -312,7 +312,7 @@ func TestDeepSeekReachesReasoningThroughTheThinkingSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if body.Thinking == nil || body.Thinking.Type != "disabled" || body.Thinking.ReasoningEffort != "" {
+	if body.Thinking == nil || body.Thinking.Type != "disabled" || body.ReasoningEffort != "" {
 		t.Fatalf("none did not reach the off switch: %#v", body.Thinking)
 	}
 
@@ -328,7 +328,7 @@ func TestDeepSeekReachesReasoningThroughTheThinkingSwitch(t *testing.T) {
 	if body.Thinking == nil || body.Thinking.Type != "disabled" {
 		t.Fatalf("an unasked request was left to DeepSeek's thinking-on default: %#v", body.Thinking)
 	}
-	if body.Thinking.ReasoningEffort != "" {
+	if body.ReasoningEffort != "" {
 		t.Fatalf("a disabled switch carried a depth: %#v", body.Thinking)
 	}
 }
@@ -415,3 +415,51 @@ func mustRenderDeepSeek(t *testing.T, request semantic.GenerateRequest) openaiap
 	}
 	return rendered
 }
+
+func TestDeepSeekSamplingControlsCannotBeSilentlyIgnoredOrClamped(t *testing.T) {
+	for _, test := range []struct {
+		model, effort         string
+		temperature, topP     *float64
+		tools, none, rejected bool
+	}{
+		{model: "deepseek-flash", effort: "high", temperature: floatPointer(1), rejected: true},
+		{model: "deepseek-flash", temperature: floatPointer(0.5)},
+		{model: "deepseek-flash", topP: floatPointer(0.8), rejected: true},
+		{model: "deepseek-flash", topP: floatPointer(1)},
+		{model: "deepseek-flash", effort: "high", topP: floatPointer(0.94), rejected: true},
+		{model: "deepseek-flash", effort: "high", topP: floatPointer(0.98)},
+		{model: "deepseek-v4-pro", effort: "high", topP: floatPointer(0.95), tools: true},
+		{model: "deepseek-v4-pro", effort: "high", topP: floatPointer(1), tools: true, rejected: true},
+		{model: "deepseek-v4-pro", effort: "high", topP: floatPointer(1), tools: true, none: true},
+		{model: "deepseek-v4-pro", topP: floatPointer(0.8)},
+		{model: "deepseek-v4-pro", topP: floatPointer(0), rejected: true},
+		{model: "unknown-model", effort: "high", temperature: floatPointer(0.5)},
+	} {
+		request := deepSeekBaseRequest()
+		request.ReasoningEffort = test.effort
+		request.Temperature = test.temperature
+		request.TopP = test.topP
+		if test.tools {
+			request.Tools = []semantic.Tool{{Name: "lookup", Schema: json.RawMessage(`{"type":"object"}`)}}
+		}
+		if test.none {
+			request.ToolChoice = &semantic.ToolChoice{Mode: semantic.ToolChoiceNone}
+		}
+		fields := compatibility.UnsupportedGenerateFieldsForTarget(domain.ProfileDeepSeekChat, test.model, request)
+		if (len(fields) > 0) != test.rejected {
+			t.Fatalf("%s/%s fields=%v rejected=%v", test.model, test.effort, fields, test.rejected)
+		}
+		request.Requirements = request.DeriveRequirements()
+		wire, err := openaiwire.RenderGenerateRequest(request, test.model)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire.Model = test.model
+		_, err = compatibility.RenderDeepSeekChatRequest(wire)
+		if (err != nil) != test.rejected {
+			t.Fatalf("renderer differs for %s/%s: %v", test.model, test.effort, err)
+		}
+	}
+}
+
+func floatPointer(value float64) *float64 { return &value }

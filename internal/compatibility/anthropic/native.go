@@ -33,6 +33,17 @@ func NewNativeSchemaRegistry() (*compatibility.NativeSchemaRegistry, error) {
 			ProfileID: profileID, SchemaRevision: 1,
 			AllowedHeaders: []string{anthropicapi.VersionHeader, anthropicapi.BetaHeader}, MaxPayloadBytes: anthropicapi.MaxRequestBytes, MaxEventBytes: semantic.MaxEncodedEventBytes,
 			ValidatePayload: validate, ExtractGovernance: extractNativeGovernance,
+			ValidateProtocol: func(kind compatibility.NativePayloadKind, payload json.RawMessage, headers http.Header) error {
+				if kind == compatibility.NativeRequest {
+					if err := anthropicapi.ValidateVersionPayload(headers.Get(anthropicapi.VersionHeader), payload); err != nil {
+						return err
+					}
+				}
+				if kind == compatibility.NativeRequest && headers.Get(anthropicapi.VersionHeader) == anthropicapi.CurrentVersion && profileID != domain.ProfileAnthropicMessages && profileID != domain.ProfileBedrockMantleAnthropicMessages {
+					return errors.New("this upstream has not established anthropic-version " + anthropicapi.CurrentVersion)
+				}
+				return nil
+			},
 		})
 	}
 	return compatibility.NewNativeSchemaRegistry(schemas...)
@@ -106,9 +117,8 @@ func validateMiniMaxNativePayload(kind compatibility.NativePayloadKind, payload 
 //     and this face was measured accepting the pinned value alone. Native mode
 //     forwards bytes, so a caller sending their usual value would be refused
 //     upstream after the request was admitted; refusing here says which member.
-//   - cache_control is refused for the same reason as on MiniMax: Kimi's caching
-//     is automatic and it publishes no member for a caller to steer it, so the
-//     marker would claim a breakpoint nothing acts on.
+//   - Kimi now documents a top-level cache_control with a TTL. Nested Anthropic
+//     breakpoints are still ignored upstream and remain refused.
 func validateKimiNativePayload(kind compatibility.NativePayloadKind, payload json.RawMessage) error {
 	request, isRequest, err := decodeNativeRequestOnce(kind, payload)
 	if err != nil || !isRequest {
@@ -123,12 +133,41 @@ func validateKimiNativePayload(kind compatibility.NativePayloadKind, payload jso
 	if request.TopP != nil {
 		return errors.New("Kimi pins top_p at 0.95 and refuses any other value, so it is refused instead of forwarded")
 	}
-	marked, err := carriesJSONMember(payload, "cache_control")
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &members); err != nil {
+		return err
+	}
+	if cache, exists := members["cache_control"]; exists {
+		var config map[string]json.RawMessage
+		if err := json.Unmarshal(cache, &config); err != nil || len(config) == 0 {
+			return errors.New("invalid Kimi cache_control")
+		}
+		for key := range config {
+			if key != "type" && key != "ttl" {
+				return errors.New("unsupported Kimi cache_control field: " + key)
+			}
+		}
+		var mode, ttl string
+		if json.Unmarshal(config["type"], &mode) != nil || mode != "ephemeral" {
+			return errors.New("Kimi cache_control.type must be ephemeral")
+		}
+		if raw, ok := config["ttl"]; ok {
+			if json.Unmarshal(raw, &ttl) != nil || (ttl != "5m" && ttl != "1h") {
+				return errors.New("Kimi cache_control.ttl must be 5m or 1h")
+			}
+		}
+		delete(members, "cache_control")
+	}
+	nested, err := json.Marshal(members)
+	if err != nil {
+		return err
+	}
+	marked, err := carriesJSONMember(nested, "cache_control")
 	if err != nil {
 		return err
 	}
 	if marked {
-		return errors.New("Kimi manages its prompt cache itself and publishes no member to steer it, so cache_control is refused rather than forwarded and ignored")
+		return errors.New("Kimi cache_control is supported only at the request top level")
 	}
 	return nil
 }

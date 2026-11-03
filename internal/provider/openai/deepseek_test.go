@@ -57,12 +57,11 @@ func TestDeepSeekChatSendsOnlyTheMembersDeepSeekAccepts(t *testing.T) {
 			Request: request,
 		}, nil
 	})
-	temperature := 0.5
 	_, err := adapter.Chat(context.Background(), provider.ChatCall{
 		RequestID: "req_1", ProviderModel: "deepseek-v4-flash",
 		Request: openaiapi.ChatCompletionRequest{
 			Model: "public", Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}},
-			Temperature: &temperature, User: "customer-7", ReasoningEffort: "high",
+			User: "customer-7", ReasoningEffort: "high",
 		},
 	})
 	if err != nil {
@@ -71,13 +70,16 @@ func TestDeepSeekChatSendsOnlyTheMembersDeepSeekAccepts(t *testing.T) {
 	if string(body["user_id"]) != `"customer-7"` {
 		t.Fatalf("user_id = %s", body["user_id"])
 	}
-	if string(body["thinking"]) != `{"type":"enabled","reasoning_effort":"high"}` {
+	if string(body["reasoning_effort"]) != `"high"` {
+		t.Fatalf("reasoning_effort = %s", body["reasoning_effort"])
+	}
+	if string(body["thinking"]) != `{"type":"enabled"}` {
 		t.Fatalf("thinking = %s", body["thinking"])
 	}
-	if string(body["model"]) != `"deepseek-v4-flash"` || string(body["temperature"]) != "0.5" {
+	if string(body["model"]) != `"deepseek-v4-flash"` {
 		t.Fatalf("unexpected body: %v", body)
 	}
-	for _, absent := range []string{"user", "reasoning_effort", "n", "seed", "parallel_tool_calls", "max_completion_tokens"} {
+	for _, absent := range []string{"user", "n", "seed", "parallel_tool_calls", "max_completion_tokens"} {
 		if _, present := body[absent]; present {
 			t.Fatalf("%s reached a surface that does not accept it: %v", absent, body)
 		}

@@ -224,7 +224,7 @@
         "declared_transforms": [
           "DeepSeek speaks this wire format but accepts a smaller member list, so the fields it has no place for are rejected before provider I/O rather than sent and ignored",
           "user is carried as DeepSeek's user_id",
-          "reasoning_effort and response_format are declared unsupported at field granularity because support is value-dependent: none maps to thinking.type=disabled and the low and high rungs map to thinking.reasoning_effort with thinking enabled, while minimal, medium and xhigh have no DeepSeek rung; json_object maps to response_format and json_schema has no DeepSeek counterpart",
+          "reasoning_effort and response_format are declared unsupported at field granularity because support is value-dependent: none maps to thinking.type=disabled and the low, high and max rungs map to top-level reasoning_effort with thinking enabled, while minimal, medium and xhigh have no DeepSeek rung; json_object maps to response_format and json_schema has no DeepSeek counterpart",
           "max_completion_tokens is value-dependent too: it counts reasoning tokens and DeepSeek's max_tokens does not, so it is carried as max_tokens on a request with thinking off and rejected before provider I/O on one with thinking on, or on one that already carries max_tokens",
           "n and parallel_tool_calls are value-dependent in the same way: n=1 and parallel_tool_calls=true are what omitting the member already means, and only n\u003e1 and a request to run tools one at a time are rejected",
           "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
@@ -1647,6 +1647,7 @@
       "tools[].type=computer_*",
       "tool_choice",
       "thinking",
+      "cache_control",
       "metadata",
       "service_tier",
       "output_config",
@@ -1661,6 +1662,7 @@
       "Anthropic-defined tools in portable mode",
       "strict tools in portable mode",
       "signed thinking in portable mode",
+      "cache_control in portable mode",
       "unknown top-level fields",
       "unknown members of tools[] and output_config in portable mode"
     ],
@@ -1704,7 +1706,7 @@
     ],
     "status": "compatible",
     "documented_deviations": [
-      "only anthropic-version 2023-06-01 is accepted",
+      "anthropic-version 2023-06-01 and 2026-10-21 are accepted; the latter rejects sampling members, direct assistant documents and citations in user text; native forwarding requires a version-compatible upstream",
       "anthropic-beta is forwarded only in native mode and only for tokens the selected connection has been configured to accept; portable mode rejects it because the request is re-authored through the canonical model and a beta token describes the request as written",
       "tools are classified by execution site: Anthropic-defined client-executed tools are accepted at any dated version suffix, while provider-executed tools require the selected connection to declare provider_executed_tools, because the upstream would make network calls outside SafeTransport's host allowlist",
       "family matching is anchored to \u003cfamily\u003e_\u003cYYYYMMDD\u003e, so a longer name that merely begins with a known family (bash_code_execution_*) is classified on its own terms rather than as the client-executed tool it resembles",

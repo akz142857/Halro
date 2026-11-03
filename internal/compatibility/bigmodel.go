@@ -13,12 +13,12 @@ import (
 )
 
 // BigModelEffortLevels is the depth ladder exposed by the current GLM thinking
-// contract. Portable callers cannot name max because the OpenAI northbound
-// ladder stops at xhigh; the exact per-model subset is enforced below.
+// contract. The exact per-model subset is enforced below.
 var BigModelEffortLevels = []string{"low", "high", "max"}
 
 type BigModelThinking struct {
-	Type string `json:"type"`
+	Type          string `json:"type"`
+	ClearThinking *bool  `json:"clear_thinking,omitempty"`
 }
 
 // BigModelChatRequest is the documented common subset of the mainland
@@ -29,6 +29,7 @@ type BigModelChatRequest struct {
 	Model           string              `json:"model"`
 	Messages        []openaiapi.Message `json:"messages"`
 	Stream          bool                `json:"stream,omitempty"`
+	ToolStream      bool                `json:"tool_stream,omitempty"`
 	Thinking        *BigModelThinking   `json:"thinking,omitempty"`
 	ReasoningEffort string              `json:"reasoning_effort,omitempty"`
 	Temperature     *float64            `json:"temperature,omitempty"`
@@ -124,11 +125,11 @@ func bigModelReasoningSupported(profileID domain.ProviderProfileID, model, effor
 	}
 	switch bigModelReasoningFor(profileID, model) {
 	case bigModelForcedEffortReasoning:
-		return effort == "low" || effort == "high"
+		return effort == "low" || effort == "high" || effort == "max"
 	case bigModelEffortReasoningDisableable:
 		// GLM-5.2 maps low/medium to high, xhigh to max, and minimal to
 		// disabled. Halro does not silently round a caller's requested rung.
-		return effort == "none" || effort == "high"
+		return effort == "none" || effort == "high" || effort == "max"
 	case bigModelDefaultOnDisableable, bigModelNoReasoning:
 		return effort == "none"
 	default:
@@ -246,6 +247,18 @@ func RenderBigModelChatRequest(profileID domain.ProviderProfileID, request opena
 		ResponseFormat: responseFormat, RequestID: requestID, UserID: request.User,
 	}
 	applyBigModelReasoning(&result, profileID, request.Model, request.ReasoningEffort)
+	if request.Model == "glm-5.3" || request.Model == "glm-5.3-flash" {
+		result.ToolStream = request.Stream && len(request.Tools) > 0
+		for _, message := range request.Messages {
+			if message.ReasoningContent != "" {
+				if result.Thinking == nil {
+					result.Thinking = &BigModelThinking{Type: "enabled"}
+				}
+				result.Thinking.ClearThinking = new(bool)
+				break
+			}
+		}
+	}
 	return result, nil
 }
 
@@ -257,7 +270,7 @@ func applyBigModelReasoning(result *BigModelChatRequest, profileID domain.Provid
 			result.ReasoningEffort = effort
 		}
 	case bigModelEffortReasoningDisableable:
-		if effort == "high" {
+		if effort == "high" || effort == "max" {
 			result.Thinking = &BigModelThinking{Type: "enabled"}
 			result.ReasoningEffort = effort
 		} else if effort == "none" {

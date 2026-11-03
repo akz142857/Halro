@@ -83,10 +83,11 @@ type MiniMaxThinking struct {
 // openaiapi.ChatCompletionRequest must be considered here deliberately instead
 // of reaching MiniMax because nobody remembered to exclude it.
 type MiniMaxChatRequest struct {
-	Model          string              `json:"model,omitempty"`
-	Messages       []openaiapi.Message `json:"messages"`
-	ResponseFormat json.RawMessage     `json:"response_format,omitempty"`
-	Thinking       *MiniMaxThinking    `json:"thinking,omitempty"`
+	Model           string              `json:"model,omitempty"`
+	Messages        []openaiapi.Message `json:"messages"`
+	ResponseFormat  json.RawMessage     `json:"response_format,omitempty"`
+	Thinking        *MiniMaxThinking    `json:"thinking,omitempty"`
+	ReasoningEffort string              `json:"reasoning_effort,omitempty"`
 	// ReasoningSplit asks MiniMax to return reasoning in its own member instead
 	// of inline in the answer. It is sent only while thinking is on: with the
 	// switch off there is nothing to split, and sending it anyway would be a
@@ -112,6 +113,9 @@ type MiniMaxChatRequest struct {
 // who reaches the adapter another way fails closed at the last moment instead of
 // sending a request the caller did not make.
 func RenderMiniMaxChatRequest(request openaiapi.ChatCompletionRequest) (MiniMaxChatRequest, error) {
+	if MiniMaxAlwaysReasons(request.Model) && request.ReasoningEffort != "" && !slices.Contains([]string{"low", "medium", "high", "xhigh", "max"}, request.ReasoningEffort) {
+		return MiniMaxChatRequest{}, errors.New("MiniMax-M3.1-Flash requires low, medium, high, xhigh or max reasoning effort")
+	}
 	if request.N != nil && *request.N > 1 {
 		return MiniMaxChatRequest{}, errors.New("MiniMax Chat Completions accepts only n=1")
 	}
@@ -160,7 +164,7 @@ func RenderMiniMaxChatRequest(request openaiapi.ChatCompletionRequest) (MiniMaxC
 	if request.ParallelToolCalls != nil && !*request.ParallelToolCalls {
 		return MiniMaxChatRequest{}, errors.New("MiniMax Chat Completions cannot disable parallel tool calls")
 	}
-	thinkingOn := minimaxThinkingIsOn(request.ReasoningEffort)
+	thinkingOn := minimaxThinkingIsOn(request.ReasoningEffort) || MiniMaxAlwaysReasons(request.Model)
 	// MiniMax has one output bound and it counts reasoning. max_completion_tokens
 	// means the same thing and is carried as itself; max_tokens bounds the answer
 	// alone, so it is the same quantity only while nothing is thinking. Renaming
@@ -184,6 +188,12 @@ func RenderMiniMaxChatRequest(request openaiapi.ChatCompletionRequest) (MiniMaxC
 		Stream:              request.Stream, StreamOptions: request.StreamOptions,
 		Temperature: request.Temperature, TopP: request.TopP,
 		Tools: request.Tools, ToolChoice: request.ToolChoice,
+	}
+	if MiniMaxAlwaysReasons(request.Model) {
+		result.Thinking = &MiniMaxThinking{Type: MiniMaxThinkingOn}
+		result.ReasoningEffort = request.ReasoningEffort
+		result.ReasoningSplit = true
+		return result, nil
 	}
 	switch {
 	// Nothing asked for, so thinking is switched off rather than left to
@@ -224,3 +234,6 @@ func RenderMiniMaxChatRequest(request openaiapi.ChatCompletionRequest) (MiniMaxC
 	}
 	return result, nil
 }
+
+// Exact model contract reviewed against MiniMax's OpenAI API on 2026-11-03.
+func MiniMaxAlwaysReasons(model string) bool { return model == "MiniMax-M3.1-Flash" }

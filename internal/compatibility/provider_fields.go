@@ -675,6 +675,19 @@ func UnsupportedGenerateFieldsForTarget(profileID domain.ProviderProfileID, prov
 		targetFields = OpenAITargetUnsupportedGenerateFields(profileID, providerModel, request)
 	} else if profileID == domain.ProfileVolcengineChat {
 		targetFields = VolcengineTargetUnsupportedGenerateFields(providerModel, request)
+	} else if profileID == domain.ProfileDeepSeekChat {
+		targetFields = DeepSeekTargetUnsupportedGenerateFields(providerModel, request)
+	} else if profileID == domain.ProfileKimiChat {
+		targetFields = KimiTargetUnsupportedGenerateFields(providerModel, request)
+	} else if profileID == domain.ProfileGeminiText {
+		targetFields = GeminiTargetUnsupportedGenerateFields(providerModel, request)
+	} else if profileID == domain.ProfileMiniMaxChat && MiniMaxAlwaysReasons(providerModel) {
+		if request.ReasoningEffort == "none" || request.ReasoningEffort == "minimal" {
+			targetFields = append(targetFields, "reasoning_effort")
+		}
+		if request.VisibleOutputTokenLimit != nil {
+			targetFields = append(targetFields, "max_tokens")
+		}
 	} else if profileID == domain.ProfileBigModelCNChatEmbeddings || profileID == domain.ProfileBigModelGlobalChat ||
 		profileID == domain.ProfileBigModelCNCodingChat || profileID == domain.ProfileBigModelGlobalCodingChat {
 		targetFields = BigModelTargetUnsupportedGenerateFields(profileID, providerModel, request)

@@ -67,13 +67,14 @@ func (view GovernanceView) Validate() error {
 }
 
 type NativeSchema struct {
-	ProfileID         domain.ProviderProfileID  `json:"profile_id"`
-	SchemaRevision    uint64                    `json:"schema_revision"`
-	AllowedHeaders    []string                  `json:"allowed_headers,omitempty"`
-	MaxPayloadBytes   int                       `json:"max_payload_bytes"`
-	MaxEventBytes     int                       `json:"max_event_bytes"`
-	ValidatePayload   NativePayloadValidator    `json:"-"`
-	ExtractGovernance NativeGovernanceExtractor `json:"-"`
+	ProfileID         domain.ProviderProfileID                                    `json:"profile_id"`
+	SchemaRevision    uint64                                                      `json:"schema_revision"`
+	AllowedHeaders    []string                                                    `json:"allowed_headers,omitempty"`
+	MaxPayloadBytes   int                                                         `json:"max_payload_bytes"`
+	MaxEventBytes     int                                                         `json:"max_event_bytes"`
+	ValidatePayload   NativePayloadValidator                                      `json:"-"`
+	ValidateProtocol  func(NativePayloadKind, json.RawMessage, http.Header) error `json:"-"`
+	ExtractGovernance NativeGovernanceExtractor                                   `json:"-"`
 }
 
 func (schema NativeSchema) Validate() error {
@@ -217,6 +218,11 @@ func newNativeEnvelope(registry *NativeSchemaRegistry, profileID domain.Provider
 			return nil, errors.New("native envelope headers exceed the size limit")
 		}
 		copyHeaders[canonical] = slices.Clone(values)
+	}
+	if schema.ValidateProtocol != nil {
+		if err := schema.ValidateProtocol(kind, bytes.Clone(payload), copyHeaders.Clone()); err != nil {
+			return nil, err
+		}
 	}
 	return &NativeEnvelope{profileID: profileID, schemaRevision: revision, payloadKind: kind, headers: copyHeaders, payload: bytes.Clone(payload), governance: cloneGovernance(governance)}, nil
 }

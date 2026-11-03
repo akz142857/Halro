@@ -337,6 +337,7 @@ func openAIMediaModels() []Entry {
 func deepSeekModels() []Entry {
 	const provider, profile = domain.ProviderDeepSeek, domain.ProfileDeepSeekChat
 	return []Entry{
+		builtinEntry(provider, profile, "deepseek-flash", with(chat(1_048_576, 393_216), reasoning, vision)),
 		builtinEntry(provider, profile, "deepseek-v4-flash", with(chat(1_000_000, 384_000), reasoning)),
 		builtinEntry(provider, profile, "deepseek-v4-pro", with(chat(1_000_000, 384_000), reasoning)),
 		builtinEntry(provider, profile, "deepseek-v4-flash-vision-exp", with(chat(1_000_000, 384_000), reasoning, vision)),
@@ -398,15 +399,10 @@ func anthropicModels() []Entry {
 // A mainland account was not measured; the retirement is MiniMax's, not a
 // region's, and leaving the entries out is the fail-closed reading.
 //
-// MiniMax-M3.1-Flash appeared on the list in the same measurement and is left
-// out on evidence, measured 2026-10-24: it always thinks. thinking disabled,
-// reasoning effort none and reasoning_split false each answer 400 on every
-// face, and Halro sends thinking disabled on every Chat and Anthropic request
-// that did not ask to think — so an entry would offer a deployment that refuses
-// the ordinary request. Its Responses face returns a reasoning item unasked,
-// which DecodeProviderResponse refuses after the call is paid. Serving it would
-// take a catalogue-driven "always thinks" distinction in the renderer, not an
-// entry here. See docs/verification/provider-real-matrix.md.
+// MiniMax-M3.1-Flash was measured as always thinking on 2026-10-24. The
+// 2026-11-03 Chat renderer now preserves its effort ladder and default thinking,
+// so only that face receives an entry. Anthropic and Responses still cannot
+// carry its full contract and remain absent. See docs/verification/provider-api-review-2026-11.md.
 //
 // M3's one deliberate narrowing: Responses binds no stream primitive and
 // cannot carry reasoning items, so its Responses entry claims neither.
@@ -441,7 +437,10 @@ func minimaxModels() []Entry {
 	// window, and that reads as a missing row rather than a model that can emit
 	// its whole window.
 	const m2Context int64 = 204_800
+	m31 := builtinEntry(provider, domain.ProfileMiniMaxChat, "MiniMax-M3.1-Flash", with(openAIChat(m3Context, m3Output), reasoning, vision))
+	m31.ReasonsUnasked = true
 	entries := []Entry{
+		m31,
 		// M3 sees images and can be asked not to think.
 		builtinEntry(provider, domain.ProfileMiniMaxAnthropicMessages, "MiniMax-M3", with(anthropicChat(m3Context, m3Output), reasoning, vision)),
 		builtinEntry(provider, domain.ProfileMiniMaxChat, "MiniMax-M3", with(openAIChat(m3Context, m3Output), reasoning, vision)),
@@ -559,6 +558,8 @@ func kimiModels() []Entry {
 	}
 	entries := []Entry{
 		builtinEntry(provider, domain.ProfileKimiChat, "kimi-k3", kimiChat(k3Context, k3Output)),
+		reasonsUnasked(builtinEntry(provider, domain.ProfileKimiChat, "kimi-k3.1-pro", kimiChat(k3Context, k3Output))),
+		reasonsUnasked(builtinEntry(provider, domain.ProfileKimiChat, "kimi-k3.1-pro-highspeed", kimiChat(k3Context, k3Output))),
 		builtinEntry(provider, domain.ProfileKimiAnthropicMessages, "kimi-k3", kimiAnthropic(k3Context, k3Output)),
 		reasonsUnasked(builtinEntry(provider, domain.ProfileKimiResponses, "kimi-k3", kimiResponses(k3Context, k3Output))),
 		// Measured answering on all three faces on 2026-09-01, which is what the
@@ -785,6 +786,8 @@ func geminiModels() []Entry {
 	}
 	return []Entry{
 		builtinEntry(provider, profile, "gemini-3.6-flash", generate(0, 0)),
+		builtinEntry(provider, profile, "gemini-3.8-flash", generate(1_048_576, 65_536)),
+		builtinEntry(provider, profile, "gemini-4-argon", generate(0, 0)),
 		builtinEntry(provider, profile, "gemini-3.5-flash", generate(0, 0)),
 		builtinEntry(provider, profile, "gemini-3.5-flash-lite", generate(0, 0)),
 		builtinEntry(provider, profile, "gemini-3.1-flash-lite", generate(0, 0)),

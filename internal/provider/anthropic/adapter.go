@@ -680,6 +680,22 @@ func (adapter *Adapter) request(ctx context.Context, call provider.NativeMessage
 }
 
 func (adapter *Adapter) requestTo(ctx context.Context, call provider.NativeMessageCall, payload []byte, stream bool, suffix string) (*http.Request, error) {
+	if err := anthropicapi.ValidateVersionPayload(call.Version, payload); err != nil {
+		return nil, badRequest("validate Anthropic API version", err)
+	}
+	if call.Version == anthropicapi.CurrentVersion {
+		switch adapter.providerType {
+		case string(domain.ProviderAnthropic):
+		case string(domain.ProviderBedrock):
+			switch call.ProviderModel {
+			case "anthropic.claude-opus-4-7", "anthropic.claude-opus-4-8", "anthropic.claude-fable-5", "anthropic.claude-opus-5", "anthropic.claude-sonnet-5":
+			default:
+				return nil, badRequest("anthropic-version 2026-10-21 requires a reviewed Claude 4.7 or later Bedrock model", nil)
+			}
+		default:
+			return nil, badRequest("this upstream has not established anthropic-version 2026-10-21", nil)
+		}
+	}
 	endpoint := *adapter.endpoint
 	endpoint.Path = strings.TrimRight(endpoint.Path, "/")
 	if adapter.messagesPath != "" {

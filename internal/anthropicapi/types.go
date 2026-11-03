@@ -156,6 +156,7 @@ type MessageRequest struct {
 	Tools         []Tool          `json:"tools,omitempty"`
 	ToolChoice    *ToolChoice     `json:"tool_choice,omitempty"`
 	Thinking      json.RawMessage `json:"thinking,omitempty"`
+	CacheControl  json.RawMessage `json:"cache_control,omitempty"`
 	Metadata      json.RawMessage `json:"metadata,omitempty"`
 	ServiceTier   string          `json:"service_tier,omitempty"`
 	OutputConfig  *OutputConfig   `json:"output_config,omitempty"`

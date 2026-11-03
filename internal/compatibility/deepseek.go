@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 // DeepSeek speaks the OpenAI Chat Completions wire format, but it accepts a
@@ -18,9 +19,9 @@ import (
 // be one the declaration stops.
 //
 // Fields DeepSeek documents on Chat Completions (api-docs.deepseek.com,
-// read 2026-08-18):
+// reviewed again 2026-11-03):
 //
-//	messages, model, thinking, max_tokens, response_format, stop, stream,
+//	messages, model, thinking, reasoning_effort, max_tokens, response_format, stop, stream,
 //	stream_options, temperature, top_p, tools, tool_choice, logprobs,
 //	top_logprobs, user_id
 //
@@ -32,7 +33,7 @@ import (
 // is why the declaration below is value-dependent rather than a plain "yes".
 //
 // Sharing OpenAI's adapter is why the gap went unnoticed: n, seed,
-// parallel_tool_calls, max_completion_tokens and reasoning_effort were rendered
+// parallel_tool_calls and max_completion_tokens were rendered
 // onto a surface that accepts none of them, and `user` was sent under a name
 // DeepSeek does not read. The first group is declared unsupported so routing
 // moves the request rather than letting it come back 200 with the field
@@ -49,7 +50,7 @@ import (
 // docs/prd/deepseek-adaptation-plan.zh-CN.md.
 
 // DeepSeekEffortLevels is the depth ladder DeepSeek accepts once thinking is
-// on. Off is not a rung on it — that is thinking.type — which is why `none`
+// on, as a top-level member. Off is handled through thinking.type, so `none`
 // is handled separately below rather than being looked up here.
 var DeepSeekEffortLevels = []string{"low", "high", "max"}
 
@@ -77,17 +78,10 @@ func deepSeekThinkingIsOn(effort string) bool {
 	return effort != "" && effort != deepSeekThinkingOff
 }
 
-// DeepSeekThinking is DeepSeek's reasoning switch. It replaced the older
-// "use a different model" arrangement, which is why the semantic effort ladder
-// reaches DeepSeek through this member rather than through a top-level
-// reasoning_effort — DeepSeek does not accept that one.
-//
-// Its documented default is type "enabled" at effort "high", so the member is
-// absent from a request that asked for no particular depth and present for one
-// that did, in either direction.
+// DeepSeekThinking controls the mode. As of the 2026-11-03 Chat contract,
+// reasoning_effort is a sibling of thinking, not a member inside it.
 type DeepSeekThinking struct {
-	Type            string `json:"type"`
-	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	Type string `json:"type"`
 }
 
 // DeepSeekChatRequest is the accepted subset, written out rather than derived
@@ -95,19 +89,20 @@ type DeepSeekThinking struct {
 // openaiapi.ChatCompletionRequest must be considered here deliberately instead
 // of reaching DeepSeek because nobody remembered to exclude it.
 type DeepSeekChatRequest struct {
-	Model          string                   `json:"model,omitempty"`
-	Messages       []openaiapi.Message      `json:"messages"`
-	Thinking       *DeepSeekThinking        `json:"thinking,omitempty"`
-	MaxTokens      *int64                   `json:"max_tokens,omitempty"`
-	ResponseFormat json.RawMessage          `json:"response_format,omitempty"`
-	Stop           json.RawMessage          `json:"stop,omitempty"`
-	Stream         bool                     `json:"stream,omitempty"`
-	StreamOptions  *openaiapi.StreamOptions `json:"stream_options,omitempty"`
-	Temperature    *float64                 `json:"temperature,omitempty"`
-	TopP           *float64                 `json:"top_p,omitempty"`
-	Tools          []openaiapi.Tool         `json:"tools,omitempty"`
-	ToolChoice     json.RawMessage          `json:"tool_choice,omitempty"`
-	UserID         string                   `json:"user_id,omitempty"`
+	Model           string                   `json:"model,omitempty"`
+	Messages        []openaiapi.Message      `json:"messages"`
+	Thinking        *DeepSeekThinking        `json:"thinking,omitempty"`
+	ReasoningEffort string                   `json:"reasoning_effort,omitempty"`
+	MaxTokens       *int64                   `json:"max_tokens,omitempty"`
+	ResponseFormat  json.RawMessage          `json:"response_format,omitempty"`
+	Stop            json.RawMessage          `json:"stop,omitempty"`
+	Stream          bool                     `json:"stream,omitempty"`
+	StreamOptions   *openaiapi.StreamOptions `json:"stream_options,omitempty"`
+	Temperature     *float64                 `json:"temperature,omitempty"`
+	TopP            *float64                 `json:"top_p,omitempty"`
+	Tools           []openaiapi.Tool         `json:"tools,omitempty"`
+	ToolChoice      json.RawMessage          `json:"tool_choice,omitempty"`
+	UserID          string                   `json:"user_id,omitempty"`
 }
 
 // RenderDeepSeekChatRequest converts an OpenAI-shaped request into the body
@@ -119,6 +114,15 @@ type DeepSeekChatRequest struct {
 // reaches the adapter another way fails closed at the last moment instead of
 // sending a request the caller did not make.
 func RenderDeepSeekChatRequest(request openaiapi.ChatCompletionRequest) (DeepSeekChatRequest, error) {
+	toolCalling := len(request.Tools) > 0
+	var choice string
+	if json.Unmarshal(request.ToolChoice, &choice) == nil && choice == "none" {
+		toolCalling = false
+	}
+	if fields := deepSeekUnsupportedSampling(request.Model, request.ReasoningEffort, request.Temperature, request.TopP, toolCalling); len(fields) > 0 {
+		return DeepSeekChatRequest{}, fmt.Errorf("DeepSeek cannot preserve sampling controls %v for this model and mode", fields)
+	}
+
 	if request.N != nil && *request.N > 1 {
 		return DeepSeekChatRequest{}, errors.New("DeepSeek Chat Completions does not accept n")
 	}
@@ -200,9 +204,57 @@ func RenderDeepSeekChatRequest(request openaiapi.ChatCompletionRequest) (DeepSee
 	case request.ReasoningEffort == deepSeekThinkingOff:
 		result.Thinking = &DeepSeekThinking{Type: "disabled"}
 	case slices.Contains(DeepSeekEffortLevels, request.ReasoningEffort):
-		result.Thinking = &DeepSeekThinking{Type: "enabled", ReasoningEffort: request.ReasoningEffort}
+		result.Thinking = &DeepSeekThinking{Type: "enabled"}
+		result.ReasoningEffort = request.ReasoningEffort
 	default:
 		return DeepSeekChatRequest{}, fmt.Errorf("DeepSeek thinking does not accept reasoning effort %q", request.ReasoningEffort)
 	}
 	return result, nil
+}
+
+// DeepSeekTargetUnsupportedGenerateFields refuses controls that the documented
+// model/mode would ignore or clamp, using the same rules as the wire renderer.
+func DeepSeekTargetUnsupportedGenerateFields(model string, request semantic.GenerateRequest) []string {
+	toolCalling := len(request.Tools) > 0 && (request.ToolChoice == nil || request.ToolChoice.Mode != semantic.ToolChoiceNone)
+	return deepSeekUnsupportedSampling(model, request.ReasoningEffort, request.Temperature, request.TopP, toolCalling)
+}
+
+func deepSeekUnsupportedSampling(model, effort string, temperature, topP *float64, toolCalling bool) []string {
+	var fields []string
+	invalidTopP := topP != nil && (*topP <= 0 || *topP > 1)
+	if invalidTopP {
+		fields = append(fields, "top_p")
+	}
+	flash := false
+	switch model {
+	case "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp":
+		flash = true
+	case "deepseek-v4-pro":
+	default:
+		return fields
+	}
+	thinking := deepSeekThinkingIsOn(effort)
+	if thinking && temperature != nil {
+		fields = append(fields, "temperature")
+	}
+	if topP != nil && !invalidTopP {
+		unsupported := false
+		if flash {
+			if thinking {
+				unsupported = *topP < 0.95
+			} else {
+				unsupported = *topP != 1
+			}
+		} else if thinking {
+			fixed := 1.0
+			if toolCalling {
+				fixed = 0.95
+			}
+			unsupported = *topP != fixed
+		}
+		if unsupported {
+			fields = append(fields, "top_p")
+		}
+	}
+	return fields
 }

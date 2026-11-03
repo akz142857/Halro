@@ -131,8 +131,10 @@ var kimiReasoningSpelling = map[string]kimiReasoning{
 	//
 	// The second row is a caller paying a 64-token budget for no answer, which is
 	// how this was found.
-	"kimi-k3":   {TopLevelEffort: true, CanDisable: true},
-	"kimi-k2.6": {CanDisable: true},
+	"kimi-k3":                 {TopLevelEffort: true, CanDisable: true},
+	"kimi-k3.1-pro":           {TopLevelEffort: true},
+	"kimi-k3.1-pro-highspeed": {TopLevelEffort: true},
+	"kimi-k2.6":               {CanDisable: true},
 	// The one line that really cannot be switched off. Measured on the same run:
 	// `invalid thinking: only type=enabled is allowed for this model`. Here the
 	// documentation is right.
@@ -562,4 +564,24 @@ func applyKimiReasoning(result *KimiChatRequest, model, effort string) error {
 		result.Thinking = &KimiThinking{Type: "enabled"}
 	}
 	return nil
+}
+
+// KimiTargetUnsupportedGenerateFields mirrors the model-specific renderer so
+// forced thinking, tool choice and output budgets are checked before admission.
+func KimiTargetUnsupportedGenerateFields(model string, request semantic.GenerateRequest) []string {
+	var fields []string
+	var body KimiChatRequest
+	if err := applyKimiReasoning(&body, model, request.ReasoningEffort); err != nil {
+		fields = append(fields, "reasoning_effort")
+	}
+	if request.VisibleOutputTokenLimit != nil && (kimiThinkingWillBeOn(model, request.ReasoningEffort) || request.CompletionTokenLimit != nil) {
+		fields = append(fields, "max_tokens")
+	}
+	if choice := request.ToolChoice; choice != nil && kimiThinkingWillBeOn(model, request.ReasoningEffort) {
+		spelling := kimiReasoningSpelling[model]
+		if choice.Mode == semantic.ToolChoiceNamed || (choice.Mode == semantic.ToolChoiceRequired && !spelling.TopLevelEffort) {
+			fields = append(fields, "tool_choice")
+		}
+	}
+	return fields
 }
