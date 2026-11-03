@@ -16,6 +16,8 @@ type ModerationResult struct {
 	ProviderRequestID string
 }
 type ImageCall struct {
+	OutputFormat, Background                                               string
+	OutputCompression                                                      *int
 	RequestID, ProviderModel, Prompt, Quality, Size, ResponseFormat, Style string
 	Count                                                                  int
 }
@@ -30,6 +32,7 @@ type ImageResult struct {
 	ProviderRequestID string
 }
 type TranscriptionCall struct {
+	Languages, Keywords                                                               []string
 	RequestID, ProviderModel, Filename, ContentType, Language, Prompt, ResponseFormat string
 	Temperature                                                                       *float64
 	Data                                                                              []byte
@@ -40,6 +43,7 @@ type TranscriptionResult struct {
 	ProviderRequestID string
 }
 type SpeechCall struct {
+	Instructions                                           string
 	RequestID, ProviderModel, Voice, Input, ResponseFormat string
 	Speed                                                  *float64
 }

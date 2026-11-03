@@ -594,6 +594,13 @@ func (s *Store) PricingReadiness(ctx context.Context) error {
 				return err
 			}
 			if highWater.Quarantined {
+				deleted, err := pricingDeploymentDeletedTx(tx, highWater.DeploymentID)
+				if err != nil {
+					return err
+				}
+				if deleted {
+					return nil
+				}
 				return fmt.Errorf("deployment %q: %w", highWater.DeploymentID, ErrPricingQuarantined)
 			}
 			return nil
@@ -616,12 +623,35 @@ func (s *Store) PricingQuarantineCount(ctx context.Context) (int, error) {
 				return err
 			}
 			if highWater.Quarantined {
+				deleted, err := pricingDeploymentDeletedTx(tx, highWater.DeploymentID)
+				if err != nil {
+					return err
+				}
+				if deleted {
+					return nil
+				}
 				count++
 			}
 			return nil
 		})
 	})
 	return count, err
+}
+
+// Tombstones retain pricing history for audit and potential restoration. They
+// cannot serve traffic, so their quarantines do not affect instance readiness or
+// its blocked-deployment gauge. Disabled and missing deployments still count:
+// disabling is reversible, and a missing record is not proof of deletion.
+func pricingDeploymentDeletedTx(tx *Tx, deploymentID string) (bool, error) {
+	raw := tx.Bucket(bucketDeployments).Get([]byte(deploymentID))
+	if raw == nil {
+		return false, nil
+	}
+	var deployment domain.Deployment
+	if err := json.Unmarshal(raw, &deployment); err != nil {
+		return false, err
+	}
+	return deployment.DeletedAt != nil, nil
 }
 
 func (s *Store) DeploymentPricingQuarantine(ctx context.Context, deploymentID string) (bool, string, error) {

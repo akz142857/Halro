@@ -53,7 +53,11 @@ func RenderProviderResponseRequest(request semantic.GenerateRequest, providerMod
 			result.Tools = append(result.Tools, openaiapi.ResponseTool{Type: openaiapi.ProviderExecutedToolWebSearch})
 			continue
 		}
-		result.Tools = append(result.Tools, openaiapi.ResponseTool{Type: "function", Name: tool.Name, Description: tool.Description, Parameters: bytes.Clone(tool.Schema)})
+		strict := cloneBool(tool.Strict)
+		if strict == nil && request.Source.ProfileID == "openai.chat-completions.v1" {
+			strict = new(bool)
+		}
+		result.Tools = append(result.Tools, openaiapi.ResponseTool{Type: "function", Name: tool.Name, Description: tool.Description, Parameters: bytes.Clone(tool.Schema), Strict: strict})
 	}
 	result.ToolChoice, err = renderProviderResponseToolChoice(request.ToolChoice)
 	if err != nil {
@@ -62,14 +66,35 @@ func RenderProviderResponseRequest(request semantic.GenerateRequest, providerMod
 	if request.OutputFormat != nil {
 		result.Text = &openaiapi.ResponseTextConfig{Format: openaiapi.ResponseTextFormat{Type: string(request.OutputFormat.Kind), Name: request.OutputFormat.Name, Description: request.OutputFormat.Description, Schema: bytes.Clone(request.OutputFormat.Schema), Strict: request.OutputFormat.Strict}}
 	}
-	if request.ReasoningEffort != "" {
-		result.Reasoning = &openaiapi.ResponseReasoning{Effort: request.ReasoningEffort}
+	if request.ReasoningEffort != "" || request.ReasoningSummary != "" {
+		result.Reasoning = &openaiapi.ResponseReasoning{Effort: request.ReasoningEffort, Summary: request.ReasoningSummary}
 	}
 	return result, result.Validate()
 }
 
 func renderProviderResponseItems(messages []semantic.Message) ([]openaiapi.ResponseInputItem, error) {
 	items := make([]openaiapi.ResponseInputItem, 0, len(messages))
+	var pending responseReasoningState
+	var consumed []bool
+	appendReasoning := func(item openaiapi.ResponseOutputItem) {
+		items = append(items, openaiapi.ResponseInputItem{Type: "reasoning", ID: item.ID, Summary: item.Summary, EncryptedContent: item.EncryptedContent})
+	}
+	flushReasoning := func(callID string) {
+		for index, item := range pending.Items {
+			if !consumed[index] && pending.BeforeCalls[index] == callID {
+				appendReasoning(item)
+				consumed[index] = true
+			}
+		}
+	}
+	pendingComplete := func() bool {
+		for _, done := range consumed {
+			if !done {
+				return false
+			}
+		}
+		return true
+	}
 	for _, message := range messages {
 		parts := make([]openaiapi.ResponseInputContent, 0, len(message.Content))
 		flush := func() error {
@@ -87,13 +112,38 @@ func renderProviderResponseItems(messages []semantic.Message) ([]openaiapi.Respo
 		for _, content := range message.Content {
 			switch content.Kind {
 			case semantic.ContentText:
-				parts = append(parts, openaiapi.ResponseInputContent{Type: "input_text", Text: content.Text})
+				kind := "input_text"
+				if message.Role == semantic.RoleAssistant {
+					kind = "output_text"
+				}
+				parts = append(parts, openaiapi.ResponseInputContent{Type: kind, Text: content.Text})
 			case semantic.ContentInputImage:
 				parts = append(parts, openaiapi.ResponseInputContent{Type: "input_image", ImageURL: content.URL, Detail: content.Detail})
+			case semantic.ContentReasoning:
+				if err := flush(); err != nil {
+					return nil, err
+				}
+				state, err := decodeResponseReasoningState(content)
+				if err != nil {
+					return nil, err
+				}
+				if len(state.BeforeCalls) == 0 {
+					for _, item := range state.Items {
+						appendReasoning(item)
+					}
+				} else {
+					if !pendingComplete() {
+						return nil, errors.New("reasoning replay is missing its associated tool call")
+					}
+					pending = state
+					consumed = make([]bool, len(state.Items))
+				}
+
 			case semantic.ContentToolCall:
 				if err := flush(); err != nil {
 					return nil, err
 				}
+				flushReasoning(content.CallID)
 				items = append(items, openaiapi.ResponseInputItem{Type: "function_call", CallID: content.CallID, Name: content.Name, Arguments: content.Arguments})
 			case semantic.ContentToolResult:
 				if err := flush(); err != nil {
@@ -108,6 +158,10 @@ func renderProviderResponseItems(messages []semantic.Message) ([]openaiapi.Respo
 		if err := flush(); err != nil {
 			return nil, err
 		}
+		flushReasoning("")
+	}
+	if !pendingComplete() {
+		return nil, errors.New("reasoning replay is missing its associated tool call")
 	}
 	return items, nil
 }
@@ -123,12 +177,37 @@ func renderProviderResponseToolChoice(choice *semantic.ToolChoice) (json.RawMess
 }
 
 func DecodeProviderResponse(response openaiapi.Response) (semantic.GenerateResult, error) {
+	return decodeProviderResponse(response, false)
+}
+
+func DecodeOpenAIProviderResponse(response openaiapi.Response) (semantic.GenerateResult, error) {
+	return decodeProviderResponse(response, true)
+}
+
+func decodeProviderResponse(response openaiapi.Response, reasoning bool) (semantic.GenerateResult, error) {
 	if response.ID == "" || response.Model == "" || (response.Status != "completed" && response.Status != "incomplete") {
 		return semantic.GenerateResult{}, errors.New("provider Responses result identity is invalid")
 	}
 	message := semantic.Message{Role: semantic.RoleAssistant}
-	for _, item := range response.Output {
+	var reasoningItems []openaiapi.ResponseOutputItem
+	var beforeCalls []string
+	toolCalls := false
+	refused := false
+	for outputIndex, item := range response.Output {
 		switch item.Type {
+		case "reasoning":
+			if !reasoning {
+				return semantic.GenerateResult{}, errors.New("provider Responses reasoning is unsupported")
+			}
+			reasoningItems = append(reasoningItems, item)
+			before := ""
+			for _, later := range response.Output[outputIndex+1:] {
+				if later.Type == "function_call" {
+					before = later.CallID
+					break
+				}
+			}
+			beforeCalls = append(beforeCalls, before)
 		case "message":
 			for _, content := range item.Content {
 				switch content.Type {
@@ -139,6 +218,7 @@ func DecodeProviderResponse(response openaiapi.Response) (semantic.GenerateResul
 					}
 					message.Content = append(message.Content, semantic.Content{Kind: semantic.ContentText, Text: content.Text, Citations: citations})
 				case "refusal":
+					refused = true
 					if len(content.Annotations) > 0 {
 						return semantic.GenerateResult{}, errors.New("provider Responses refusal carries annotations")
 					}
@@ -148,7 +228,8 @@ func DecodeProviderResponse(response openaiapi.Response) (semantic.GenerateResul
 				}
 			}
 		case "function_call":
-			if item.CallID == "" || item.Name == "" || !json.Valid([]byte(item.Arguments)) {
+			toolCalls = true
+			if item.CallID == "" || item.Name == "" || (response.Status == "completed" && !json.Valid([]byte(item.Arguments))) {
 				return semantic.GenerateResult{}, errors.New("provider Responses function call is invalid")
 			}
 			message.Content = append(message.Content, semantic.Content{Kind: semantic.ContentToolCall, CallID: item.CallID, Name: item.Name, Arguments: item.Arguments})
@@ -176,10 +257,23 @@ func DecodeProviderResponse(response openaiapi.Response) (semantic.GenerateResul
 			return semantic.GenerateResult{}, errors.New("provider Responses output item is unsupported")
 		}
 	}
+	if len(reasoningItems) > 0 {
+		part, err := responseReasoningContent(responseReasoningState{Items: reasoningItems, BeforeCalls: beforeCalls})
+		if err != nil {
+			return semantic.GenerateResult{}, err
+		}
+		message.Content = append([]semantic.Content{part}, message.Content...)
+	}
 	if len(message.Content) == 0 {
 		return semantic.GenerateResult{}, errors.New("provider Responses result has no portable output")
 	}
 	termination := "complete"
+	if refused {
+		termination = "refusal"
+	}
+	if toolCalls {
+		termination = "tool_call"
+	}
 	if response.Status == "incomplete" {
 		termination = "max_output"
 	}
@@ -223,16 +317,23 @@ func decodeProviderResponseUsage(usage *openaiapi.ResponseUsage) *semantic.Usage
 	// input_tokens already counts the cached span on the Responses API, so the
 	// cached detail is a subset and must not be added onto the total.
 	decoded := &semantic.Usage{
-		InputTokens:       usage.InputTokens,
-		CachedInputTokens: usage.InputTokensDetails.CachedTokens,
-		OutputTokens:      usage.OutputTokens,
-		ReasoningTokens:   usage.OutputTokensDetails.ReasoningTokens,
-		AudioTokens:       usage.InputTokensDetails.AudioTokens + usage.OutputTokensDetails.AudioTokens,
-		TotalTokens:       usage.TotalTokens,
-		Source:            semantic.UsageProviderReported,
+		InputTokens:           usage.InputTokens,
+		CachedInputTokens:     usage.InputTokensDetails.CachedTokens,
+		CacheWriteInputTokens: usage.InputTokensDetails.CacheWriteTokens,
+		OutputTokens:          usage.OutputTokens,
+		ReasoningTokens:       usage.OutputTokensDetails.ReasoningTokens,
+		AudioTokens:           usage.InputTokensDetails.AudioTokens + usage.OutputTokensDetails.AudioTokens,
+		TotalTokens:           usage.TotalTokens,
+		Source:                semantic.UsageProviderReported,
 	}
 	if sum := decoded.InputTokens + decoded.OutputTokens; decoded.TotalTokens < sum {
 		decoded.TotalTokens = sum
 	}
 	return decoded
+}
+
+// DecodeResponseUsage retains provider-reported tiers even when a later stream
+// validation fails, so accounting need not estimate a known bill.
+func DecodeResponseUsage(usage *openaiapi.ResponseUsage) *semantic.Usage {
+	return decodeProviderResponseUsage(usage)
 }

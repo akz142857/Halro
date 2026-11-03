@@ -18,7 +18,7 @@ import (
 func TestBuiltinProfilePrimitivesMatchIndependentAdapterContract(t *testing.T) {
 	expected := map[domain.ProviderProfileID]map[Operation]Primitive{
 		domain.ProfileOpenAIChatEmbeddings: bindings(chatPairContract(PrimitiveOpenAIChatCompletions, PrimitiveOpenAIChatStream), pair{OperationEmbeddings, PrimitiveOpenAIEmbeddings}),
-		domain.ProfileOpenAIResponses:      bindings([]pair{{OperationChat, PrimitiveOpenAIResponses}}),
+		domain.ProfileOpenAIResponses:      bindings(chatPairContract(PrimitiveOpenAIResponses, PrimitiveOpenAIResponsesStream)),
 		domain.ProfileAnthropicMessages: bindings(
 			anthropicContract(PrimitiveAnthropicMessages, PrimitiveAnthropicMessagesStream),
 			pair{OperationFiles, PrimitiveHalroLocalFiles}, pair{OperationBatches, PrimitiveAnthropicMessageBatches}),
@@ -149,4 +149,8 @@ func (*primitiveContractAdapter) Embed(context.Context, EmbeddingCall) (openaiap
 }
 func (*primitiveContractAdapter) GenerateSemantic(context.Context, GenerateCall) (semantic.GenerateResult, error) {
 	return semantic.GenerateResult{}, nil
+}
+
+func (*primitiveContractAdapter) GenerateSemanticStream(context.Context, GenerateCall, func(semantic.Event) error) (*semantic.Usage, error) {
+	return nil, nil
 }

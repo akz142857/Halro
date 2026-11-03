@@ -74,8 +74,7 @@ var profileOperationTable = map[domain.ProviderProfileID]profileOperations{
 	domain.ProfileOpenAIChatEmbeddings: {Revision: 1, Bindings: append(
 		chatPair(PrimitiveOpenAIChatCompletions, PrimitiveOpenAIChatStream),
 		operationBinding{OperationEmbeddings, PrimitiveOpenAIEmbeddings})},
-	domain.ProfileOpenAIResponses: {Revision: 1, Bindings: []operationBinding{
-		{OperationChat, PrimitiveOpenAIResponses}}},
+	domain.ProfileOpenAIResponses: {Revision: 2, Bindings: chatPair(PrimitiveOpenAIResponses, PrimitiveOpenAIResponsesStream)},
 	// Revision 2: files and batches joined this profile. Anthropic serves both on
 	// the same credential, and the file half is stored by Halro rather than
 	// uploaded, because Anthropic batches carry their requests inline.

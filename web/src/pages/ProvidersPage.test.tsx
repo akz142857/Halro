@@ -213,9 +213,8 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(create).not.toHaveBeenCalled();
   });
 
-  // What the form submits is one flat capability set and nothing about profiles.
-  // An OpenAI connection spans two of them, and which capability each one serves
-  // is the server's answer — this form knowing it is what let the two drift.
+  // The form submits an explicit anchor and one flat capability set. Which
+  // companion profile serves each remaining capability is the server's answer.
   it("submits one flat capability set and no profile split", async () => {
     const create = vi.spyOn(api, "createProvider").mockResolvedValue({} as never);
     renderPage();
@@ -231,7 +230,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     const submitted = create.mock.calls[0][0] as Record<string, unknown>;
     expect(submitted).toMatchObject({ type: "openai", credential_id: openAICredential.id });
     expect(submitted.bindings).toBeUndefined();
-    expect(submitted.profile_id).toBeUndefined();
+    expect(submitted.profile_id).toBe("openai.chat-embeddings.v1");
     // A new connection starts with what the profile it lands on declares, not
     // with the union across the credential's profiles: the media capabilities
     // are offered and left off, so nothing is advertised to the router that the
@@ -1244,20 +1243,23 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(within(row!).getByText("Kimi 开放平台 · 海外")).toBeVisible();
   });
 
-  // And says nothing where there is nothing to say: an OpenAI connection spans
-  // one group, so naming an implementation would assert that the enabled
-  // capabilities land on it — a claim the form has no business making.
-  it("names no implementation where the type offers one", async () => {
+  it("lets an OpenAI connection select Responses while retaining the credential", async () => {
     const create = vi.spyOn(api, "createProvider").mockResolvedValue({} as never);
     renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "OpenAI" } });
-    expect(screen.queryByLabelText(/^能力实现/)).not.toBeInTheDocument();
+    const implementation = screen.getByRole("combobox", { name: /^能力实现/ });
+    expect(implementation).toHaveValue("openai.chat-embeddings.v1");
+    expect(within(implementation).getAllByRole("option")).toHaveLength(2);
+    fireEvent.change(implementation, { target: { value: "openai.responses.v1" } });
     fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
-    expect(create.mock.calls[0][0]).not.toHaveProperty("profile_id");
+    expect(create.mock.calls[0][0]).toMatchObject({
+      profile_id: "openai.responses.v1", access_surface: "openai-api",
+      credential_scheme: "bearer.static", base_url: "https://api.openai.com",
+    });
   });
 
   it.each([

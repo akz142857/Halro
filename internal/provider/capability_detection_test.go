@@ -557,6 +557,7 @@ func TestTheReasoningProbeAsksForADepthItsOwnWireFormatAccepts(t *testing.T) {
 	// mention it.
 	ladders := map[domain.ProviderProfileID][]string{
 		domain.ProfileOpenAIChatEmbeddings:                openaiapi.ReasoningEffortLevels,
+		domain.ProfileOpenAIResponses:                     openaiapi.ReasoningEffortLevels,
 		domain.ProfileAzureChatEmbeddings:                 openaiapi.ReasoningEffortLevels,
 		domain.ProfileBedrockMantleChat:                   openaiapi.ReasoningEffortLevels,
 		domain.ProfileBedrockMantleOpenAIChat:             openaiapi.ReasoningEffortLevels,

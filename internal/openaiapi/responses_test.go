@@ -25,7 +25,6 @@ func TestDecodeResponseRequestRejectsStatefulUnknownAndLossyFields(t *testing.T)
 		`{"model":"route","input":"hello","previous_response_id":"resp_1"}`,
 		`{"model":"route","input":"hello","conversation":"conv_1"}`,
 		`{"model":"route","input":"hello","background":true,"stream":true}`,
-		`{"model":"route","input":"hello","reasoning":{"effort":"high"}}`,
 		// A provider-executed tool is named, not described: the caller is not
 		// declaring a function, so function fields on it are a caller who thinks
 		// they are constraining something they are not.
@@ -33,7 +32,6 @@ func TestDecodeResponseRequestRejectsStatefulUnknownAndLossyFields(t *testing.T)
 		`{"model":"route","input":"hello","tools":[{"type":"web_search","parameters":{"type":"object"}}]}`,
 		`{"model":"route","input":"hello","tools":[{"type":"code_interpreter"}]}`,
 		`{"model":"route","input":"hello","tools":[{"type":"file_search"}]}`,
-		`{"model":"route","input":"hello","tools":[{"type":"function","name":"f","strict":true}],"stream":true}`,
 	}
 	for _, body := range tests {
 		if _, err := DecodeResponseRequest(json.NewDecoder(strings.NewReader(body))); err == nil {

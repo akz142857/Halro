@@ -252,6 +252,15 @@ func isBigModelChatProfile(profile domain.ProviderProfileID) bool {
 // by exact model. A probe is never useful when Halro cannot encode a depth for
 // that target without rounding it or changing whether thinking runs.
 func reasoningProbeEffortForTarget(profile domain.ProviderProfileID, model string) (string, bool) {
+	if profile == domain.ProfileOpenAIChatEmbeddings || profile == domain.ProfileOpenAIResponses {
+		if efforts := compatibility.OpenAIModelEfforts(model); len(efforts) > 0 {
+			for _, effort := range efforts {
+				if effort != "none" {
+					return effort, true
+				}
+			}
+		}
+	}
 	if profile == domain.ProfileVolcengineChat {
 		for _, effort := range compatibility.VolcengineEffortLevels {
 			if compatibility.VolcengineReasoningSupported(model, effort) {

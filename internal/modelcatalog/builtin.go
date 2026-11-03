@@ -194,9 +194,7 @@ func openAIChatModels() []Entry {
 		builtinEntry(provider, profile, "gpt-4o-mini", with(chat(128_000, 16_384), vision, structuredOutputs)),
 		builtinEntry(provider, profile, "gpt-4.1", with(chat(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
 		builtinEntry(provider, profile, "gpt-4.1-mini", with(chat(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
-		builtinEntry(provider, profile, "gpt-4.1-nano", with(chat(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
 		builtinEntry(provider, profile, "o3", with(chat(200_000, 100_000), vision, structuredOutputs, developerRole, reasoning)),
-		builtinEntry(provider, profile, "o4-mini", with(chat(200_000, 100_000), vision, structuredOutputs, developerRole, reasoning)),
 		builtinEntry(provider, profile, "gpt-5", with(chat(400_000, 128_000), vision, structuredOutputs, developerRole, reasoning)),
 		builtinEntry(provider, profile, "gpt-5-mini", with(chat(400_000, 128_000), vision, structuredOutputs, developerRole, reasoning)),
 		builtinEntry(provider, profile, "gpt-5-nano", with(chat(400_000, 128_000), vision, structuredOutputs, developerRole, reasoning)),
@@ -215,40 +213,38 @@ func openAIChatModels() []Entry {
 		builtinEntry(provider, profile, "gpt-5.6-sol", with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
 		builtinEntry(provider, profile, "gpt-5.6-terra", with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
 		builtinEntry(provider, profile, "gpt-5.6-luna", with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		builtinEntry(provider, profile, "gpt-6-astra", withoutTools(with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning))),
+		builtinEntry(provider, profile, "gpt-6.1-sol", withoutTools(with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning))),
+		builtinEntry(provider, profile, "gpt-6.1-terra", withoutTools(with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning))),
+		builtinEntry(provider, profile, "gpt-6-sol", with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		builtinEntry(provider, profile, "gpt-6-luna", with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
 	}
 }
 
-// openAIResponsesModels covers the same OpenAI text models reached through the
-// Responses endpoint.
-//
-// They are separate entries rather than the chat entries reused, because a
-// model's capabilities are a property of the surface it is reached on as much as
-// of the model: nothing here claims streaming or stream usage, since this
-// profile binds no stream primitive, and nothing claims reasoning, since the
-// canonical response mapper cannot preserve reasoning items.
-//
-// provider_executed_tools is claimed by no entry. It is at the profile ceiling
-// and off in its defaults, which is where an operator accepts the upstream
-// egress it implies; a catalogue entry asserting it would make that acceptance
-// automatic for every model.
+// openAIResponsesModels carries the reviewed OpenAI text-model capabilities
+// through the native Responses endpoint, including reasoning and streaming.
+// Provider-executed tools remain an operator-controlled opt-in.
 func openAIResponsesModels() []Entry {
 	const provider, profile = domain.ProviderOpenAI, domain.ProfileOpenAIResponses
 	return []Entry{
-		builtinEntry(provider, profile, "gpt-4o", with(responses(128_000, 16_384), vision, structuredOutputs)),
-		builtinEntry(provider, profile, "gpt-4o-mini", with(responses(128_000, 16_384), vision, structuredOutputs)),
-		builtinEntry(provider, profile, "gpt-4.1", with(responses(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
-		builtinEntry(provider, profile, "gpt-4.1-mini", with(responses(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
-		builtinEntry(provider, profile, "gpt-4.1-nano", with(responses(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
-		builtinEntry(provider, profile, "o3", with(responses(200_000, 100_000), vision, structuredOutputs, developerRole)),
-		builtinEntry(provider, profile, "o4-mini", with(responses(200_000, 100_000), vision, structuredOutputs, developerRole)),
-		builtinEntry(provider, profile, "gpt-5", with(responses(400_000, 128_000), vision, structuredOutputs, developerRole)),
-		builtinEntry(provider, profile, "gpt-5-mini", with(responses(400_000, 128_000), vision, structuredOutputs, developerRole)),
-		builtinEntry(provider, profile, "gpt-5-nano", with(responses(400_000, 128_000), vision, structuredOutputs, developerRole)),
-		builtinEntry(provider, profile, "gpt-5.4", with(responses(1_050_000, 128_000), vision, structuredOutputs)),
-		builtinEntry(provider, profile, "gpt-5.5", with(responses(1_050_000, 128_000), vision, structuredOutputs)),
-		builtinEntry(provider, profile, "gpt-5.6-sol", with(responses(1_050_000, 128_000), vision, structuredOutputs)),
-		builtinEntry(provider, profile, "gpt-5.6-terra", with(responses(1_050_000, 128_000), vision, structuredOutputs)),
-		builtinEntry(provider, profile, "gpt-5.6-luna", with(responses(1_050_000, 128_000), vision, structuredOutputs)),
+		builtinEntry(provider, profile, "gpt-4o", with(openAIResponses(128_000, 16_384), vision, structuredOutputs)),
+		builtinEntry(provider, profile, "gpt-4o-mini", with(openAIResponses(128_000, 16_384), vision, structuredOutputs)),
+		builtinEntry(provider, profile, "gpt-4.1", with(openAIResponses(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
+		builtinEntry(provider, profile, "gpt-4.1-mini", with(openAIResponses(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
+		builtinEntry(provider, profile, "o3", with(openAIResponses(200_000, 100_000), vision, structuredOutputs, developerRole, reasoning)),
+		builtinEntry(provider, profile, "gpt-5", with(openAIResponses(400_000, 128_000), vision, structuredOutputs, developerRole, reasoning)),
+		builtinEntry(provider, profile, "gpt-5-mini", with(openAIResponses(400_000, 128_000), vision, structuredOutputs, developerRole, reasoning)),
+		builtinEntry(provider, profile, "gpt-5-nano", with(openAIResponses(400_000, 128_000), vision, structuredOutputs, developerRole, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.4", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.5", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.6-sol", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.6-terra", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.6-luna", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		unaskedOpenAIResponsesEntry(provider, profile, "gpt-6-astra", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		unaskedOpenAIResponsesEntry(provider, profile, "gpt-6.1-sol", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		unaskedOpenAIResponsesEntry(provider, profile, "gpt-6.1-terra", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		unaskedOpenAIResponsesEntry(provider, profile, "gpt-6-sol", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		unaskedOpenAIResponsesEntry(provider, profile, "gpt-6-luna", with(openAIResponses(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
 	}
 }
 
@@ -291,8 +287,10 @@ func openAIMediaModels() []Entry {
 	speech := domain.ProviderCapabilities{Speech: true}
 	return []Entry{
 		builtinEntry(provider, profile, "omni-moderation-latest", moderations),
-		builtinEntry(provider, profile, "gpt-image-1", images),
-		builtinEntry(provider, profile, "dall-e-3", images),
+		builtinEntry(provider, profile, "gpt-image-2", images),
+		builtinEntry(provider, profile, "gpt-image-2.5-sunburst", images),
+		builtinEntry(provider, profile, "gpt-image-2.5-flare", images),
+		builtinEntry(provider, profile, "gpt-transcribe", transcriptions),
 		builtinEntry(provider, profile, "whisper-1", transcriptions),
 		builtinEntry(provider, profile, "gpt-4o-transcribe", transcriptions),
 		builtinEntry(provider, profile, "gpt-4o-mini-transcribe", transcriptions),
@@ -1001,4 +999,21 @@ func openAICompatibleModels() []Entry {
 		builtinEntry(provider, profile, "text-embedding-3-small", embeddings),
 		builtinEntry(provider, profile, "text-embedding-3-large", embeddings),
 	}
+}
+
+func openAIResponses(contextTokens, outputTokens int64) domain.ProviderCapabilities {
+	caps := responses(contextTokens, outputTokens)
+	caps.Streaming, caps.StreamUsage = true, true
+	return caps
+}
+
+func withoutTools(caps domain.ProviderCapabilities) domain.ProviderCapabilities {
+	caps.Tools = false
+	return caps
+}
+
+func unaskedOpenAIResponsesEntry(provider domain.ProviderType, profile domain.ProviderProfileID, model string, caps domain.ProviderCapabilities) Entry {
+	entry := builtinEntry(provider, profile, model, caps)
+	entry.ReasonsUnasked = true
+	return entry
 }

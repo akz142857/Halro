@@ -1629,6 +1629,8 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存",  saveDisable
       "bigmodel.coding-plan": "GLM Coding Plan（订阅）",
     },
     profiles: {
+      "openai.chat-embeddings.v1": "Chat Completions 与向量嵌入（/v1/chat/completions）",
+      "openai.responses.v1": "Responses（/v1/responses，支持工具与推理）",
       "bedrock.mantle.chat.v1": "Mantle · Chat Completions（默认 /v1 路由）",
       "bedrock.mantle.openai.chat.v1": "Mantle · Chat Completions（/openai/v1 路由）",
       "bedrock.mantle.responses.v1": "Mantle · Responses 无状态（默认 /v1 路由）",

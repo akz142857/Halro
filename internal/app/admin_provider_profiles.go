@@ -55,6 +55,9 @@ type providerProfileView struct {
 	// exactly one of them. It is what lets a form know whether to offer a choice
 	// among a group's profiles at all.
 	RoutePartitioned bool `json:"route_partitioned"`
+	// ImplementationChoice allows an explicit protocol anchor without claiming
+	// that every model belongs exclusively to one upstream route.
+	ImplementationChoice bool `json:"implementation_choice"`
 	// DefaultBaseURL is the initial Admin form value. For a regional endpoint it
 	// uses the product's UI default; each Credential may choose another region.
 	DefaultBaseURL string `json:"default_base_url"`
@@ -206,23 +209,24 @@ func buildProviderProfilesView(subscriptions config.ProviderSubscriptions, regio
 		}
 		identity, _ := domain.IdentityForProfile(profile.ID)
 		profilesByType[profile.Type] = append(profilesByType[profile.Type], providerProfileView{
-			ID:                  profile.ID,
-			ConnectionGroupID:   profile.ConnectionGroupID,
-			AccessSurface:       profile.AccessSurface,
-			CredentialScheme:    profile.CredentialScheme,
-			OfferingID:          identity.Offering,
-			RegionID:            identity.Region,
-			SendsAnthropicBetas: domain.ProfileSendsAnthropicBetas(profile.ID),
-			RoutePartitioned:    profile.RoutePartitioned,
-			DefaultBaseURL:      domain.ResolveBaseURL(profile.ID, region),
-			BaseURLTemplate:     domain.BaseURLTemplate(profile.ID),
-			Immutable:           profile.Immutable,
-			Defaults:            profile.Defaults,
-			Ceiling:             profile.Ceiling,
-			ConnectionCeiling:   domain.ConnectionCeiling(profile.Type, profile.ID),
-			ConnectionDefaults:  domain.ConnectionDefaults(profile.Type, profile.ID),
-			CombinesWith:        combines,
-			RequestConstraints:  compatibility.ProfileRequestConstraints(profile.ID),
+			ID:                   profile.ID,
+			ConnectionGroupID:    profile.ConnectionGroupID,
+			AccessSurface:        profile.AccessSurface,
+			CredentialScheme:     profile.CredentialScheme,
+			OfferingID:           identity.Offering,
+			RegionID:             identity.Region,
+			SendsAnthropicBetas:  domain.ProfileSendsAnthropicBetas(profile.ID),
+			RoutePartitioned:     profile.RoutePartitioned,
+			ImplementationChoice: profile.ImplementationChoice,
+			DefaultBaseURL:       domain.ResolveBaseURL(profile.ID, region),
+			BaseURLTemplate:      domain.BaseURLTemplate(profile.ID),
+			Immutable:            profile.Immutable,
+			Defaults:             profile.Defaults,
+			Ceiling:              profile.Ceiling,
+			ConnectionCeiling:    domain.ConnectionCeiling(profile.Type, profile.ID),
+			ConnectionDefaults:   domain.ConnectionDefaults(profile.Type, profile.ID),
+			CombinesWith:         combines,
+			RequestConstraints:   compatibility.ProfileRequestConstraints(profile.ID),
 		})
 	}
 	types := make([]providerTypeView, 0, len(domain.AllProviderTypes()))

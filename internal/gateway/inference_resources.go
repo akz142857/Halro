@@ -118,6 +118,9 @@ func (s *Service) Images(ctx context.Context, key string, request openaiapi.Imag
 	if err != nil {
 		return openaiapi.ImageGenerationResponse{}, err
 	}
+	if target.ProfileID != domain.ProfileOpenAIMediaResources && (request.OutputFormat != "" || request.Background != "" || request.OutputCompression != nil) {
+		return openaiapi.ImageGenerationResponse{}, gatewayError("unsupported_feature", "this image profile does not support output_format, background or output_compression", 400, nil)
+	}
 	var result provider.ImageResult
 	request.Prompt, err = s.redactor.ProcessText(principal.Project.RedactionPolicyID, "inbound", request.Prompt)
 	if err != nil {
@@ -126,7 +129,7 @@ func (s *Service) Images(ctx context.Context, key string, request openaiapi.Imag
 	if adapter, ok := target.Adapter.(provider.BedrockInferenceResourcesAdapter); ok && target.ProfileID != domain.ProfileOpenAIMediaResources {
 		err = s.accountedInferenceResources(ctx, principal, request.Model, target, provider.OperationImages, int64(len(request.Prompt))/4+1, &requestID, func() error {
 			var callErr error
-			result, callErr = adapter.GenerateBedrockImage(ctx, provider.ImageCall{RequestID: requestID, ProviderModel: target.ProviderModel, Prompt: request.Prompt, Count: request.N, Quality: request.Quality, Size: request.Size, ResponseFormat: request.ResponseFormat, Style: request.Style})
+			result, callErr = adapter.GenerateBedrockImage(ctx, provider.ImageCall{RequestID: requestID, ProviderModel: target.ProviderModel, Prompt: request.Prompt, Count: request.N, Quality: request.Quality, Size: request.Size, ResponseFormat: request.ResponseFormat, Style: request.Style, OutputFormat: request.OutputFormat, Background: request.Background, OutputCompression: request.OutputCompression})
 			if callErr == nil {
 				callErr = s.redactImageResult(principal.Project.RedactionPolicyID, &result)
 			}
@@ -135,7 +138,7 @@ func (s *Service) Images(ctx context.Context, key string, request openaiapi.Imag
 	} else if adapter, ok := target.Adapter.(provider.StatelessInferenceResourcesAdapter); ok {
 		err = s.accountedInferenceResources(ctx, principal, request.Model, target, provider.OperationImages, int64(len(request.Prompt))/4+1, &requestID, func() error {
 			var callErr error
-			result, callErr = adapter.GenerateImage(ctx, provider.ImageCall{RequestID: requestID, ProviderModel: target.ProviderModel, Prompt: request.Prompt, Count: request.N, Quality: request.Quality, Size: request.Size, ResponseFormat: request.ResponseFormat, Style: request.Style})
+			result, callErr = adapter.GenerateImage(ctx, provider.ImageCall{RequestID: requestID, ProviderModel: target.ProviderModel, Prompt: request.Prompt, Count: request.N, Quality: request.Quality, Size: request.Size, ResponseFormat: request.ResponseFormat, Style: request.Style, OutputFormat: request.OutputFormat, Background: request.Background, OutputCompression: request.OutputCompression})
 			if callErr == nil {
 				callErr = s.redactImageResult(principal.Project.RedactionPolicyID, &result)
 			}
@@ -166,10 +169,14 @@ func (s *Service) Speech(ctx context.Context, key string, request openaiapi.Spee
 	if err != nil {
 		return provider.SpeechResult{}, gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
 	}
+	request.Instructions, err = s.redactor.ProcessText(principal.Project.RedactionPolicyID, "inbound", request.Instructions)
+	if err != nil {
+		return provider.SpeechResult{}, gatewayError("sensitive_data_detected", "speech instructions contain secret material", 400, err)
+	}
 	var result provider.SpeechResult
 	err = s.accountedInferenceResources(ctx, principal, request.Model, target, provider.OperationSpeech, int64(len(request.Input))/4+1, &requestID, func() error {
 		var callErr error
-		result, callErr = adapter.Synthesize(ctx, provider.SpeechCall{RequestID: requestID, ProviderModel: target.ProviderModel, Input: request.Input, Voice: request.Voice, ResponseFormat: request.ResponseFormat, Speed: request.Speed})
+		result, callErr = adapter.Synthesize(ctx, provider.SpeechCall{RequestID: requestID, ProviderModel: target.ProviderModel, Input: request.Input, Voice: request.Voice, ResponseFormat: request.ResponseFormat, Speed: request.Speed, Instructions: request.Instructions})
 		return callErr
 	})
 	if err != nil {
@@ -193,6 +200,12 @@ func (s *Service) Transcription(ctx context.Context, key, model string, call pro
 	call.Prompt, err = s.redactor.ProcessText(principal.Project.RedactionPolicyID, "inbound", call.Prompt)
 	if err != nil {
 		return provider.TranscriptionResult{}, gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
+	}
+	for index, keyword := range call.Keywords {
+		call.Keywords[index], err = s.redactor.ProcessText(principal.Project.RedactionPolicyID, "inbound", keyword)
+		if err != nil {
+			return provider.TranscriptionResult{}, gatewayError("sensitive_data_detected", "transcription keywords contain secret material", 400, err)
+		}
 	}
 	var result provider.TranscriptionResult
 	err = s.accountedInferenceResources(ctx, principal, model, target, provider.OperationTranscriptions, int64(len(call.Data))/4+1, &requestID, func() error {

@@ -66,8 +66,7 @@ var KimiEffortLevels = []string{"low", "high", "max"}
 // for. Each end comes from a different side:
 //
 //   - `low` and `high` are the rungs both ladders have.
-//   - `max` is Kimi's and not portable: every portable request passes through
-//     the OpenAI ladder, which stops at xhigh.
+//   - `max` is portable now that the OpenAI request ladder carries it.
 //   - `minimal`, `medium` and `xhigh` are the portable ladder's and have no Kimi
 //     rung, so they are declared rather than rounded to a neighbour — rounding
 //     would serve a depth, and a bill, the caller did not ask for.

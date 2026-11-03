@@ -325,6 +325,64 @@ func TestDeploymentPricePinPersistsHighWaterAndCommitsLedgerSequence(t *testing.
 	}
 }
 
+func TestDeletedDeploymentQuarantineDoesNotBlockReadiness(t *testing.T) {
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	const id = "dep_deleted_quarantine"
+	seedPricingDeployment(t, store, id, 0, 0, 0)
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	if _, err := store.CreateDeploymentPriceVersion(ctx, newStoredPrice("price_deleted_quarantine", id, now.Add(-time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, id, "att_before_delete", now, time.Now(), time.Second, 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := store.PrepareDeploymentPricePin(ctx, id, "att_clock_rollback", now.Add(-3*time.Second), time.Now(), time.Second, 30*time.Second); !errors.Is(err, ErrPricingQuarantined) {
+		t.Fatalf("quarantine error=%v", err)
+	}
+	check := func(wantCount int) {
+		t.Helper()
+		err := store.PricingReadiness(ctx)
+		if wantCount == 0 && err != nil || wantCount != 0 && !errors.Is(err, ErrPricingQuarantined) {
+			t.Fatalf("readiness=%v, want quarantine count %d", err, wantCount)
+		}
+		count, err := store.PricingQuarantineCount(ctx)
+		if err != nil || count != wantCount {
+			t.Fatalf("quarantine count=%d err=%v, want %d", count, err, wantCount)
+		}
+	}
+	// Disabled deployments retain the gate, since they can be re-enabled.
+	check(1)
+	deployment, err := store.GetDeployment(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.DeletedAt = &now
+	deployment, err = store.PutDeployment(ctx, deployment, deployment.Revision, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(0)
+	if quarantined, reason, err := store.DeploymentPricingQuarantine(ctx, id); err != nil || !quarantined || reason == "" {
+		t.Fatalf("historical quarantine lost: %v %q %v", quarantined, reason, err)
+	}
+	// Restoring a tombstone must restore its gate, without clearing clock history.
+	deployment.DeletedAt = nil
+	if _, err := store.PutDeployment(ctx, deployment, deployment.Revision, nil); err != nil {
+		t.Fatal(err)
+	}
+	check(1)
+	// Missing metadata cannot be treated as affirmative proof of deletion.
+	if err := store.update(func(tx *Tx) error { return tx.Bucket(bucketDeployments).Delete([]byte(id)) }); err != nil {
+		t.Fatal(err)
+	}
+	check(1)
+}
+
 func TestDeploymentPricePinQuarantinesUnexplainedForwardJump(t *testing.T) {
 	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {

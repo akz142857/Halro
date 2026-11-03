@@ -45,12 +45,11 @@ func TestResponsesProfileResolvesToTheSemanticPrimitive(t *testing.T) {
 		t.Fatalf("primitive=%q", resolved.ProviderPrimitive())
 	}
 
-	// A stream primitive is deliberately unbound: this profile answers one
-	// request with one response, and a streaming request is meant to be routed
-	// away rather than served by an adapter improvising chunks.
-	if _, streams := bridge.Operations().Resolve(provider.OperationChatStream); streams {
-		t.Fatal("the Responses profile resolved a stream primitive it does not bind")
+	stream, ok := bridge.Operations().Resolve(provider.OperationChatStream)
+	if !ok || stream.ProviderPrimitive() != provider.PrimitiveOpenAIResponsesStream {
+		t.Fatal("Responses stream primitive is not wired")
 	}
+
 }
 
 // What the caller asked for has to reach the wire as a Responses body, on the

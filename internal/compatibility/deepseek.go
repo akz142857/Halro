@@ -58,8 +58,7 @@ var DeepSeekEffortLevels = []string{"low", "high", "max"}
 //
 //   - `none` is reachable, because thinking.type takes "disabled".
 //   - `low` and `high` are the rungs both ladders have.
-//   - `max` is DeepSeek's and not portable: every portable request passes
-//     through the OpenAI ladder, which stops at xhigh.
+//   - `max` is portable now that the OpenAI request ladder carries it.
 //   - `minimal`, `medium` and `xhigh` are the portable ladder's and have no
 //     DeepSeek rung, so they are declared rather than rounded to a neighbour —
 //     rounding would serve a depth, and a bill, the caller did not ask for.
@@ -183,15 +182,10 @@ func RenderDeepSeekChatRequest(request openaiapi.ChatCompletionRequest) (DeepSee
 	// Nothing asked for, so thinking is switched off rather than left to
 	// DeepSeek's own default, which is on at effort "high".
 	//
-	// Leaving it to the provider looked like the neutral choice and is not.
-	// /v1/responses rejects the `reasoning` request field outright — Phase 1A
-	// cannot represent reasoning output — so a caller there is not permitted to
-	// ask, and got it anyway: the stream carried reasoning_content, the Responses
-	// stream renderer refused a delta that was not output text, and the request
-	// died as malformed_response after the upstream had already run and billed
-	// it. Ambiguous, so it is conservatively accounted: the caller pays for
-	// reasoning they were never allowed to request, and receives nothing.
-	//
+	// Earlier versions of the Responses facade could not render reasoning.
+	// Keep the established default-off contract even though that facade now
+	// carries reasoning, so upgrading Halro does not change an unasked request's
+	// provider cost or latency.
 	// This is the same reasoning as the Anthropic profile's, which disables
 	// thinking on an unasked request for its own version of the same failure
 	// (compatibility/anthropic/mapping.go). Matching it also removes a difference

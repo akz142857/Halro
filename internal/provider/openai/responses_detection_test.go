@@ -2,16 +2,13 @@ package openai
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/domain"
-	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/provider"
-	"github.com/akz142857/Halro/internal/semantic"
 )
 
 // Capability detection speaks Chat, and every probe reaches the adapter through
@@ -54,23 +51,5 @@ func TestCapabilityDetectionOnTheResponsesProfileProbesTheResponsesEndpoint(t *t
 	}
 	if result.Status != domain.ProbeSupported || result.Evidence != domain.EvidenceVerified {
 		t.Fatalf("a probe that reached the profile's own surface was not believed: %#v", result)
-	}
-}
-
-// The profile binds no stream primitive, so nothing should arrive here. Falling
-// through to the Chat endpoint would stream from a surface this profile does not
-// address.
-func TestResponsesProfileAdapterRefusesToStream(t *testing.T) {
-	adapter := newResponsesAdapter(t, &http.Client{Transport: roundTripFunc(unreachableRoundTrip)})
-
-	_, err := adapter.ChatStream(context.Background(),
-		provider.ChatCall{RequestID: "req", ProviderModel: "gpt-5.6", Request: openaiapi.ChatCompletionRequest{
-			Model: "public", Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}},
-		}},
-		func(semantic.Event) error { return nil },
-	)
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) || providerErr.Class != provider.ErrorBadRequest {
-		t.Fatalf("err=%#v", err)
 	}
 }

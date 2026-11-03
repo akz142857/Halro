@@ -17,8 +17,9 @@ import (
 
 type inferenceResourcesFakeService struct {
 	fakeService
-	route string
-	file  provider.FileCreateCall
+	route         string
+	file          provider.FileCreateCall
+	transcription provider.TranscriptionCall
 }
 
 func (s *inferenceResourcesFakeService) Moderations(_ context.Context, _ string, r openaiapi.ModerationRequest) (openaiapi.ModerationResponse, error) {
@@ -30,7 +31,8 @@ func (s *inferenceResourcesFakeService) Images(context.Context, string, openaiap
 func (s *inferenceResourcesFakeService) Speech(context.Context, string, openaiapi.SpeechRequest) (provider.SpeechResult, error) {
 	return provider.SpeechResult{ContentType: "audio/mpeg", Data: []byte("audio")}, nil
 }
-func (s *inferenceResourcesFakeService) Transcription(context.Context, string, string, provider.TranscriptionCall) (provider.TranscriptionResult, error) {
+func (s *inferenceResourcesFakeService) Transcription(_ context.Context, _ string, _ string, call provider.TranscriptionCall) (provider.TranscriptionResult, error) {
+	s.transcription = call
 	return provider.TranscriptionResult{ContentType: "application/json", Data: []byte(`{"text":"ok"}`)}, nil
 }
 func (s *inferenceResourcesFakeService) Rerank(context.Context, string, openaiapi.RerankRequest) (provider.RerankResult, error) {
@@ -151,5 +153,27 @@ func TestAsyncResponseUsesDeclaredWireShapeAndHidesProviderRequestID(t *testing.
 		if _, ok := body[forbidden]; ok {
 			t.Fatalf("unexpected %s: %s", forbidden, response.Body.String())
 		}
+	}
+}
+
+func TestTranscriptionAcceptsRepeatedLanguageAndKeywordHints(t *testing.T) {
+	service := &inferenceResourcesFakeService{}
+	handler, _ := New(service, 1<<20)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, _ := writer.CreateFormFile("file", "audio.wav")
+	_, _ = part.Write([]byte("audio"))
+	_ = writer.WriteField("model", "transcribe")
+	_ = writer.WriteField("languages[]", "en")
+	_ = writer.WriteField("languages[]", "fr")
+	_ = writer.WriteField("keywords[]", "Halro")
+	_ = writer.Close()
+	request := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", &body)
+	request.Header.Set("Authorization", "Bearer gw")
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	response := httptest.NewRecorder()
+	handler.Transcriptions(response, request)
+	if response.Code != 200 || len(service.transcription.Languages) != 2 || len(service.transcription.Keywords) != 1 {
+		t.Fatalf("hints lost: %d %s %+v", response.Code, response.Body.String(), service.transcription)
 	}
 }

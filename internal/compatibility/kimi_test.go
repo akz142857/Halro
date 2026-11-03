@@ -467,7 +467,7 @@ func TestKimiPortableEffortsAreTheIntersection(t *testing.T) {
 	}
 	// `none` is prepended rather than intersected: Kimi spells "off" as a
 	// thinking type, not as a rung on the depth ladder.
-	if !slices.Equal(KimiPortableEfforts, []string{"none", "low", "high"}) {
+	if !slices.Equal(KimiPortableEfforts, []string{"none", "low", "high", "max"}) {
 		t.Fatalf("the portable reach of that ladder changed: %v", KimiPortableEfforts)
 	}
 }

@@ -571,6 +571,9 @@ func (a *Adapter) GenerateSemantic(ctx context.Context, call provider.GenerateCa
 		return semantic.GenerateResult{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "render provider Responses request", Cause: err}
 	}
 	request.Stream = false
+	if a.providerType == string(domain.ProviderOpenAI) {
+		request.Include = []string{"reasoning.encrypted_content"}
+	}
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		return semantic.GenerateResult{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "encode provider Responses request", Cause: err}
@@ -583,7 +586,12 @@ func (a *Adapter) GenerateSemantic(ctx context.Context, call provider.GenerateCa
 	if err := json.Unmarshal(payload, &wire); err != nil {
 		return semantic.GenerateResult{}, acceptedResponseMalformed("decode provider Responses result", err)
 	}
-	result, err := openaiwire.DecodeProviderResponse(wire)
+	var result semantic.GenerateResult
+	if a.providerType == string(domain.ProviderOpenAI) {
+		result, err = openaiwire.DecodeOpenAIProviderResponse(wire)
+	} else {
+		result, err = openaiwire.DecodeProviderResponse(wire)
+	}
 	if err != nil {
 		return semantic.GenerateResult{}, &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "normalize provider Responses result", Cause: err}
 	}
@@ -839,10 +847,12 @@ func (a *Adapter) ChatStream(
 		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "stream callback is required"}
 	}
 	if a.responses {
-		// The Responses profile binds no stream primitive, so nothing should reach
-		// here. Refusing beats falling through to /v1/chat/completions, which
-		// would stream from an endpoint this profile does not address.
-		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "this OpenAI profile does not serve streaming"}
+		canonical, err := openaiwire.DecodeGenerate(call.Request)
+		if err != nil {
+			return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "decode Responses stream request", Cause: err}
+		}
+		usage, err := a.GenerateSemanticStream(ctx, provider.GenerateCall{RequestID: call.RequestID, ProviderModel: call.ProviderModel, Request: canonical}, emit)
+		return openaiwire.RenderUsage(usage), err
 	}
 	if a.azure && !validAzureDeployment(call.ProviderModel) {
 		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "invalid azure deployment name"}
