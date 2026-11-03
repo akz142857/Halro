@@ -1035,7 +1035,7 @@
               "declared_transforms": [
                 "DeepSeek speaks this wire format but accepts a smaller member list, so the fields it has no place for are rejected before provider I/O rather than sent and ignored",
                 "user is carried as DeepSeek's user_id",
-                "reasoning_effort and response_format are declared unsupported at field granularity because support is value-dependent: none maps to thinking.type=disabled and the low and high rungs map to thinking.reasoning_effort with thinking enabled, while minimal, medium and xhigh have no DeepSeek rung; json_object maps to response_format and json_schema has no DeepSeek counterpart",
+                "reasoning_effort and response_format are declared unsupported at field granularity because support is value-dependent: none maps to thinking.type=disabled and the low, high and max rungs map to top-level reasoning_effort with thinking enabled, while minimal, medium and xhigh have no DeepSeek rung; json_object maps to response_format and json_schema has no DeepSeek counterpart",
                 "max_completion_tokens is value-dependent too: it counts reasoning tokens and DeepSeek's max_tokens does not, so it is carried as max_tokens on a request with thinking off and rejected before provider I/O on one with thinking on, or on one that already carries max_tokens",
                 "n and parallel_tool_calls are value-dependent in the same way: n=1 and parallel_tool_calls=true are what omitting the member already means, and only n\u003e1 and a request to run tools one at a time are rejected",
                 "encrypted_content is opaque reasoning replay state and is refused outside the Ark and OpenAI Responses profiles"
