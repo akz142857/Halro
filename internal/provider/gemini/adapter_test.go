@@ -332,6 +332,12 @@ func TestNewGeminiContractsRejectRemovedControls(t *testing.T) {
 			func(r *openaiapi.ChatCompletionRequest) {
 				r.Messages = append(r.Messages, openaiapi.Message{Role: "assistant", Content: openaiapi.TextContent("prefill")})
 			},
+			func(r *openaiapi.ChatCompletionRequest) {
+				r.Messages = append(r.Messages, openaiapi.Message{Role: "assistant", Content: openaiapi.TextContent("prefill")}, openaiapi.Message{Role: "developer", Content: openaiapi.TextContent("instruction")})
+			},
+			func(r *openaiapi.ChatCompletionRequest) {
+				r.Messages = append(r.Messages, openaiapi.Message{Role: "assistant", Content: openaiapi.TextContent("prefill")}, openaiapi.Message{Role: "user", Content: openaiapi.TextContent("")}, openaiapi.Message{Role: "system", Content: openaiapi.TextContent("instruction")})
+			},
 		} {
 			request := openaiapi.ChatCompletionRequest{Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}}}
 			mutate(&request)

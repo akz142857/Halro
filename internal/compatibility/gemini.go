@@ -21,8 +21,25 @@ func GeminiTargetUnsupportedGenerateFields(model string, request semantic.Genera
 	if request.Candidates != nil {
 		fields = append(fields, "n")
 	}
-	if len(request.Messages) > 0 && request.Messages[len(request.Messages)-1].Role == semantic.RoleAssistant {
-		fields = append(fields, "messages[].role=assistant")
+	for index := len(request.Messages) - 1; index >= 0; index-- {
+		message := request.Messages[index]
+		if message.Role == semantic.RoleSystem || message.Role == semantic.RoleDeveloper {
+			continue
+		}
+		nonempty := false
+		for _, part := range message.Content {
+			if part.Kind != semantic.ContentText || part.Text != "" {
+				nonempty = true
+				break
+			}
+		}
+		if !nonempty {
+			continue
+		}
+		if message.Role == semantic.RoleAssistant {
+			fields = append(fields, "messages[].role=assistant")
+		}
+		break
 	}
 	return fields
 }

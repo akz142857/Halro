@@ -1365,6 +1365,12 @@ function ProviderForm({
   const submissionPending = useRef(false);
   const mutation = useMutation({
     mutationFn: () => {
+      // A protocol selector does not make Chat/Responses the anchor when all
+      // enabled operations belong to a companion such as Media. Keep the
+      // explicit anchor consistent with the capability set sent to the server.
+      const submissionProfile = combinableProfiles(catalog, type, anchorProfile).find(
+        (profile) => capabilityNames.some((name) => capabilities[name] && profile.ceiling[name]),
+      );
       const value = {
       name, type, base_url: baseURL,
       // Sent where the operator actually chose, and only there. Naming the
@@ -1373,7 +1379,7 @@ function ProviderForm({
       // option and it picked it: the server assigns capabilities across the
       // group and the anchor follows.
       ...(choices.length > 1 && selectedChoice ? {
-        profile_id: selectedChoice.profileID,
+        profile_id: submissionProfile?.id ?? selectedChoice.profileID,
         access_surface: selectedChoice.accessSurface,
         credential_scheme: selectedChoice.credentialScheme,
       } : {}),

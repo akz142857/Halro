@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	openaiwire "github.com/akz142857/Halro/internal/compatibility/openai"
 	"github.com/akz142857/Halro/internal/domain"
@@ -87,6 +88,8 @@ func (a *Adapter) GenerateSemanticStream(ctx context.Context, call provider.Gene
 
 type responsesStreamItem struct {
 	item      openaiapi.ResponseOutputItem
+	toolIndex int
+	deferred  bool
 	text      strings.Builder
 	arguments strings.Builder
 	refusal   bool
@@ -98,11 +101,31 @@ type responsesStreamState struct {
 	summary   strings.Builder
 	usage     *semantic.Usage
 	bytes     int
+	toolCount int
+	roleSent  bool
+	// Opaque reasoning is only complete at the terminal snapshot. Hold tool
+	// fragments behind it so the northbound stream can replay that snapshot's
+	// reasoning before its associated calls, even without summary deltas.
+	hasReasoning bool
 }
 
 func (s *responsesStreamState) emit(parts []semantic.ContentDelta, termination string, emit func(semantic.Event) error) error {
+	var role semantic.Role
+	if !s.roleSent {
+		role = semantic.RoleAssistant
+		s.roleSent = true
+	}
 	return emit(semantic.Event{Kind: semantic.EventDelta, ID: s.id, Model: s.model, Created: s.created, Translation: semantic.TranslationNone, MappingRevision: openaiwire.MappingRevision,
-		Outputs: []semantic.OutputDelta{{Index: 0, Role: semantic.RoleAssistant, Content: parts, Termination: termination}}})
+		Outputs: []semantic.OutputDelta{{Index: 0, Role: role, Content: parts, Termination: termination}}})
+}
+
+func (s *responsesStreamState) emitTool(item *responsesStreamItem, part semantic.ContentDelta, emit func(semantic.Event) error) error {
+	if item.deferred {
+		// Arguments already live in the bounded per-item builder. Do not retain
+		// another allocation for every upstream fragment (including empty ones).
+		return nil
+	}
+	return s.emit([]semantic.ContentDelta{part}, "", emit)
 }
 
 func (s *responsesStreamState) accept(e openaiapi.ResponseStreamEvent, includeUsage bool, emit func(semantic.Event) error) (bool, error) {
@@ -138,12 +161,19 @@ func (s *responsesStreamState) accept(e openaiapi.ResponseStreamEvent, includeUs
 			return false, errors.New("unsupported Responses stream item type")
 		}
 		s.items[*e.OutputIndex] = &responsesStreamItem{item: *item}
+		if item.Type == "reasoning" {
+			s.hasReasoning = true
+		}
 		if item.Type == "function_call" {
 			if item.CallID == "" || item.Name == "" {
 				return false, errors.New("Responses tool identity missing")
 			}
-			s.items[*e.OutputIndex].arguments.WriteString(item.Arguments)
-			return false, s.emit([]semantic.ContentDelta{{Kind: semantic.ContentToolCall, ToolIndex: e.OutputIndex, CallID: item.CallID, Name: item.Name, ArgumentsFragment: item.Arguments}}, "", emit)
+			state := s.items[*e.OutputIndex]
+			state.toolIndex = s.toolCount
+			state.deferred = s.hasReasoning
+			s.toolCount++
+			state.arguments.WriteString(item.Arguments)
+			return false, s.emitTool(state, semantic.ContentDelta{Kind: semantic.ContentToolCall, ToolIndex: &state.toolIndex, CallID: item.CallID, Name: item.Name, ArgumentsFragment: item.Arguments}, emit)
 		}
 	case "response.output_text.delta", "response.refusal.delta", "response.function_call_arguments.delta", "response.reasoning_summary_text.delta":
 		if e.OutputIndex == nil || s.items[*e.OutputIndex] == nil {
@@ -164,7 +194,7 @@ func (s *responsesStreamState) accept(e openaiapi.ResponseStreamEvent, includeUs
 				return false, errors.New("invalid Responses tool arguments delta")
 			}
 			item.arguments.WriteString(e.Delta)
-			part = semantic.ContentDelta{Kind: semantic.ContentToolCall, ToolIndex: e.OutputIndex, ArgumentsFragment: e.Delta}
+			return false, s.emitTool(item, semantic.ContentDelta{Kind: semantic.ContentToolCall, ToolIndex: &item.toolIndex, ArgumentsFragment: e.Delta}, emit)
 		case "response.refusal.delta":
 			if item.item.Type != "message" {
 				return false, errors.New("refusal delta has wrong item type")
@@ -237,6 +267,27 @@ func (s *responsesStreamState) accept(e openaiapi.ResponseStreamEvent, includeUs
 			}
 			if err = s.emit([]semantic.ContentDelta{{Kind: semantic.ContentReasoning, Text: summary, EncryptedContent: part.EncryptedContent}}, "", emit); err != nil {
 				return false, err
+			}
+		}
+		for index := range e.Response.Output {
+			item := s.items[index]
+			if !item.deferred {
+				continue
+			}
+			if err = s.emit([]semantic.ContentDelta{{Kind: semantic.ContentToolCall, ToolIndex: &item.toolIndex, CallID: item.item.CallID, Name: item.item.Name}}, "", emit); err != nil {
+				return false, err
+			}
+			// Keep re-emitted fragments small enough for the semantic event bound,
+			// and never split a UTF-8 code point when changing fragment boundaries.
+			for arguments := item.arguments.String(); arguments != ""; {
+				end := min(len(arguments), 1024)
+				for end < len(arguments) && !utf8.RuneStart(arguments[end]) {
+					end--
+				}
+				if err = s.emit([]semantic.ContentDelta{{Kind: semantic.ContentToolCall, ToolIndex: &item.toolIndex, ArgumentsFragment: arguments[:end]}}, "", emit); err != nil {
+					return false, err
+				}
+				arguments = arguments[end:]
 			}
 		}
 		var finalParts []semantic.ContentDelta

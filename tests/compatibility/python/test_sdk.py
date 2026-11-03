@@ -15,9 +15,18 @@ def client(api_key: str = API_KEY) -> openai.OpenAI:
     return openai.OpenAI(api_key=api_key, base_url=BASE_URL, max_retries=0, timeout=5.0)
 
 
-def test_anthropic_default_version_is_rejected() -> None:
-    # SDK 2.x defaults to 2026-10-21; Halro only declares 2023-06-01.
+def test_anthropic_default_version_is_supported() -> None:
+    # SDK 2.x defaults to 2026-10-21, which Halro now supports alongside v1.
     with anthropic.Anthropic(api_key=API_KEY, base_url=BASE_URL.removesuffix("/v1"), max_retries=0, timeout=5.0) as sdk:
+        message = sdk.messages.create(model="compat-chat", max_tokens=32, messages=[{"role": "user", "content": "ping"}])
+        assert message.content[0].text == "compat-ok"
+        assert message.usage.output_tokens == 2
+        with sdk.messages.stream(model="compat-chat", max_tokens=32, messages=[{"role": "user", "content": "ping"}]) as stream:
+            assert "".join(stream.text_stream) == "compat-ok"
+
+
+def test_anthropic_unsupported_version_is_rejected() -> None:
+    with anthropic.Anthropic(api_key=API_KEY, base_url=BASE_URL.removesuffix("/v1"), max_retries=0, timeout=5.0, default_headers={"anthropic-version": "2099-01-01"}) as sdk:
         try:
             sdk.messages.create(model="compat-chat", max_tokens=32, messages=[{"role": "user", "content": "ping"}])
         except anthropic.BadRequestError as error:
@@ -130,7 +139,8 @@ def test_disconnecting_stream_releases_server_resources() -> None:
 
 if __name__ == "__main__":
     # Official Anthropic SDKs exercise x-api-key and anthropic-version headers.
-    test_anthropic_default_version_is_rejected()
+    test_anthropic_default_version_is_supported()
+    test_anthropic_unsupported_version_is_rejected()
     test_anthropic_messages()
     test_non_stream_and_embeddings()
     # Keep the executable CI entry point aligned with pytest discovery.

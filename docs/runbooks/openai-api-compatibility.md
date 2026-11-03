@@ -69,7 +69,14 @@ that cannot preserve strict enforcement reject it before provider I/O.
 
 Streaming uses the real Responses SSE protocol. Text, parallel function-call
 argument fragments, reasoning summaries, opaque replay state and final usage
-survive. Terminal output is checked against streamed deltas. EOF without a
+survive. When reasoning precedes a function call, Halro holds that call's
+arguments until the terminal snapshot supplies the complete opaque replay state,
+then emits the reasoning state before the tool fragments. This also preserves
+replay when no reasoning summary was requested, at the cost of delaying those
+tool fragments until upstream completion. Calls without preceding reasoning
+continue to stream immediately. Chat tool indices are contiguous from zero,
+independent of Responses output-item indices, and the assistant role is emitted
+once per turn. Terminal output is checked against streamed deltas. EOF without a
 completed/incomplete event is an ambiguous failure; partial output is not replayed
 through another provider as if nothing had executed. Reasoning-token exhaustion
 is returned as an incomplete/length result, not a successful empty answer.

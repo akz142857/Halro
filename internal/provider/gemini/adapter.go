@@ -421,12 +421,6 @@ func translateChat(request openaiapi.ChatCompletionRequest) (generateRequest, er
 
 func translateChatForModel(request openaiapi.ChatCompletionRequest, model string) (generateRequest, error) {
 	canonical := semantic.GenerateRequest{Temperature: request.Temperature, TopP: request.TopP, Candidates: request.N}
-	if len(request.Messages) > 0 {
-		canonical.Messages = []semantic.Message{{Role: semantic.Role(request.Messages[len(request.Messages)-1].Role)}}
-	}
-	if fields := compatibility.GeminiTargetUnsupportedGenerateFields(model, canonical); len(fields) > 0 {
-		return generateRequest{}, badRequest("Gemini model cannot preserve "+strings.Join(fields, ", "), nil)
-	}
 	if request.Seed != nil || len(request.Tools) != 0 || len(request.ToolChoice) != 0 || request.ParallelToolCalls != nil || len(request.ResponseFormat) != 0 || request.ReasoningEffort != "" || request.User != "" {
 		return generateRequest{}, badRequest("Gemini Beta cannot represent one or more requested OpenAI fields", nil)
 	}
@@ -461,11 +455,13 @@ func translateChatForModel(request openaiapi.ChatCompletionRequest, model string
 			system = append(system, text)
 		case "user":
 			result.Contents = append(result.Contents, content{Role: "user", Parts: []part{{Text: text}}})
+			canonical.Messages = append(canonical.Messages, semantic.Message{Role: semantic.RoleUser, Content: []semantic.Content{{Kind: semantic.ContentText, Text: text}}})
 		case "assistant":
 			if len(message.ToolCalls) != 0 {
 				return generateRequest{}, badRequest("Gemini Beta does not support tool calls", nil)
 			}
 			result.Contents = append(result.Contents, content{Role: "model", Parts: []part{{Text: text}}})
+			canonical.Messages = append(canonical.Messages, semantic.Message{Role: semantic.RoleAssistant, Content: []semantic.Content{{Kind: semantic.ContentText, Text: text}}})
 		default:
 			return generateRequest{}, badRequest("Gemini Beta does not support tool messages", nil)
 		}
@@ -475,6 +471,9 @@ func translateChatForModel(request openaiapi.ChatCompletionRequest, model string
 	}
 	if len(result.Contents) == 0 {
 		return generateRequest{}, badRequest("Gemini request has no conversation content", nil)
+	}
+	if fields := compatibility.GeminiTargetUnsupportedGenerateFields(model, canonical); len(fields) > 0 {
+		return generateRequest{}, badRequest("Gemini model cannot preserve "+strings.Join(fields, ", "), nil)
 	}
 	return result, nil
 }

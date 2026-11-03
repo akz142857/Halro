@@ -2,10 +2,42 @@ package compatibility
 
 import (
 	"encoding/json"
+	"slices"
+	"testing"
+
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
-	"testing"
+	"github.com/akz142857/Halro/internal/semantic"
 )
+
+func TestMiniMaxM31SamplingConstraintsAtAdmissionAndRendering(t *testing.T) {
+	fixedTemperature, fixedTopP, changed := 1.0, 0.95, 0.2
+	for _, test := range []struct {
+		name              string
+		temperature, topP *float64
+		field             string
+	}{
+		{name: "defaults"},
+		{name: "explicit fixed values", temperature: &fixedTemperature, topP: &fixedTopP},
+		{name: "ignored temperature", temperature: &changed, field: "temperature"},
+		{name: "ignored top_p", topP: &changed, field: "top_p"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := minimaxBaseRequest()
+			request.Model = "MiniMax-M3.1-Flash"
+			request.Temperature, request.TopP = test.temperature, test.topP
+			fields := UnsupportedGenerateFieldsForTarget(domain.ProfileMiniMaxChat, request.Model, semantic.GenerateRequest{Temperature: test.temperature, TopP: test.topP})
+			body, err := RenderMiniMaxChatRequest(request)
+			if test.field != "" {
+				if !slices.Contains(fields, test.field) || err == nil {
+					t.Fatalf("constraint lost: fields=%v err=%v", fields, err)
+				}
+			} else if len(fields) != 0 || err != nil || body.Temperature != test.temperature || body.TopP != test.topP {
+				t.Fatalf("fixed sampling refused or changed: fields=%v body=%+v err=%v", fields, body, err)
+			}
+		})
+	}
+}
 
 func TestMiniMaxM31PreservesForcedReasoningAndDepth(t *testing.T) {
 	for _, effort := range []string{"", "none", "minimal", "low", "medium", "high", "xhigh", "max"} {

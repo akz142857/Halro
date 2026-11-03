@@ -682,6 +682,7 @@ func UnsupportedGenerateFieldsForTarget(profileID domain.ProviderProfileID, prov
 	} else if profileID == domain.ProfileGeminiText {
 		targetFields = GeminiTargetUnsupportedGenerateFields(providerModel, request)
 	} else if profileID == domain.ProfileMiniMaxChat && MiniMaxAlwaysReasons(providerModel) {
+		targetFields = miniMaxSamplingUnsupportedFields(providerModel, request.Temperature, request.TopP)
 		if request.ReasoningEffort == "none" || request.ReasoningEffort == "minimal" {
 			targetFields = append(targetFields, "reasoning_effort")
 		}

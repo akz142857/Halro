@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/akz142857/Halro/internal/openaiapi"
 )
@@ -113,6 +114,9 @@ type MiniMaxChatRequest struct {
 // who reaches the adapter another way fails closed at the last moment instead of
 // sending a request the caller did not make.
 func RenderMiniMaxChatRequest(request openaiapi.ChatCompletionRequest) (MiniMaxChatRequest, error) {
+	if fields := miniMaxSamplingUnsupportedFields(request.Model, request.Temperature, request.TopP); len(fields) > 0 {
+		return MiniMaxChatRequest{}, errors.New("MiniMax-M3.1-Flash cannot preserve " + strings.Join(fields, ", "))
+	}
 	if MiniMaxAlwaysReasons(request.Model) && request.ReasoningEffort != "" && !slices.Contains([]string{"low", "medium", "high", "xhigh", "max"}, request.ReasoningEffort) {
 		return MiniMaxChatRequest{}, errors.New("MiniMax-M3.1-Flash requires low, medium, high, xhigh or max reasoning effort")
 	}
@@ -237,3 +241,18 @@ func RenderMiniMaxChatRequest(request openaiapi.ChatCompletionRequest) (MiniMaxC
 
 // Exact model contract reviewed against MiniMax's OpenAI API on 2026-11-03.
 func MiniMaxAlwaysReasons(model string) bool { return model == "MiniMax-M3.1-Flash" }
+
+// M3.1 fixes these values upstream; different values would be silently ignored.
+func miniMaxSamplingUnsupportedFields(model string, temperature, topP *float64) []string {
+	if !MiniMaxAlwaysReasons(model) {
+		return nil
+	}
+	var fields []string
+	if temperature != nil && *temperature != 1 {
+		fields = append(fields, "temperature")
+	}
+	if topP != nil && *topP != 0.95 {
+		fields = append(fields, "top_p")
+	}
+	return fields
+}

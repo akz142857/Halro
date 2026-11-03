@@ -1262,6 +1262,46 @@ describe("ProvidersPage profile and credential bindings", () => {
     });
   });
 
+  it.each(["openai.chat-embeddings.v1", "openai.responses.v1"])("creates a media-only connection from %s", async (implementationID) => {
+    const create = vi.spyOn(api, "createProvider").mockResolvedValue({} as never);
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "Images only" } });
+    fireEvent.change(screen.getByRole("combobox", { name: /^能力实现/ }), { target: { value: implementationID } });
+    // Clear the protocol defaults, including capabilities depending on Chat.
+    const grid = screen.getByRole("checkbox", { name: /图像/ }).closest(".capability-grid")!;
+    for (const input of within(grid as HTMLElement).getAllByRole("checkbox")) {
+      if ((input as HTMLInputElement).checked) fireEvent.click(input);
+    }
+    fireEvent.click(screen.getByRole("checkbox", { name: /图像/ }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create.mock.calls[0][0]).toMatchObject({
+      profile_id: "openai.media-resources.v1", access_surface: "openai-api",
+      credential_id: openAICredential.id, capabilities: { images: true, chat: false, embeddings: false },
+    });
+  });
+
+  it("keeps the Media anchor when editing an existing media-only connection", async () => {
+    vi.mocked(api.providers).mockResolvedValue({ items: [{
+      id: "media_only", name: "Images only", type: "openai", base_url: "https://api.openai.com",
+      access_surface: "openai-api", profile_id: "openai.media-resources.v1", credential_scheme: "bearer.static",
+      credential_id: openAICredential.id, capability_evidence: {}, capabilities: { images: true },
+      max_concurrency: 0, enabled: true, revision: 1,
+      bindings: [{ id: "binding_media", profile_id: "openai.media-resources.v1", enabled: true, capabilities: { images: true } }],
+    } as never], next_cursor: "" });
+    const update = vi.spyOn(api, "updateProvider").mockResolvedValue({} as never);
+    renderPage();
+    fireEvent.click(await screen.findByLabelText("更多操作 — Images only"));
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 — Images only" }));
+    fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "Renamed images" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存并热加载" }));
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    expect(update.mock.calls[0][1]).toMatchObject({
+      name: "Renamed images", profile_id: "openai.media-resources.v1", capabilities: { images: true },
+    });
+  });
+
   it.each([
     {
       name: "Mantle",
