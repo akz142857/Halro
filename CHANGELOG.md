@@ -6,6 +6,76 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-04
+
+### Upgrading
+
+- No configuration or metadata-schema migration is required from v0.10.1.
+  Existing OpenAI Chat connections keep their upstream protocol. To use
+  Responses-only reasoning/tool combinations, create an OpenAI connection with
+  **Responses** selected, validate a replacement deployment and switch the route.
+- Chat clients using a Responses upstream must preserve the returned assistant
+  `encrypted_content` when sending tool results. Native Responses clients can
+  replay the complete output items. When reasoning precedes a function call,
+  tool arguments are delivered after upstream completion so the replay state
+  precedes its associated calls, including when no summary was requested.
+- Exact-model parameter checks now reject unsupported reasoning efforts,
+  sampling controls, output limits and prefilled turns before provider I/O.
+  Use `max_completion_tokens` for a reasoning model's total output budget.
+  Retired OpenAI identifiers no longer receive bundled capability evidence;
+  choose a supported upstream identifier rather than expecting substitution.
+- High availability remains experimental and is not supported in production.
+
+### Added
+
+- Volcengine Ark metered API Key connections, model discovery, Chat/SSE,
+  function tools, image input, structured output and preserved readable/encrypted
+  reasoning. Exact-model contracts distinguish Model IDs from Endpoint IDs and
+  keep account availability separate from catalog capabilities. This integration
+  remains experimental; see `docs/runbooks/volcengine-ark.md` for verified models
+  and network/feature boundaries. Agent Plan/Coding Plan keys are separate.
+- OpenAI Responses upstream streaming, function tools and stateless encrypted
+  reasoning replay through Halro's Chat and Responses facades. The console now
+  exposes the upstream Chat versus Responses choice; GPT-6 capability entries
+  and model-specific effort/parameter validation reflect the reviewed APIs.
+- Anthropic API date `2026-10-21` alongside `2023-06-01`, with version-aware
+  payload validation and native forwarding. Native automatic cache controls and
+  Kimi Messages cache TTLs are preserved; portable requests that cannot preserve
+  their semantics are explicitly rejected.
+- Updated OpenAI image, transcription and speech controls, including their
+  validation, redaction and upstream mapping. Reviewed current-model contracts
+  cover MiniMax M3.1 forced reasoning, Kimi K3.1 efforts, GLM max effort/tool
+  history, DeepSeek effort placement and modern Gemini request restrictions.
+
+### Fixed
+
+- Responses-to-Chat streaming uses contiguous tool indices independent of
+  Responses output indices, emits the assistant role once, and preserves
+  encrypted reasoning before associated tools. Long and non-ASCII tool
+  arguments survive redaction and can be replayed with their tool results.
+- Initial Responses item snapshots share the stream's cumulative size budget,
+  and already-present tool arguments obey the same bound as argument deltas,
+  before they can enter deferred reasoning/tool replay buffers.
+- OpenAI connections with only media capabilities can be created and edited
+  without incorrectly selecting a Chat/Responses-only implementation.
+- Deleted deployments' historical price-clock quarantines no longer block
+  instance readiness. Historical prices and quarantine records remain intact;
+  restoring a deployment restores its gate. Disabled or missing deployments
+  still fail closed.
+- MiniMax M3.1 rejects sampling values that upstream would silently ignore;
+  modern Gemini prefill checks use the last non-empty conversation turn after
+  system/developer instructions are separated.
+- Official Python and Node SDK acceptance covers both supported Anthropic
+  dates and rejection of unknown dates. Frontend builds reject stale dependency
+  installations and the committed embedded console matches the locked build.
+
+### Changed
+
+- Updated runtime AWS SDK/Smithy modules, Admin UI dependencies and the official
+  SDK compatibility harnesses, with dependency-license and security review
+  records. New provider APIs that remain unimplemented are listed explicitly in
+  `docs/verification/provider-api-review-2026-11.md`.
+
 ## [0.10.1] - 2026-10-24
 
 ### Upgrading
@@ -2749,6 +2819,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.11.0]: https://github.com/akz142857/Halro/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/akz142857/Halro/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/akz142857/Halro/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/akz142857/Halro/compare/v0.9.1...v0.9.2

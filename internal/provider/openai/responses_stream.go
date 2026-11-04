@@ -160,6 +160,20 @@ func (s *responsesStreamState) accept(e openaiapi.ResponseStreamEvent, includeUs
 		if item.Type != "message" && item.Type != "reasoning" && item.Type != "function_call" {
 			return false, errors.New("unsupported Responses stream item type")
 		}
+		// Initial snapshots are retained too, including reasoning metadata and
+		// any arguments already present. They share the stream's cumulative
+		// budget rather than multiplying the per-frame decoder limit by 1024.
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return false, errors.New("invalid Responses stream item")
+		}
+		s.bytes += len(encoded)
+		if s.bytes > maxResponseBytes {
+			return false, errors.New("Responses stream exceeds size limit")
+		}
+		if item.Type == "function_call" && len(item.Arguments) > semantic.MaxToolArgumentBytes {
+			return false, errors.New("invalid Responses tool arguments snapshot")
+		}
 		s.items[*e.OutputIndex] = &responsesStreamItem{item: *item}
 		if item.Type == "reasoning" {
 			s.hasReasoning = true

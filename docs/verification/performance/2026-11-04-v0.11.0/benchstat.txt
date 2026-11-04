@@ -1,0 +1,202 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+                                          │  v0.10.1.txt  │            candidate.txt            │
+                                          │    sec/op     │    sec/op      vs base              │
+RequestLifecycle/projects=1/workers=1-4      22.38m ± 17%   23.06m ±  22%       ~ (p=0.485 n=6)
+RequestLifecycle/projects=1/workers=8-4      5.902m ±  2%   5.989m ±  10%       ~ (p=0.937 n=6)
+RequestLifecycle/projects=1/workers=64-4     1.040m ±  9%   1.011m ±  10%       ~ (p=0.699 n=6)
+RequestLifecycle/projects=8/workers=1-4      22.81m ± 20%   22.52m ±  18%       ~ (p=1.000 n=6)
+RequestLifecycle/projects=8/workers=8-4      5.829m ± 18%   5.833m ±  10%       ~ (p=0.818 n=6)
+RequestLifecycle/projects=8/workers=64-4    1025.6µ ± 10%   952.0µ ±   8%       ~ (p=0.132 n=6)
+RequestLifecycle/projects=64/workers=1-4     22.45m ±  9%   23.14m ±   7%       ~ (p=0.240 n=6)
+RequestLifecycle/projects=64/workers=8-4     5.822m ±  6%   5.839m ± 102%       ~ (p=0.699 n=6)
+RequestLifecycle/projects=64/workers=64-4    991.7µ ± 11%   978.8µ ±  14%       ~ (p=0.818 n=6)
+geomean                                      5.122m         5.094m         -0.56%
+
+                                          │ v0.10.1.txt  │           candidate.txt            │
+                                          │     B/op     │     B/op      vs base              │
+RequestLifecycle/projects=1/workers=1-4     317.9Ki ± 0%   318.0Ki ± 0%  +0.04% (p=0.026 n=6)
+RequestLifecycle/projects=1/workers=8-4     116.5Ki ± 1%   116.6Ki ± 1%       ~ (p=0.937 n=6)
+RequestLifecycle/projects=1/workers=64-4    57.64Ki ± 4%   57.17Ki ± 1%       ~ (p=0.394 n=6)
+RequestLifecycle/projects=8/workers=1-4     318.0Ki ± 0%   318.0Ki ± 0%       ~ (p=0.909 n=6)
+RequestLifecycle/projects=8/workers=8-4     116.9Ki ± 1%   116.9Ki ± 1%       ~ (p=0.699 n=6)
+RequestLifecycle/projects=8/workers=64-4    56.87Ki ± 2%   55.73Ki ± 4%       ~ (p=0.240 n=6)
+RequestLifecycle/projects=64/workers=1-4    318.7Ki ± 0%   318.7Ki ± 0%       ~ (p=0.818 n=6)
+RequestLifecycle/projects=64/workers=8-4    117.3Ki ± 1%   116.9Ki ± 1%       ~ (p=0.394 n=6)
+RequestLifecycle/projects=64/workers=64-4   56.57Ki ± 2%   56.02Ki ± 1%       ~ (p=0.180 n=6)
+geomean                                     128.5Ki        127.9Ki       -0.46%
+
+                                          │ v0.10.1.txt │          candidate.txt           │
+                                          │  allocs/op  │ allocs/op   vs base              │
+RequestLifecycle/projects=1/workers=1-4      166.0 ± 0%   166.0 ± 1%       ~ (p=0.455 n=6)
+RequestLifecycle/projects=1/workers=8-4      161.5 ± 1%   161.5 ± 0%       ~ (p=1.000 n=6)
+RequestLifecycle/projects=1/workers=64-4     158.0 ± 1%   158.0 ± 0%       ~ (p=1.000 n=6)
+RequestLifecycle/projects=8/workers=1-4      167.0 ± 1%   167.0 ± 1%       ~ (p=1.000 n=6)
+RequestLifecycle/projects=8/workers=8-4      162.5 ± 0%   162.0 ± 1%       ~ (p=0.121 n=6)
+RequestLifecycle/projects=8/workers=64-4     158.0 ± 1%   158.0 ± 0%       ~ (p=0.455 n=6)
+RequestLifecycle/projects=64/workers=1-4     170.5 ± 0%   170.0 ± 1%       ~ (p=0.545 n=6)
+RequestLifecycle/projects=64/workers=8-4     166.0 ± 1%   165.5 ± 0%       ~ (p=1.000 n=6)
+RequestLifecycle/projects=64/workers=64-4    161.5 ± 0%   161.0 ± 1%       ~ (p=1.000 n=6)
+geomean                                      163.4        163.2       -0.13%
+
+                                          │ v0.10.1.txt  │           candidate.txt            │
+                                          │   events/s   │   events/s    vs base              │
+RequestLifecycle/projects=1/workers=1-4      223.4 ± 15%    216.8 ± 18%       ~ (p=0.485 n=6)
+RequestLifecycle/projects=1/workers=8-4      847.2 ±  2%    835.8 ± 11%       ~ (p=0.937 n=6)
+RequestLifecycle/projects=1/workers=64-4    4.806k ± 10%   4.951k ± 11%       ~ (p=0.699 n=6)
+RequestLifecycle/projects=8/workers=1-4      219.4 ± 17%    222.1 ± 15%       ~ (p=1.000 n=6)
+RequestLifecycle/projects=8/workers=8-4      857.9 ± 15%    857.3 ±  9%       ~ (p=0.818 n=6)
+RequestLifecycle/projects=8/workers=64-4    4.875k ±  9%   5.253k ±  8%       ~ (p=0.132 n=6)
+RequestLifecycle/projects=64/workers=1-4     222.9 ±  8%    216.1 ±  6%       ~ (p=0.240 n=6)
+RequestLifecycle/projects=64/workers=8-4     858.9 ±  6%    856.3 ± 50%       ~ (p=0.699 n=6)
+RequestLifecycle/projects=64/workers=64-4   5.042k ± 10%   5.111k ± 16%       ~ (p=0.818 n=6)
+geomean                                      976.3          981.9        +0.58%
+
+                                          │ v0.10.1.txt  │           candidate.txt            │
+                                          │ lifecycles/s │ lifecycles/s  vs base              │
+RequestLifecycle/projects=1/workers=1-4      44.70 ± 15%    43.38 ± 18%       ~ (p=0.485 n=6)
+RequestLifecycle/projects=1/workers=8-4      169.4 ±  2%    167.2 ± 11%       ~ (p=0.937 n=6)
+RequestLifecycle/projects=1/workers=64-4     961.1 ± 10%    990.1 ± 11%       ~ (p=0.699 n=6)
+RequestLifecycle/projects=8/workers=1-4      43.88 ± 17%    44.42 ± 15%       ~ (p=1.000 n=6)
+RequestLifecycle/projects=8/workers=8-4      171.6 ± 15%    171.5 ±  9%       ~ (p=0.818 n=6)
+RequestLifecycle/projects=8/workers=64-4     975.1 ±  9%   1050.5 ±  8%       ~ (p=0.132 n=6)
+RequestLifecycle/projects=64/workers=1-4     44.57 ±  8%    43.22 ±  6%       ~ (p=0.240 n=6)
+RequestLifecycle/projects=64/workers=8-4     171.8 ±  6%    171.3 ± 50%       ~ (p=0.699 n=6)
+RequestLifecycle/projects=64/workers=64-4   1.008k ± 10%   1.022k ± 16%       ~ (p=0.818 n=6)
+geomean                                      195.3          196.4        +0.59%
+
+pkg: github.com/akz142857/Halro/internal/ledger
+                 │ v0.10.1.txt  │         candidate.txt         │
+                 │    sec/op    │    sec/op     vs base         │
+ReplayLargeWAL-4   559.6m ± 11%   560.6m ± 25%  ~ (p=0.937 n=6)
+
+                 │ v0.10.1.txt  │         candidate.txt         │
+                 │     B/op     │     B/op      vs base         │
+ReplayLargeWAL-4   293.6Mi ± 0%   293.6Mi ± 0%  ~ (p=0.288 n=6)
+
+                 │ v0.10.1.txt │        candidate.txt         │
+                 │  allocs/op  │  allocs/op   vs base         │
+ReplayLargeWAL-4   3.000M ± 0%   3.000M ± 0%  ~ (p=0.249 n=6)
+
+                 │  v0.10.1.txt  │         candidate.txt          │
+                 │      B/s      │      B/s       vs base         │
+ReplayLargeWAL-4   52.62Mi ± 10%   52.57Mi ± 20%  ~ (p=0.937 n=6)
+
+pkg: github.com/akz142857/Halro/internal/limiter
+                             │ v0.10.1.txt │           candidate.txt            │
+                             │   sec/op    │    sec/op     vs base              │
+ProjectAdmission/unlimited-4   109.2n ± 6%   106.0n ± 10%       ~ (p=0.699 n=6)
+ProjectAdmission/limited-4     139.7n ± 7%   137.6n ±  5%       ~ (p=0.818 n=6)
+ProjectAdmissionContended-4    281.4n ± 6%   279.6n ±  9%       ~ (p=0.818 n=6)
+geomean                        162.5n        159.8n        -1.69%
+
+                             │ v0.10.1.txt │           candidate.txt            │
+                             │    B/op     │    B/op     vs base                │
+ProjectAdmission/unlimited-4    200.0 ± 0%   200.0 ± 0%       ~ (p=1.000 n=6) ¹
+ProjectAdmission/limited-4      200.0 ± 0%   200.0 ± 0%       ~ (p=1.000 n=6) ¹
+ProjectAdmissionContended-4     200.0 ± 0%   200.0 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                         200.0        200.0       +0.00%
+¹ all samples are equal
+
+                             │ v0.10.1.txt │           candidate.txt            │
+                             │  allocs/op  │ allocs/op   vs base                │
+ProjectAdmission/unlimited-4    5.000 ± 0%   5.000 ± 0%       ~ (p=1.000 n=6) ¹
+ProjectAdmission/limited-4      5.000 ± 0%   5.000 ± 0%       ~ (p=1.000 n=6) ¹
+ProjectAdmissionContended-4     5.000 ± 0%   5.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                         5.000        5.000       +0.00%
+¹ all samples are equal
+
+pkg: github.com/akz142857/Halro/internal/provider
+                            │ v0.10.1.txt │        candidate.txt         │
+                            │   sec/op    │   sec/op     vs base         │
+RegistryResolveCandidates-4   4.995µ ± 6%   4.913µ ± 9%  ~ (p=0.818 n=6)
+
+                            │ v0.10.1.txt  │           candidate.txt            │
+                            │     B/op     │     B/op      vs base              │
+RegistryResolveCandidates-4   16.59Ki ± 0%   16.97Ki ± 0%  +2.26% (p=0.002 n=6)
+
+                            │ v0.10.1.txt │         candidate.txt         │
+                            │  allocs/op  │ allocs/op   vs base           │
+RegistryResolveCandidates-4    41.00 ± 0%   41.00 ± 0%  ~ (p=1.000 n=6) ¹
+¹ all samples are equal
+
+pkg: github.com/akz142857/Halro/internal/redaction
+                    │ v0.10.1.txt │           candidate.txt            │
+                    │   sec/op    │    sec/op     vs base              │
+StandardRedaction-4   72.63µ ± 3%   74.26µ ±  5%       ~ (p=0.394 n=6)
+RollingRedaction-4    16.48µ ± 9%   16.68µ ± 12%       ~ (p=0.394 n=6)
+geomean               34.60µ        35.19µ        +1.72%
+
+                    │ v0.10.1.txt  │           candidate.txt            │
+                    │     B/op     │     B/op      vs base              │
+StandardRedaction-4   13.33Ki ± 0%   13.38Ki ± 0%       ~ (p=0.065 n=6)
+RollingRedaction-4    17.43Ki ± 0%   17.62Ki ± 0%  +1.13% (p=0.002 n=6)
+geomean               15.24Ki        15.36Ki       +0.77%
+
+                    │ v0.10.1.txt │           candidate.txt            │
+                    │  allocs/op  │ allocs/op   vs base                │
+StandardRedaction-4    32.00 ± 0%   32.00 ± 0%       ~ (p=1.000 n=6) ¹
+RollingRedaction-4     79.00 ± 0%   79.00 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                50.28        50.28       +0.00%
+¹ all samples are equal
+
+                    │ v0.10.1.txt  │            candidate.txt            │
+                    │     B/s      │      B/s       vs base              │
+StandardRedaction-4   12.09Mi ± 3%   11.84Mi ±  5%       ~ (p=0.394 n=6)
+RollingRedaction-4    14.13Mi ± 9%   13.96Mi ± 11%       ~ (p=0.394 n=6)
+geomean               13.07Mi        12.85Mi        -1.67%
+
+pkg: github.com/akz142857/Halro/internal/store/bolt
+                                       │ v0.10.1.txt  │           candidate.txt            │
+                                       │    sec/op    │    sec/op     vs base              │
+DeploymentPricePinCeiling/workers=1-4    29.13m ± 51%   27.98m ±  5%       ~ (p=0.093 n=6)
+DeploymentPricePinCeiling/workers=8-4    3.882m ± 86%   4.519m ± 31%       ~ (p=0.818 n=6)
+DeploymentPricePinCeiling/workers=64-4   1.030m ±  6%   1.011m ±  4%       ~ (p=0.589 n=6)
+geomean                                  4.884m         5.037m        +3.13%
+
+                                       │  v0.10.1.txt  │            candidate.txt            │
+                                       │     B/op      │     B/op       vs base              │
+DeploymentPricePinCeiling/workers=1-4    85.75Ki ±  1%   85.42Ki ±  2%       ~ (p=0.937 n=6)
+DeploymentPricePinCeiling/workers=8-4    31.65Ki ± 23%   31.34Ki ± 15%       ~ (p=0.310 n=6)
+DeploymentPricePinCeiling/workers=64-4   27.18Ki ±  3%   26.77Ki ±  1%       ~ (p=0.058 n=6)
+geomean                                  41.94Ki         41.54Ki        -0.95%
+
+                                       │ v0.10.1.txt │          candidate.txt           │
+                                       │  allocs/op  │ allocs/op   vs base              │
+DeploymentPricePinCeiling/workers=1-4     509.0 ± 0%   509.5 ± 0%       ~ (p=1.000 n=6)
+DeploymentPricePinCeiling/workers=8-4     335.0 ± 8%   336.0 ± 4%       ~ (p=0.080 n=6)
+DeploymentPricePinCeiling/workers=64-4    315.0 ± 0%   315.0 ± 0%       ~ (p=0.545 n=6)
+geomean                                   377.3        377.8       +0.13%
+
+                                       │ v0.10.1.txt │           candidate.txt           │
+                                       │ attempts/s  │ attempts/s   vs base              │
+DeploymentPricePinCeiling/workers=1-4    34.33 ± 34%   35.74 ±  5%       ~ (p=0.093 n=6)
+DeploymentPricePinCeiling/workers=8-4    257.6 ± 46%   226.4 ± 25%       ~ (p=0.818 n=6)
+DeploymentPricePinCeiling/workers=64-4   970.9 ±  6%   989.6 ±  4%       ~ (p=0.623 n=6)
+geomean                                  204.8         200.1        -2.30%
+
+pkg: github.com/akz142857/Halro/internal/tokenguard
+                          │ v0.10.1.txt  │           candidate.txt            │
+                          │    sec/op    │    sec/op     vs base              │
+Admit/fixed-4               168.7n ± 20%   170.9n ± 15%       ~ (p=0.965 n=6)
+Admit/ewma-4                179.6n ± 11%   185.1n ±  6%       ~ (p=0.818 n=6)
+AcquireReleaseContended-4   331.2n ±  8%   333.7n ±  9%       ~ (p=0.665 n=6)
+geomean                     215.7n         219.4n        +1.72%
+
+                          │ v0.10.1.txt │           candidate.txt            │
+                          │    B/op     │    B/op     vs base                │
+Admit/fixed-4                64.00 ± 0%   64.00 ± 0%       ~ (p=1.000 n=6) ¹
+Admit/ewma-4                 64.00 ± 0%   64.00 ± 0%       ~ (p=1.000 n=6) ¹
+AcquireReleaseContended-4    160.0 ± 0%   160.0 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                      86.86        86.86       +0.00%
+¹ all samples are equal
+
+                          │ v0.10.1.txt │           candidate.txt            │
+                          │  allocs/op  │ allocs/op   vs base                │
+Admit/fixed-4                2.000 ± 0%   2.000 ± 0%       ~ (p=1.000 n=6) ¹
+Admit/ewma-4                 2.000 ± 0%   2.000 ± 0%       ~ (p=1.000 n=6) ¹
+AcquireReleaseContended-4    3.000 ± 0%   3.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                      2.289        2.289       +0.00%
+¹ all samples are equal
