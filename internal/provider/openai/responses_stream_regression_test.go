@@ -93,6 +93,29 @@ func TestResponsesStreamParallelToolIndicesSkipTextItems(t *testing.T) {
 	}
 }
 
+func TestResponsesStreamBoundsInitialToolArgumentsBeforeDeferral(t *testing.T) {
+	for _, size := range []int{semantic.MaxToolArgumentBytes, semantic.MaxToolArgumentBytes + 1} {
+		state := responsesStreamState{id: "resp_bounds", model: "test", items: map[int]*responsesStreamItem{}, hasReasoning: true}
+		index := 0
+		arguments := `{"value":"` + strings.Repeat("a", size-12) + `"}`
+		_, err := state.accept(openaiapi.ResponseStreamEvent{Type: "response.output_item.added", OutputIndex: &index, Item: &openaiapi.ResponseOutputItem{Type: "function_call", ID: "fc", CallID: "call", Name: "ping", Arguments: arguments}}, false, func(semantic.Event) error { return nil })
+		if (err != nil) != (size > semantic.MaxToolArgumentBytes) {
+			t.Fatalf("initial arguments of %d bytes: %v", size, err)
+		}
+	}
+}
+
+func TestResponsesStreamBoundsCumulativeAddedSnapshots(t *testing.T) {
+	state := responsesStreamState{id: "resp_bounds", model: "test", items: map[int]*responsesStreamItem{}}
+	summary := strings.Repeat("a", maxResponseBytes/2)
+	for index := 0; index < 2; index++ {
+		_, err := state.accept(openaiapi.ResponseStreamEvent{Type: "response.output_item.added", OutputIndex: &index, Item: &openaiapi.ResponseOutputItem{Type: "reasoning", ID: "rs", Summary: []openaiapi.ResponseReasoningSummary{{Type: "summary_text", Text: summary}}}}, false, func(semantic.Event) error { return nil })
+		if (err != nil) != (index == 1) {
+			t.Fatalf("snapshot %d: %v", index, err)
+		}
+	}
+}
+
 func TestResponsesStreamSendsChatRoleOnceAfterRedaction(t *testing.T) {
 	adapter := newResponsesAdapter(t, &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(toolResponsesSSE()))}, nil

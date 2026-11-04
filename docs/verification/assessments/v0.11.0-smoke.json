@@ -1,0 +1,88 @@
+{
+  "stages": [
+    {
+      "stage": "previous-release",
+      "http_status": 200
+    },
+    {
+      "stage": "upgrade",
+      "http_status": 200
+    },
+    {
+      "stage": "candidate-restart",
+      "http_status": 200
+    },
+    {
+      "stage": "candidate-restored",
+      "http_status": 200
+    },
+    {
+      "stage": "previous-on-candidate-data",
+      "http_status": 200
+    },
+    {
+      "stage": "previous-backup-restored",
+      "http_status": 200
+    }
+  ],
+  "candidate_sha256": "3b0ca022bd7dd639f3f73488f0a442a0e3670d411356f76a37cbbb61a58e93fd",
+  "previous_sha256": "fa591605c5996bdcb81a41472a795396bf4be09653257d5e1a6366c8c1ce323a",
+  "provider": "private isolated HTTPS fixture; no paid calls",
+  "checks": [
+    "ledger verify",
+    "usage verify",
+    "audit verify",
+    "doctor",
+    "backup create/verify/restore"
+  ],
+  "usage_verification": [
+    {
+      "ledger_records": 1,
+      "parquet_records": 1,
+      "missing": 0,
+      "duplicates": 0,
+      "extra": 0
+    },
+    {
+      "ledger_records": 2,
+      "parquet_records": 2,
+      "missing": 0,
+      "duplicates": 0,
+      "extra": 0
+    },
+    {
+      "ledger_records": 3,
+      "parquet_records": 3,
+      "missing": 0,
+      "duplicates": 0,
+      "extra": 0
+    },
+    {
+      "ledger_records": 4,
+      "parquet_records": 4,
+      "missing": 0,
+      "duplicates": 0,
+      "extra": 0
+    },
+    {
+      "ledger_records": 4,
+      "parquet_records": 4,
+      "missing": 0,
+      "duplicates": 0,
+      "extra": 0
+    },
+    {
+      "ledger_records": 2,
+      "parquet_records": 2,
+      "missing": 0,
+      "duplicates": 0,
+      "extra": 0
+    }
+  ],
+  "candidate_source_commit": "0d5392d2a8e56e8cd421fc01425085cd0f96af96",
+  "candidate_source_changes": {
+    "internal/provider/openai/responses_stream.go": "5f73af256f72461fb47ee9df8ce013ffdf010f30"
+  },
+  "previous_release": "v0.10.1",
+  "platform": "linux/arm64, Docker isolated internal network"
+}

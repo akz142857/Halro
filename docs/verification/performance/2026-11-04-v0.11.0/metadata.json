@@ -1,0 +1,18 @@
+{
+  "candidate": "0d5392d2a8e56e8cd421fc01425085cd0f96af96",
+  "baseline": "fc8eb51f2cb84380f0e4f6c584c9a8c4c9370e31",
+  "toolchain": "go version go1.26.10 darwin/arm64",
+  "samples": 6,
+  "gomaxprocs": 4,
+  "elapsed_seconds": 366.4746570587158,
+  "hashes": {
+    "v0.10.1.txt": "c8bc203fd73826c862b055b59e79e235b74b4c44fb18d1e5e393ceda2188e661",
+    "candidate.txt": "a45f80d5533b7886847f3f18fc1d7673622d1de111de1b544ce51c26fbb8674e",
+    "benchstat.txt": "aa27900d5ed34607d86dbb9eb767817cac188ad0539cf00b08ce62414a430a71"
+  },
+  "baseline_tag_object": "786414267871d2b962ea3ca92e29df258a5684d9",
+  "os": "macOS 27.2",
+  "cpu": "Apple M4",
+  "runtime_source_dirty": false,
+  "publication_metadata_dirty": true
+}
