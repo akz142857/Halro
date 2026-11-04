@@ -37,7 +37,7 @@ export function UsageWindowForm({ settings }: { settings: UsageSettings }) {
   return (
     <section className="panel settings-card">
       <header className="panel-header">
-        <div><p className="eyebrow">{t("settings.usageWindowEyebrow")}</p><h3>{t("settings.usageWindowTitle")}</h3></div>
+        <div><h3>{t("settings.usageWindowTitle")}</h3></div>
       </header>
       <dl className="settings-facts">
         <div>

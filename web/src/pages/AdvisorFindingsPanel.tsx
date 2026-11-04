@@ -24,9 +24,9 @@
 // know what attempt_response_header_timeout bounds to learn anything from it.
 // The arithmetic and the keys are still on the row — the keys are what
 // config.yaml is searched for — but as the footnote, not the headline.
+import { useId } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { StatusDot } from "../components";
 import type { AdvisorFinding } from "../types";
 
 // The server sends its sentences in English because the CLI prints them to a
@@ -72,7 +72,8 @@ function sentenceVariant(finding: AdvisorFinding, values: ReturnType<typeof sent
   const hasEvidence = (name: string) => (finding.evidence ?? []).some((term) => term.name === name);
   if (finding.rule === "suspended_scopes" && finding.status === "warn" && hasEvidence("gateway.attempt_response_header_timeout")) return "warnUnclassified";
   if (finding.status !== "ok") return undefined;
-  if (finding.rule === "attempt_budget_reaches_fanout" && Number(values.widest) <= 1) return "okSingle";
+  if (finding.rule === "attempt_budget_reaches_fanout" && values.widest === "0") return "okEmpty";
+  if (finding.rule === "attempt_budget_reaches_fanout" && values.widest === "1") return "okSingle";
   if (finding.rule === "unclassified_refusals" && values.observed === "0") return "okNone";
   return undefined;
 }
@@ -121,69 +122,78 @@ function termLabel(t: TFunction, name: string): { label: string; configKey?: str
     return { label: `${t(`advisor.scopeKinds.${kind}`, { defaultValue: kind })} · ${subject}` };
   }
   if (name.includes(".")) {
-    return { label: t(`advisor.config.${name}`, { defaultValue: name }), configKey: name };
+    const label = t(`advisor.config.${name}`, { defaultValue: name });
+    return label === name ? { label } : { label, configKey: name };
   }
   return { label: t(`advisor.terms.${name}`, { defaultValue: name.replaceAll("_", " ") }) };
 }
 
+function ruleBrief(t: TFunction, finding: AdvisorFinding) {
+  const values = sentenceValues(t, finding);
+  const variant = sentenceVariant(finding, values) ?? finding.status;
+  return t(`advisor.briefs.${finding.rule}.${variant}`, { ...values, defaultValue: finding.consequence });
+}
+
+function StateIcon({ status }: { status: AdvisorFinding["status"] | "empty" }) {
+  return <span className={`advisor-state-icon ${status}`} aria-hidden="true">{status === "ok" ? "✓" : status === "warn" ? "!" : status === "unknown" ? "?" : "—"}</span>;
+}
+
 export function AdvisorFindingsPanel({ findings }: { findings: AdvisorFinding[] }) {
   const { t } = useTranslation();
+  const titleID = useId();
   const warnings = findings.filter((finding) => finding.status === "warn").length;
   const unknown = findings.filter((finding) => finding.status === "unknown").length;
-  // Three summaries, not two. "Nothing to report" and "some rules could not
-  // run" are different answers, and collapsing the second into the first is the
-  // panel claiming a check it never made.
-  const summary = warnings > 0
-    ? t("advisor.summaryWarnings", { count: warnings })
-    : unknown > 0
-      ? t("advisor.summaryUnknown", { count: unknown })
-      : t("advisor.summaryClear");
+  const overall = !findings.length ? "empty" : warnings ? "warn" : unknown ? "unknown" : "ok";
+  const summary = overall === "empty" ? t("advisor.summaryEmpty")
+    : overall === "warn" ? t("advisor.summaryWarnings", { count: warnings })
+    : overall === "unknown" ? t("advisor.summaryUnknown", { count: unknown })
+    : t("advisor.summaryClear");
+  // Present attention first without changing the server's verdict or order
+  // within a status. A local check passing is not a provider-health promise.
+  const priority = { warn: 0, unknown: 1, ok: 2 };
+  const ordered = [...findings].sort((left, right) => priority[left.status] - priority[right.status]);
   return (
-    <details className="panel system-card diagnostic-details advisor-findings" open>
-      <summary>
-        <span>{t("advisor.title")}</span>
-        {/* The dot repeats what the sentence beside it already says, so it
-            carries no label of its own: a screen reader that read both would
-            announce the summary twice. */}
-        <strong><StatusDot ok={warnings === 0} />{summary}</strong>
-      </summary>
-      <p className="advisor-caption">{t("advisor.description")}</p>
-      <ul className="advisor-finding-list">
-        {findings.map((finding) => (
-          <li key={finding.rule} className={`advisor-finding ${finding.status}`}>
-            <div className="advisor-finding-head">
-              <span className={`advisor-status ${finding.status}`}>{t(`advisor.statuses.${finding.status}`)}</span>
-              <strong>{ruleTitle(t, finding)}</strong>
-            </div>
-            <p className="advisor-consequence">{ruleConsequence(t, finding)}</p>
-            {finding.evidence && finding.evidence.length > 0 && (
-              <dl className="advisor-evidence" aria-label={t("advisor.evidenceLabel")}>
-                {finding.evidence.map((term) => {
-                  const { label, configKey } = termLabel(t, term.name);
-                  return (
-                    <div key={term.name}>
-                      <dt>{label}</dt>
-                      {/* The key belongs to the value's description, and a dl
-                          row may hold only dt and dd: a third child outside
-                          them is a group a screen reader cannot pair. */}
-                      <dd>
-                        <span className="advisor-value">{isDurationKey(term.name) ? humanDuration(t, term.value) : term.value}</span>
-                        {configKey && <code className="advisor-config-key">{configKey}</code>}
-                      </dd>
-                    </div>
-                  );
-                })}
-              </dl>
-            )}
-            {/* The arithmetic as the server wrote it, for checking against
-                config.yaml without trusting the sentence above. */}
-            <p className="advisor-comparison">
-              <span>{t("advisor.comparisonLabel")}</span>
-              <code>{finding.comparison}</code>
-            </p>
-          </li>
-        ))}
-      </ul>
-    </details>
+    <section className="panel advisor-findings" aria-labelledby={titleID}>
+      <header className="advisor-panel-header">
+        <div><h3 id={titleID}>{t("advisor.title")}</h3><span className="advisor-check-count">{t("advisor.checkCount", { count: findings.length })}</span></div>
+        <div className="advisor-overview">
+          <span className={`advisor-overall-status ${overall}`}><StateIcon status={overall} />{summary}</span>
+          {warnings > 0 && unknown > 0 && <span className="advisor-unchecked-count">{t("advisor.summaryUnknown", { count: unknown })}</span>}
+        </div>
+      </header>
+      {!findings.length ? <p className="advisor-empty">{t("advisor.emptyDescription")}</p> : <ul className="advisor-finding-list">
+        {ordered.map((finding) => {
+          const consequence = ruleConsequence(t, finding);
+          const brief = finding.status === "ok" ? ruleBrief(t, finding) : consequence;
+          return <li key={finding.rule} data-rule={finding.rule} className={`advisor-finding ${finding.status}`}>
+            <details className="advisor-check advisor-evidence-details">
+              <summary className="advisor-check-summary">
+                <StateIcon status={finding.status} />
+                <span className="advisor-finding-copy">
+                  <strong>{ruleTitle(t, finding)}</strong>
+                  <span className={finding.status === "ok" ? "advisor-brief" : "advisor-consequence"}>{brief}</span>
+                </span>
+                <span className={`advisor-status ${finding.status}`}>{t(`advisor.statuses.${finding.status}`)}</span>
+                <svg className="advisor-check-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg>
+              </summary>
+              <div className="advisor-check-body">
+                {finding.status === "ok" && consequence !== brief && <p className="advisor-explanation">{consequence}</p>}
+                <h4>{t("advisor.evidenceLabel")}</h4>
+                {finding.evidence?.length ? <dl className="advisor-evidence" aria-label={t("advisor.evidenceLabel")}>
+                  {finding.evidence.map((term) => {
+                    const { label, configKey } = termLabel(t, term.name);
+                    return <div key={term.name}>
+                      <dt>{label}{configKey && <code className="advisor-config-key">{configKey}</code>}</dt>
+                      <dd className="advisor-value">{isDurationKey(term.name) ? humanDuration(t, term.value) : term.value}</dd>
+                    </div>;
+                  })}
+                </dl> : <p className="advisor-no-evidence">{t("advisor.noEvidence")}</p>}
+                {finding.comparison && <p className="advisor-comparison"><span>{t("advisor.comparisonLabel")}</span><code>{finding.comparison}</code></p>}
+              </div>
+            </details>
+          </li>;
+        })}
+      </ul>}
+    </section>
   );
 }

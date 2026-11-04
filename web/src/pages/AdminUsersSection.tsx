@@ -27,9 +27,7 @@ export function AdminUsersSection() {
   return <section className="panel settings-card" aria-labelledby="admin-users-title">
     <header className="panel-header">
       <div>
-        <p className="eyebrow">{t("adminUsers.eyebrow")}</p>
         <h3 id="admin-users-title">{t("adminUsers.title")}</h3>
-        <p>{t("adminUsers.description")}</p>
       </div>
       {/* Disabled with a stated reason, not hidden. Everywhere else in the
           console a read-only operator sees the control and is told why it is

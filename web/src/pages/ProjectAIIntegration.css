@@ -1,0 +1,13 @@
+.modal.drawer:has(> .project-ai-integration) { width: min(48rem, 100%); }
+.project-ai-integration { display: grid; gap: var(--space-4); min-width: 0; padding: var(--space-5); }
+.project-ai-project { margin: 0; color: var(--color-text-primary); font-size: var(--font-size-md); font-weight: var(--font-weight-semibold); overflow-wrap: anywhere; }
+.project-ai-config { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: var(--space-4); min-width: 0; }
+.project-ai-config .field { min-width: 0; margin: 0; }
+.project-ai-address { grid-column: 1 / -1; min-width: 0; }
+.project-ai-key-note, .project-ai-empty { margin: 0; color: var(--color-text-secondary); font-size: var(--font-size-sm); line-height: var(--line-height-normal); }
+.project-ai-actions { display: flex; flex-wrap: wrap; align-items: start; gap: var(--space-3); }
+.project-ai-actions > div { display: grid; gap: var(--space-1); min-width: 0; }
+.project-ai-feedback { color: var(--color-text-secondary); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
+.project-ai-feedback:empty { display: none; }
+.project-ai-feedback.error { color: var(--color-status-danger-text); }
+.project-ai-instructions { min-width: 0; max-block-size: 55dvh; margin: 0; padding: var(--space-4); overflow: auto; color: var(--color-text-primary); background: var(--color-surface-subtle); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); font: var(--font-size-sm)/var(--line-height-normal) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }

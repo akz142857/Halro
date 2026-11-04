@@ -1,0 +1,1630 @@
+{
+  "locales": {
+    "zh-CN": {
+      "changed": 155,
+      "removed": 21,
+      "added": 1,
+      "rewritten_characters_before": 7300,
+      "rewritten_characters_after": 4615,
+      "changes": [
+        {
+          "key": "runGovernance.firstRun.description",
+          "before": "控制台负责配置和查看证据；业务应用负责创建 Work Unit、Run、发送模型请求与关闭生命周期，独立验收方负责上报 Outcome。完成当前步骤后，向导会自动推进。",
+          "after": "业务应用创建并关闭 Work Unit 和 Run；独立验收方上报 Outcome，控制台展示配置与证据。"
+        },
+        {
+          "key": "runGovernance.firstRun.finishedDescription",
+          "before": "项目已经产生 Work Unit、Run 和最终 Outcome；现在可以从概览、调用明细和结果分析继续运营。",
+          "after": "可从概览、调用明细和结果分析继续查看。"
+        },
+        {
+          "key": "runGovernance.firstRun.steps.run.detail",
+          "before": "一次完整执行对应一个 Run；随后让同一执行内的请求、重试和 fallback 都携带同一个 X-Halro-Run-ID。",
+          "after": "同一执行中的请求、重试与回退统一携带同一个 X-Halro-Run-ID。"
+        },
+        {
+          "key": "runGovernance.firstRun.steps.outcome.detail",
+          "before": "结束执行后关闭 Run 和 Work Unit，再由独立验收密钥上报结构化结果。最终 Outcome 出现后向导完成。",
+          "after": "关闭 Run 和 Work Unit 后，由独立验收密钥上报最终 Outcome。"
+        },
+        {
+          "key": "runGovernance.firstRun.apiDescription",
+          "before": "按顺序执行并保存每一步响应中的 wku_、run_ 和 out_ 标识。",
+          "after": "按顺序执行，保存每步返回的标识。"
+        },
+        {
+          "key": "runGovernance.firstRun.apiBoundary",
+          "before": "先设置 HALRO_GATEWAY_URL、HALRO_ORCHESTRATOR_KEY 和 HALRO_ACCEPTANCE_KEY。示例不会在控制台内代替业务应用执行，也不要把真实密钥粘贴到页面或提交到代码仓库。",
+          "after": "先设置 HALRO_GATEWAY_URL、HALRO_ORCHESTRATOR_KEY 和 HALRO_ACCEPTANCE_KEY；示例须由业务应用执行。请勿将真实密钥粘贴到页面或提交到代码库。"
+        },
+        {
+          "key": "runGovernance.outcomeDefinitionsDescription",
+          "before": "定义按不可变版本保存；新建 Work Unit 时冻结当前已启用版本。",
+          "after": "新 Work Unit 冻结当前启用版本；历史版本不可更改。"
+        },
+        {
+          "key": "runGovernance.versionEffectHint",
+          "before": "每次修改都会创建不可变版本，只影响之后新建的 Work Unit；已有 Work Unit 继续使用其冻结版本。",
+          "after": "新版本仅供之后创建的 Work Unit；已有单元仍用冻结版本，历史版本不可更改。"
+        },
+        {
+          "key": "runGovernance.noGovernanceProjectsDescription",
+          "before": "请先为项目启用运行治理，再查看 Work Unit、Run 与业务结果。",
+          "after": "先在项目设置中启用运行治理。"
+        },
+        {
+          "key": "runGovernance.inspectAttemptEvidence",
+          "before": "请查看调用明细确认价格证据",
+          "after": "价格证据见调用明细"
+        },
+        {
+          "key": "runGovernance.toggleDefinitionDescription",
+          "before": "将通过创建新的不可变版本来{{action}}“{{name}}”；已有 Work Unit 仍使用其冻结版本。",
+          "after": "创建新的不可变版本以{{action}}“{{name}}”；已有 Work Unit 继续使用冻结版本。"
+        },
+        {
+          "key": "developer.gatewayKeyHint",
+          "before": "只保留在本页内存，不写入浏览器存储、URL 或配置。",
+          "after": "仅存本页内存，不写入浏览器存储、URL 或配置。"
+        },
+        {
+          "key": "developer.imageURLPlaceholder",
+          "before": "图片 URL（https://…）或 data:image/…;base64,…",
+          "after": "https://… 或 data:image/…"
+        },
+        {
+          "key": "developer.rawJSONHint",
+          "before": "代码示例和真实调试请求都使用这里的完整 JSON 对象。",
+          "after": "代码与调试均使用此 JSON。"
+        },
+        {
+          "key": "developer.secretBoundary",
+          "before": "示例通过 HALRO_API_KEY 环境变量读取密钥，不会显示或保存明文 Gateway Key。",
+          "after": "密钥由 HALRO_API_KEY 环境变量提供，不显示或保存明文。"
+        },
+        {
+          "key": "developer.awaitingHeaders",
+          "before": "发送请求后，这里将显示 Content-Type、Request ID 等真实响应头。",
+          "after": "发送后显示真实响应头。"
+        },
+        {
+          "key": "developer.disabledDescription",
+          "before": "当前实例配置为 admin.developer_workbench: disabled。启用后管理端口会同时承载真实的网关调用流量。",
+          "after": "需启用 admin.developer_workbench；启用后管理端口会承载真实网关调用。"
+        },
+        {
+          "key": "developer.noProjectsDescription",
+          "before": "先创建启用的项目并允许至少一个公共模型别名，然后再生成接入请求。",
+          "after": "先创建已启用项目并授权模型别名。"
+        },
+        {
+          "key": "developer.hintUnauthorized",
+          "before": "这次调用被权限边界拒绝：Key 的权限范围、项目授权的别名，或来源 IP 限制。",
+          "after": "请检查 Key 权限、项目模型授权和来源 IP 限制。"
+        },
+        {
+          "key": "developer.hintCodes.model_not_found",
+          "before": "网关没有这个公共模型别名，或它当前没有已启用的路由。请到模型路由页确认别名存在且可用。",
+          "after": "别名不存在或没有已启用路由，请检查模型路由。"
+        },
+        {
+          "key": "developer.hintCodes.model_not_allowed",
+          "before": "别名存在，但这个项目没有被授权调用它。请在项目的「允许的模型别名」里加上它。",
+          "after": "项目未获此别名授权，请在项目中添加。"
+        },
+        {
+          "key": "developer.hintCodes.gateway_key_scope_denied",
+          "before": "这把 Gateway Key 的权限范围不含该操作（推理需要 inference 权限）。请换一把权限足够的 Key。",
+          "after": "Key 权限不足；推理需要 inference，请更换 Key。"
+        },
+        {
+          "key": "developer.hintCodes.unsupported_feature",
+          "before": "目标部署不具备这次请求用到的能力（如视觉、工具调用、流式）。请换一个部署，或去掉该字段。",
+          "after": "部署不支持所需能力，请更换部署或移除对应字段。"
+        },
+        {
+          "key": "developer.hintCodes.token_limit_exceeded",
+          "before": "预估输入词元数超过项目上限。请缩短输入，或调整项目的 max_input_tokens。",
+          "after": "输入超出项目词元上限，请缩短或调整 max_input_tokens。"
+        },
+        {
+          "key": "developer.hintCodes.token_guard_blocked",
+          "before": "Token Guard 策略拒绝了这次请求。请检查项目绑定的 Token Guard 策略上限。",
+          "after": "已被 Token Guard 拒绝，请检查项目绑定策略。"
+        },
+        {
+          "key": "developer.hintCodes.budget_exceeded",
+          "before": "项目预算已用尽，网关在调用上游前就拒绝了。请调整项目每日预算或等待下一个计费周期。",
+          "after": "预算已用尽，未调用上游。请提高预算或等待下一周期。"
+        },
+        {
+          "key": "developer.hintCodes.invalid_api_key",
+          "before": "Gateway Key 无效、已禁用，或不属于所选项目。",
+          "after": "Gateway Key 无效或已禁用，请更换。"
+        },
+        {
+          "key": "developer.hintCodes.provider_error",
+          "before": "上游服务商返回错误。网关按分类重写为 provider_error，上游原文不会下发给调用方 —— 上游的错误码和请求 ID 在「用量与调用 → 最终失败」的失败详情里。",
+          "after": "上游错误已脱敏。原始错误码和请求 ID 见「用量与调用 → 最终失败」。"
+        },
+        {
+          "key": "developer.hintCodes.accounting_unavailable",
+          "before": "账务不可用，网关按 fail-closed 拒绝了这次请求，未调用上游。",
+          "after": "账务不可用，已拒绝请求，未调用上游。"
+        },
+        {
+          "key": "developer.hintCodes.accounting_capacity_exhausted",
+          "before": "内存中的账务状态达到 ledger.max_hot_state_bytes，网关暂停接收新请求，等已接收的请求结算。稍后重试，或调高该上限。",
+          "after": "账务内存达 ledger.max_hot_state_bytes，新请求已暂停。请稍后重试或调高上限。"
+        },
+        {
+          "key": "developer.hintCodes.streaming_unsupported",
+          "before": "网关当前无法承载流式响应（内部错误，非部署能力问题）。请改用普通响应并查看服务端日志。",
+          "after": "网关流式响应异常，请改用普通响应并检查服务端日志。"
+        },
+        {
+          "key": "developer.billedElsewhere",
+          "before": "注意：本次调用计入项目“{{billed}}”，而上方选择的是“{{selected}}”。计费由 Gateway Key 决定，与选择器无关。",
+          "after": "本次计入“{{billed}}”，与所选“{{selected}}”不同；计费由 Gateway Key 决定。"
+        },
+        {
+          "key": "developer.historyBoundary",
+          "before": "仅保留在本页内存中，刷新即消失；不含 Gateway Key，也不含响应体。",
+          "after": "仅存本页内存，刷新清空；不含密钥或响应体。"
+        },
+        {
+          "key": "developer.jsonEdited",
+          "before": "这段 JSON 是你手写的，切换模式或改 API 协议都不会覆盖它。",
+          "after": "切换模式或 API 不会覆盖已编辑的 JSON。"
+        },
+        {
+          "key": "developer.debugKeyStepUpHint",
+          "before": "新建调试 Key 会要求重新验证身份，并签发一把真实可计费的 Gateway Key，24 小时后过期。",
+          "after": "密钥仅显示一次，24 小时后过期，退出登录仍有效。调用按实际用量计费。"
+        },
+        {
+          "key": "custody.redaction",
+          "before": "仅展示槽位用途、状态、托管服务和验证时间。",
+          "after": "仅显示脱敏后的槽位元数据。"
+        },
+        {
+          "key": "custody.offlineOnly",
+          "before": "变更与恢复只能通过离线 CLI 执行。",
+          "after": "变更与恢复需通过离线 CLI 执行。"
+        },
+        {
+          "key": "custody.keySlotsMissingDescription",
+          "before": "KMS 密钥槽位模式必须存在已验证的主槽位与恢复槽位；请停止变更并按运维手册检查。",
+          "after": "须有已验证的主槽位和恢复槽位；请停止变更并查阅运维手册。"
+        },
+        {
+          "key": "auth.stepUpDestructive",
+          "before": "此操作不可撤销，请重新验证你的身份后继续。",
+          "after": "不可撤销，请确认身份。"
+        },
+        {
+          "key": "auth.stepUpSecurityControl",
+          "before": "此改动会修改网关正在执行的一项控制，请重新验证你的身份后继续。",
+          "after": "此改动影响网关控制，请确认身份。"
+        },
+        {
+          "key": "auth.stepUpMintKey",
+          "before": "网关密钥只显示一次，且在本次登录结束后依然有效。请重新验证你的身份后继续。",
+          "after": "密钥仅显示一次，退出登录仍有效。请确认身份。"
+        },
+        {
+          "key": "cluster.standaloneDescription",
+          "before": "此实例未配置 HA。建立集群需要按 HA 运维手册完成成员初始化、播种与目标环境验收。",
+          "after": "启用 HA 前，按运维手册完成成员初始化、播种及目标环境验收。"
+        },
+        {
+          "key": "cluster.localOnly",
+          "before": "以下均为本节点观察值。连接已建立不代表对端健康或已追平；切换前须分别核对各成员状态并完成旧 Primary 隔离。",
+          "after": "本节点观察值，不代表对端健康或已追平。切换前须核对各成员并隔离旧 Primary。"
+        },
+        {
+          "key": "cluster.peersDescription",
+          "before": "仅表示本节点与对端之间是否存在已认证的数据会话；不显示对端复制水位。",
+          "after": "已认证会话状态，不含对端复制水位。"
+        },
+        {
+          "key": "settings.instanceDescription",
+          "before": "本分区设置会影响整个实例、其他管理员或网关运行。",
+          "after": "影响整个实例及全部管理员。"
+        },
+        {
+          "key": "settings.activationStaleDescription",
+          "before": "一项已持久化的管理变更尚未进入全部实时快照；在所有受影响域恢复前，Halro 会对数据面流量返回 503。",
+          "after": "已保存的配置尚未全部生效；恢复前请求返回 503。"
+        },
+        {
+          "key": "settings.activationRecovery",
+          "before": "恢复循环每 5 秒自动重试，无需人工介入。若持续不恢复，按 docs/runbooks/configuration-stale.md 处理：先在服务端日志里确认失败的域，再重新保存对应策略或重启实例。",
+          "after": "每 5 秒自动重试。持续失败时按 docs/runbooks/configuration-stale.md 检查失败域，再保存对应策略或重启。"
+        },
+        {
+          "key": "settings.addAuthenticatorDescription",
+          "before": "建议当前账户保留至少两种相互独立的登录方式。",
+          "after": "建议保留两种独立的登录方式。"
+        },
+        {
+          "key": "settings.revokeWarning",
+          "before": "该设备将立即无法批准登录；如有其他验证器，请使用另一台设备确认。",
+          "after": "该设备将立即无法批准登录。"
+        },
+        {
+          "key": "settings.recoveryMethodsDescription",
+          "before": "恢复码只能使用一次，应离线安全保存。",
+          "after": "恢复码仅限一次使用，请离线保存。"
+        },
+        {
+          "key": "settings.confirmRecoverySaved",
+          "before": "我已将这些恢复码安全保存，并了解关闭后无法再次查看。",
+          "after": "我已安全保存，了解关闭后无法再次查看。"
+        },
+        {
+          "key": "settings.effectiveConfig",
+          "before": "系统配置",
+          "after": "启动配置"
+        },
+        {
+          "key": "settings.effectiveConfigDescription",
+          "before": "当前实例实际生效的启动配置；这些值来自运行中的进程，不一定与磁盘文件逐字一致。",
+          "after": "运行中的启动配置，已应用默认值，可能与磁盘文件不同。"
+        },
+        {
+          "key": "settings.reloadDescription",
+          "before": "以下是进程当前持有的材料。收到 SIGHUP 后重新读取的只有证书、指标客户端 CA、日志级别与日志文件，其余改动仍需重启。",
+          "after": "SIGHUP 仅重载证书、指标客户端 CA、日志级别和日志文件；其他改动需重启。"
+        },
+        {
+          "key": "settings.writePathDescription",
+          "before": "每条账务记录都要落一次盘，还要排一次 Project 锁。两个上限取小，就是这台实例每秒能处理多少请求。",
+          "after": "速率取决于落盘与单项目锁的较低上限。"
+        },
+        {
+          "key": "settings.writePathIdle",
+          "before": "本次启动以来无账务写入，发一个 Gateway 请求即可填充",
+          "after": "本次启动尚无账务写入，发送 Gateway 请求后可查看。"
+        },
+        {
+          "key": "settings.writePathBoundByWAL",
+          "before": "上限由落盘决定：全实例共用一个写入者，加 Project 分散不了它。",
+          "after": "瓶颈在共享落盘通道，拆分项目无效。"
+        },
+        {
+          "key": "settings.writePathBoundByProject",
+          "before": "上限由单 Project 锁决定：拆成多个 Project 可以提高总量。",
+          "after": "瓶颈在单项目锁，可拆分项目提高总量。"
+        },
+        {
+          "key": "settings.writePathNotCoalescing",
+          "before": "当前每次落盘只带 {{size}} 条记录，合批没起作用——这是并发不足，不是磁盘慢。并发上来后同一次落盘最多可带 {{max}} 条，上限随之升到约 {{rate}} 请求/秒。",
+          "after": "每次落盘仅 {{size}} 条，当前并发不足。提高并发后可合批 {{max}} 条，约 {{rate}} 请求/秒。"
+        },
+        {
+          "key": "settings.newPasswordHint",
+          "before": "至少 8 个字符，建议使用长密码短语；成功后全部旧会话立即失效",
+          "after": "至少 8 个字符；修改后全部旧会话失效。"
+        },
+        {
+          "key": "settings.usageWindowHint",
+          "before": "「调用明细」与「最终失败」默认显示最近多少天。全部历史都保存在磁盘上的历史索引里，改短不会删除任何记录，也不占内存。",
+          "after": "仅影响默认显示范围，不删除历史记录。"
+        },
+        {
+          "key": "settings.usageWindowConfigIgnored",
+          "before": "config.yaml 写的是 {{days}} 天，只在首次启动时作为初值；此后由这里的设置决定。",
+          "after": "config.yaml 的 {{days}} 天仅用于初始化，此后以本页为准。"
+        },
+        {
+          "key": "settings.accountingVersionHint",
+          "before": "每次生效的变更 +1。变更前后的日预算记在各自独立的余额上，因此切换不会影响已经进行中的一天。",
+          "after": "变更生效后版本 +1，预算按版本独立记账。"
+        },
+        {
+          "key": "settings.accountingZoneHint",
+          "before": "IANA 名称，例如 Asia/Shanghai。不接受 UTC+08:00 这类固定偏移：它无法表达夏令时。",
+          "after": "使用 IANA 时区，如 Asia/Shanghai；不接受 UTC+08:00 等固定偏移。"
+        },
+        {
+          "key": "settings.accountingConfigIgnored",
+          "before": "config.yaml 中的 usage.timezone 为 {{timezone}}，仅在首次启动时用于初始化。此后以本页设置为准。",
+          "after": "usage.timezone={{timezone}} 仅用于初始化，之后由本页管理。"
+        },
+        {
+          "key": "settings.accountingConfirmLead",
+          "before": "从 {{from}} 变更为 {{to}}。请确认以下三点：",
+          "after": "{{from}} → {{to}}"
+        },
+        {
+          "key": "settings.accountingResetWindowDetail",
+          "before": "新时区的当天在切换时刻之前就已开始，因此它是一份全新的预算余额，将于 {{at}}（UTC {{utc}}）再次重置。这意味着同一个自然日内该项目的可用额度接近翻倍。",
+          "after": "切换将启用新预算余额，于 {{at}}（UTC {{utc}}）再次重置；同一自然日可用额度可能接近翻倍。"
+        },
+        {
+          "key": "settings.startupDescription",
+          "before": "监听、TLS、存储路径、服务商私网策略与指标认证只能修改 config.yaml。",
+          "after": "监听、TLS、存储、私网策略及指标认证需修改 config.yaml。"
+        },
+        {
+          "key": "adminUsers.roleHints.administrator",
+          "before": "拥有与你相同的全部能力，包括创建和删除其他管理员。",
+          "after": "可管理全部资源，包括其他管理员。"
+        },
+        {
+          "key": "adminUsers.roleHints.read_only",
+          "before": "可以查看全部配置与用量，任何写操作都会被服务端拒绝。",
+          "after": "可查看全部配置与用量，服务端禁止写入。"
+        },
+        {
+          "key": "adminUsers.deleteWarning",
+          "before": "将立即删除 {{username}} 的账户、全部会话与已注册的二次验证设备。此操作不可撤销。",
+          "after": "立即删除 {{username}}、全部会话及身份验证器，不可撤销。"
+        },
+        {
+          "key": "dashboard.firstRun.details.request_failed",
+          "before": "上一条验证请求失败；配置引导会保留，修复后可直接重试。",
+          "after": "验证请求失败；修复后可直接重试。"
+        },
+        {
+          "key": "dashboard.firstRun.failure.description",
+          "before": "引导不会消失。使用下面的请求信息定位失败阶段，修复后再试。",
+          "after": "按下方请求信息定位问题，修复后重试。"
+        },
+        {
+          "key": "dashboard.trendDescriptions.requests",
+          "before": "按最终请求结果计量；空白小时补零，不跨缺口连线。",
+          "after": "按请求终态计量；空白小时记零，缺口断开。"
+        },
+        {
+          "key": "dashboard.trendDescriptions.success_rate",
+          "before": "成功请求 / 全部最终请求；无流量小时保持空白。",
+          "after": "成功 / 全部最终请求；无流量时留空。"
+        },
+        {
+          "key": "dashboard.trendDescriptions.latency_p95",
+          "before": "每小时端到端请求 P95；无完整样本时保持空白。",
+          "after": "每小时端到端 P95；无完整样本时留空。"
+        },
+        {
+          "key": "dashboard.trendDescriptions.tokens",
+          "before": "服务商报告词元与保守估算词元分开绘制。",
+          "after": "报告词元与保守估算分开绘制。"
+        },
+        {
+          "key": "dashboard.trendDescriptions.cost",
+          "before": "仅展示费用已知的尝试，并区分确认值与估算值；未知费用不进入曲线。",
+          "after": "仅含已知费用，区分确认与估算；未知费用不计入。"
+        },
+        {
+          "key": "dashboard.rejectionsSinceStartup",
+          "before": "拒绝计数为进程启动以来的累计值。",
+          "after": "进程启动以来累计"
+        },
+        {
+          "key": "dashboard.breakdownFootnote",
+          "before": "调用量采用服务商尝试口径；模型路由、重试和回退可产生多次调用。",
+          "after": "按上游尝试计数，含重试与回退。"
+        },
+        {
+          "key": "usage.emptyDescription",
+          "before": "当前筛选条件下没有记录。放宽时间范围或清除筛选后再试。",
+          "after": "扩大时间范围或清除筛选后重试。"
+        },
+        {
+          "key": "usage.attemptsDescription",
+          "before": "每行代表一次实际的服务商尝试；同一请求的重试与回退会分别显示。",
+          "after": "每行一次上游尝试；重试与回退单独记录。"
+        },
+        {
+          "key": "usage.failures.emptyDescription",
+          "before": "回退后成功的请求不计入此处；放宽时间范围或清除筛选后再试。",
+          "after": "仅统计最终失败，回退成功不计入。可扩大时间范围或清除筛选。"
+        },
+        {
+          "key": "usage.failures.policyRejectedDetail",
+          "before": "该请求已受理但从未调用上游，因此没有服务商错误分类。原因见限流、熔断与预算指标。",
+          "after": "请求已受理但未调用上游；拒绝原因见限流、熔断与预算指标。"
+        },
+        {
+          "key": "usage.summary.emptyDescription",
+          "before": "换一个时间范围，或确认该账期内确实产生过流量。",
+          "after": "调整时间范围，或确认该账期已产生流量。"
+        },
+        {
+          "key": "usage.summary.timezoneChanged",
+          "before": "本区间包含 {{count}} 次账期时区变更（自 {{period}} 起）：变更前后的同名日期覆盖的不是同一段时间。",
+          "after": "自 {{period}} 起有 {{count}} 次账期时区变更；变更前后的同名日期对应不同时间区间。"
+        },
+        {
+          "key": "usage.summary.latencyApproximate",
+          "before": "P95 由直方图估算，取样本所在分桶的上界；超过 120 秒的样本只报「> 120s」。",
+          "after": "P95 取直方图样本分桶上界；超过 120 秒显示「> 120s」。"
+        },
+        {
+          "key": "advisor.rules.attempt_header_timeout_reachable",
+          "before": "单次调用的超时能起作用吗？",
+          "after": "单次调用超时"
+        },
+        {
+          "key": "advisor.rules.retry_fits_route_budget",
+          "before": "对同一个上游重试，时间够用吗？",
+          "after": "重试时限"
+        },
+        {
+          "key": "advisor.rules.attempt_budget_reaches_fanout",
+          "before": "配置的备选路由都能轮到吗？",
+          "after": "备选路由覆盖"
+        },
+        {
+          "key": "advisor.rules.suspended_scopes",
+          "before": "有没有上游被暂停使用？",
+          "after": "已暂停上游"
+        },
+        {
+          "key": "advisor.rules.unclassified_refusals",
+          "before": "上游拒绝请求的原因都识别出来了吗？",
+          "after": "拒绝原因识别"
+        },
+        {
+          "key": "advisor.consequences.attempt_header_timeout_reachable.ok",
+          "before": "能。一次上游调用 {{header}} 内没有开始响应就会被放弃；整个请求最多 {{route}}，剩下的时间还能交给下一个备选。",
+          "after": "单次超时 {{header}}，请求总超时 {{route}}；可为备选保留时间。"
+        },
+        {
+          "key": "advisor.consequences.attempt_header_timeout_reachable.warn",
+          "before": "不能。单次调用超时（{{header}}）不比整个请求超时（{{route}}）短，所以总是整个请求先超时：一个卡住的上游会耗光整个请求，备选没有机会接手。建议把单次调用超时调到比整个请求超时短。",
+          "after": "单次超时 {{header}} 不短于总超时 {{route}}，备选无法接手。请缩短单次超时。"
+        },
+        {
+          "key": "advisor.consequences.retry_fits_route_budget.ok",
+          "before": "够用。同一个上游最多尝试 {{perTarget}} 次，即使每次都等满 {{header}}，也不超过整个请求的 {{route}}。",
+          "after": "单个上游最多 {{perTarget}} 次，每次 {{header}}，不超过总时限 {{route}}。"
+        },
+        {
+          "key": "advisor.consequences.retry_fits_route_budget.warn",
+          "before": "不够。同一个上游最多尝试 {{perTarget}} 次，每次都等满 {{header}} 时会超过整个请求的 {{route}}：最后一次重试会被请求超时打断，配置了也用不上。",
+          "after": "单个上游 {{perTarget}} 次 × {{header}} 超过总时限 {{route}}，末次重试可能被打断。"
+        },
+        {
+          "key": "advisor.consequences.attempt_budget_reaches_fanout.ok",
+          "before": "能。每个请求最多尝试 {{total}} 次、同一个上游最多 {{perTarget}} 次，最多能轮到 {{reachable}} 个备选；备选最多的模型别名「{{model}}」有 {{widest}} 个，都能轮到。",
+          "after": "最多尝试 {{total}} 次、每目标 {{perTarget}} 次，可覆盖 {{reachable}} 个备选；“{{model}}”共 {{widest}} 个，均可达。"
+        },
+        {
+          "key": "advisor.consequences.attempt_budget_reaches_fanout.okSingle",
+          "before": "能。目前每个模型别名都只有一个备选，不存在轮不到的情况。",
+          "after": "各别名仅有一个备选，均可达。"
+        },
+        {
+          "key": "advisor.consequences.attempt_budget_reaches_fanout.warn",
+          "before": "不能全部轮到。模型别名「{{model}}」配置了 {{widest}} 个备选，但尝试次数只够轮到 {{reachable}} 个；后面的备选虽然已启用，却永远不会被调用。可以调大每个请求最多尝试次数。",
+          "after": "“{{model}}”有 {{widest}} 个备选，仅可达 {{reachable}} 个。请增加总尝试次数。"
+        },
+        {
+          "key": "advisor.consequences.suspended_scopes.ok",
+          "before": "没有。所有配置好的备选当前都可以接收请求。",
+          "after": "全部备选均可接收请求。"
+        },
+        {
+          "key": "advisor.consequences.suspended_scopes.warn",
+          "before": "有 {{suspended}} 个对象被暂停，路由会跳过它们。标为「indefinite（无限期）」的不会自动恢复，需要更换凭据或手动解除；其余的到期后自动恢复。",
+          "after": "已暂停 {{suspended}} 个对象，路由将跳过。indefinite 不会自动恢复，需换凭据或手动解除；其余到期恢复。"
+        },
+        {
+          "key": "advisor.consequences.suspended_scopes.warnUnclassified",
+          "before": "有 {{suspended}} 个对象被暂停，路由会跳过它们。其中有原因不明的暂停：这类暂停按连续失败次数触发，而这些失败可能就是本实例自己的单次调用超时（{{header}}）切断的。请先确认这个超时是否合适，再排查上游。标为「indefinite（无限期）」的不会自动恢复，需要更换凭据或手动解除。",
+          "after": "已暂停 {{suspended}} 个对象，路由将跳过。原因不明的暂停可能由本实例单次超时（{{header}}）触发，请先核对。indefinite 不会自动恢复，需换凭据或手动解除。"
+        },
+        {
+          "key": "advisor.consequences.unclassified_refusals.ok",
+          "before": "都识别出来了。本次启动以来上游共拒绝 {{observed}} 次，每次都按识别出的原因（如限流、额度、凭据）分别处理。",
+          "after": "本次启动共 {{observed}} 次上游拒绝，均按识别原因处理。"
+        },
+        {
+          "key": "advisor.consequences.unclassified_refusals.okNone",
+          "before": "本次启动以来，上游还没有拒绝过请求。",
+          "after": "本次启动暂无上游拒绝。"
+        },
+        {
+          "key": "advisor.consequences.unclassified_refusals.warn",
+          "before": "上游拒绝的 {{observed}} 次中，有 {{unclassified}} 次原因无法识别，只能当作上游临时不稳定、短暂停用后重试。如果其中混有额度用完或凭据失效，这样处理并不合适。",
+          "after": "{{observed}} 次拒绝中 {{unclassified}} 次原因未识别，暂按瞬时故障停用后重试；请排查额度或凭据问题。"
+        },
+        {
+          "key": "operations.deleteConfirm",
+          "before": "删除告警 Webhook“{{name}}”？该地址将立即停止接收告警事件，其密钥会被销毁，此操作不可撤销。",
+          "after": "删除“{{name}}”？此地址将停止接收告警，密钥永久销毁，无法撤销。"
+        },
+        {
+          "key": "operations.auditTrail",
+          "before": "不可静默修改的操作轨迹",
+          "after": "审计日志"
+        },
+        {
+          "key": "operations.disableConfirm",
+          "before": "确认停用告警 Webhook“{{name}}”？停用后该地址不再接收任何告警事件。",
+          "after": "停用“{{name}}”？此地址将停止接收告警。"
+        },
+        {
+          "key": "operations.secretRequiredForNewDestination",
+          "before": "更换地址或请求头时必须重新输入密钥；已保存的密钥不会被重新绑定到新目标。",
+          "after": "更换地址或请求头需重新输入密钥，现有密钥不会转移。"
+        },
+        {
+          "key": "operations.urlHint",
+          "before": "运行时禁用代理和跳转，并校验所有 DNS 结果",
+          "after": "不使用代理或跳转；校验全部 DNS 结果。"
+        },
+        {
+          "key": "operations.optionalSecret",
+          "before": "Webhook 密钥（可选）",
+          "after": "Webhook 密钥"
+        },
+        {
+          "key": "operations.secretHint",
+          "before": "密钥绑定 Webhook 地址和请求头受众，永不回显",
+          "after": "密钥绑定此地址与请求头，保存后不回显。"
+        },
+        {
+          "key": "deployments.scheduleTimezoneHint",
+          "before": "服务商自己的时区，填 IANA 名称，例如 Asia/Shanghai。它不是会计时区，也不会随会计时区变动。",
+          "after": "服务商的 IANA 时区，如 Asia/Shanghai；独立于会计时区。"
+        },
+        {
+          "key": "deployments.cachedInputHint",
+          "before": "服务商从自身缓存返回的提示内容词元单价；通常远低于输入价。未修改时跟随输入价，填 0 表示缓存命中不计费",
+          "after": "服务商缓存命中的输入单价。未修改时跟随输入价；0 表示缓存命中免费。"
+        },
+        {
+          "key": "deployments.declareBeyondCatalogDescription",
+          "before": "内置目录没有记录这些能力，保存后它们的证据是「管理员声明」而不是「已评审模型目录」。如果上游其实不支持，网关会在调用时被拒。也可以改用识别来实测（会计费）。",
+          "after": "这些能力将记为「管理员声明」，不是目录证据。上游不支持时调用会被拒绝；也可实测识别，可能计费。"
+        },
+        {
+          "key": "deployments.widenDeclarationDescription",
+          "before": "这次编辑打开了该部署此前没有保存的能力。调用身份已锁定，不能重新识别，所以保存会把这些能力记为管理员声明的证据。",
+          "after": "新增能力将记为管理员声明；调用身份已锁定，无法重新识别。"
+        },
+        {
+          "key": "deployments.modelCatalogOfferHint",
+          "before": "此服务商接口不提供模型列表；下列模型来自 Halro 模型目录，不代表该账号已开通。也可以直接输入模型 ID。",
+          "after": "列表来自 Halro 模型目录，不代表账号已开通；也可直接输入模型 ID。"
+        },
+        {
+          "key": "deployments.detectionUnverifiableDescription",
+          "before": "自动验证只能问模型会不会对话、向量嵌入或内容审核。图像生成、音频转写、语音这类能力不做自动验证（探一次就会真的产生内容和费用），所以这类模型问不出结果——这不代表模型有问题。用手动配置声明它的能力即可。",
+          "after": "自动验证仅覆盖对话、向量嵌入与内容审核。图像和音频能力可能产生内容及费用，不自动探测；请手动声明。未验证不代表模型故障。"
+        },
+        {
+          "key": "deployments.detectionRefusedDescription",
+          "before": "这是服务商对这次请求的答复，不是 Halro 的判断。下面是它返回的状态和标识（不含错误正文）；如果模型文档说它支持，多半是这个接口对该字段的形状要求不同，可据此核对，或用手动配置自行声明。",
+          "after": "上游拒绝了本次探测。下方保留状态码与标识，不含错误正文；可据此核对接口文档，或手动声明能力。"
+        },
+        {
+          "key": "deployments.detectionUnestablishedDescription",
+          "before": "这不等于模型不支持，只是这次没验证出来，所以保持关闭。确实需要的话，可以重新识别，或用手动配置自行声明。",
+          "after": "未验证不等于不支持；这些能力保持关闭，可重新识别或手动声明。"
+        },
+        {
+          "key": "deployments.coveredElsewhereDescription",
+          "before": "内置目录把它登记在 {{profiles}} 下，而当前服务商没有绑定这些接口。请改选已绑定该接口的服务商，或在服务商里启用它；也可以继续手动声明能力。",
+          "after": "目录将此模型列于 {{profiles}}，当前服务商未绑定。请切换服务商、启用对应接口，或手动声明能力。"
+        },
+        {
+          "key": "deployments.capabilityModelHint",
+          "before": "选择这个 Azure Deployment 或自定义目标实际承载的模型。系统据此预选能力，但该映射仍作为你的声明保存。",
+          "after": "选择该目标实际承载的模型以预选能力；此映射将保存为你的声明。"
+        },
+        {
+          "key": "routes.emptyDescription",
+          "before": "别名就是应用在 model 字段里写的名字，例如 chat-fast。应用只知道它，不知道背后的服务商和上游模型。别名由模型路由发布：新建一条路由，给它一个别名并指向一个模型部署。",
+          "after": "为模型部署设置公共别名，供应用在 model 字段调用。"
+        },
+        {
+          "key": "routes.publicAliasHint",
+          "before": "应用请求里写的名字。选一个已有别名就是给它加一个目标；输入新名字则新建一个别名。",
+          "after": "选择已有别名会添加目标；输入新名字会创建别名。"
+        },
+        {
+          "key": "routes.priorityHint",
+          "before": "数字小的先试。给已有别名加兜底目标时，填一个比现有目标都大的数。",
+          "after": "数字越小越先尝试；兜底目标应大于已有目标。"
+        },
+        {
+          "key": "routes.joinDuplicateDeployment",
+          "before": "已有目标指向这个部署，保存会被拒绝。同一部署是一个故障域，不构成回退。",
+          "after": "此部署已是该别名的目标，不能重复添加。"
+        },
+        {
+          "key": "routes.joinStrategyConflict",
+          "before": "该别名的已启用目标用的是另一种策略，保存会被拒绝。一个别名只能有一种策略。",
+          "after": "同一别名只能使用一种策略；当前选择与已有目标不一致。"
+        },
+        {
+          "key": "projects.keyScopesHint",
+          "before": "inference 允许模型调用；discovery 必须与 inference 一起授予，并额外允许该 Key 通过 GET /v1/models 列出本项目的别名，不授予时该 Key 只能调用已告知的别名，看不到其余别名。其余权限分别控制创建 Work Unit、创建 Run、附加 Run、读取运行治理和上报业务结果。",
+          "after": "inference：调用模型；discovery：列出本项目别名，须同时授予 inference。未授予列出权限时，仍可调用已知别名。其余权限控制 Work Unit/Run 创建、Run 附加、治理读取及结果上报。"
+        },
+        {
+          "key": "providers.capabilitySectionDescription",
+          "before": "选择此连接开放的适用能力；具体模型只能再从中选择子集。",
+          "after": "具体模型仅可使用其中的子集。"
+        },
+        {
+          "key": "providers.noProxiesDescription",
+          "before": "在这里添加获准使用的 CONNECT 代理，再由服务商连接选择。配置与凭据会加密保存并热加载，无需重启 Halro。",
+          "after": "添加获准使用的 CONNECT 代理后，在服务商连接中选用。"
+        },
+        {
+          "key": "providers.egressTrustDescription",
+          "before": "代理能够看到目标 IP、端口和 TLS 服务器名称。Halro 仍以原服务商主机名和系统信任库验证证书；这不是证书固定，系统已信任的代理 CA 仍然受信。由服务商自行执行的工具及上游侧联网不会经过这个连接器。",
+          "after": "证书仍按服务商主机名与系统信任库校验；无证书固定，已受信的代理 CA 仍有效。上游工具及联网不经过此连接器。"
+        },
+        {
+          "key": "providers.proxyAuthenticationDescription",
+          "before": "仅在代理要求 Basic Auth 时填写；凭据会加密保存且不会再次显示。",
+          "after": "凭据加密保存，保存后不再显示。"
+        },
+        {
+          "key": "providers.productHint",
+          "before": "这把密钥属于哪个产品。它决定端点、扣减哪份余额，以及基于它创建的连接能做什么——一把密钥只封存于一个产品，不能改挂到另一个。",
+          "after": "凭据绑定一个产品，决定端点、余额与可用能力；创建后不可改绑。"
+        },
+        {
+          "key": "providers.providerRegionHint",
+          "before": "用于生成这份凭据对应的 Bedrock Mantle 区域端点；每份 Bedrock 凭据都可在后台独立配置。",
+          "after": "用于生成 Bedrock Mantle 区域端点；每份凭据独立配置。"
+        },
+        {
+          "key": "providers.regionByEndpointHint",
+          "before": "同一套接口由两个地域地址提供。账号、余额与密钥彼此独立，密钥用错地址会返回鉴权失败，看起来像密钥错误而不是地址错误。",
+          "after": "两地域的账号、余额和密钥独立；密钥与端点不匹配会报鉴权失败。"
+        },
+        {
+          "key": "providers.billableProbeDescription",
+          "before": "Anthropic Messages 没有免费的元数据接口，连接测试会发起一次真实推理调用（最多 1 个输出词元）。另外两个 Mantle 实现读取模型元数据，不计费。",
+          "after": "Anthropic Messages 连接测试会真实推理，最多 1 个输出词元，可能计费；其他 Mantle 接口读取免费模型元数据。"
+        },
+        {
+          "key": "providers.anthropicBetasHint",
+          "before": "留空则拒绝所有 anthropic-beta 请求头。逗号分隔；只有列在这里的 token 会被转发，其余请求直接拒绝。Beta 功能可能把工作移到上游（代码执行、MCP 出站）或改变响应含义——逐个确认后再填。仅 native 模式生效。",
+          "after": "仅 native 模式。逗号分隔；留空拒绝全部 anthropic-beta，未列出的 token 也会被拒绝。Beta 可能启用上游代码执行/MCP 联网或改变响应语义，请逐项确认。"
+        },
+        {
+          "key": "providers.bedrockProjectHint",
+          "before": "留空使用账户默认项目；填写 proj_ 开头的 ID 后，该实例的全部请求归入指定项目。wrkspc_ 开头的标识属于另一条产品线，此处不接受。",
+          "after": "留空使用账户默认项目；proj_ ID 将此连接的全部请求归入该项目。不接受 wrkspc_。"
+        },
+        {
+          "key": "providers.credentialExpiryHint",
+          "before": "上游停止接受这份密钥的时间，没有就留空。仅作控制台提醒，不会停用凭据。",
+          "after": "仅提醒上游密钥到期，不会停用凭据；无到期时间可留空。"
+        },
+        {
+          "key": "providers.validationNameRequired",
+          "before": "必填；模型部署选择上游连接时看到的就是这个名称。",
+          "after": "请输入服务商名称。"
+        },
+        {
+          "key": "providers.validationCredentialRequired",
+          "before": "请选择加密凭据；下拉为空时，先为该服务商类型和访问面保存一份凭据。",
+          "after": "请选择同类型、同访问面的凭据；没有时请先创建。"
+        },
+        {
+          "key": "providers.validationCapabilityRequired",
+          "before": "至少启用一项能力，否则没有模型部署能路由到这个服务商。",
+          "after": "至少开放一项能力。"
+        },
+        {
+          "key": "providers.matrixUnavailable",
+          "before": "暂时读不到本实例支持的能力清单，无法新建。请重试，或确认登录状态仍然有效。",
+          "after": "无法读取能力清单，暂不能新建。请重试或重新登录。"
+        },
+        {
+          "key": "providers.capabilityEgressWarningDescription",
+          "before": "{{capabilities}}：开启后，上游可以自己执行工具并为此额外访问网络。这部分流量不经过 Halro，不受出站主机限制，也不会出现在审计记录里。只在信任该服务商这样做时开启。",
+          "after": "{{capabilities}} 可让服务商执行工具并访问网络；流量不经过 Halro，不受出站主机限制，也不记入审计。仅在信任服务商时开启。"
+        },
+        {
+          "key": "providers.apiVersionHint",
+          "before": "显式固定 Azure 数据面 API 版本；升级时由管理员变更",
+          "after": "固定 Azure API 版本；升级时由管理员修改。"
+        },
+        {
+          "key": "providers.maxConcurrencyHint",
+          "before": "0 表示不限；用于保护上游账户和模型部署",
+          "after": "0 表示不限。"
+        },
+        {
+          "key": "policies.ewmaHint",
+          "before": "系统会使用推荐参数持续学习流量变化；发现异常时只记录并发送告警，不会自动拒绝请求。勾选“高级设置”可自定义识别灵敏度、观察周期和触发门槛。",
+          "after": "持续学习流量；异常只记录并告警，不自动拒绝请求。参数可在高级设置中调整。"
+        },
+        {
+          "key": "policies.blockWarning",
+          "before": "临时封禁不是硬限流器；达到样本和违规双门槛前，请求仍会放行。",
+          "after": "达到样本与违规双门槛前，请求仍会放行。"
+        },
+        {
+          "key": "policies.ewmaEnableHint",
+          "before": "关闭后不再学习流量基线，也不会因异常突增发送告警；固定阈值不受影响。",
+          "after": "关闭后不再学习或告警；固定阈值不变。"
+        },
+        {
+          "key": "policies.previewWindowHint",
+          "before": "“最近一分钟”数据表示本次请求到来前已经产生的流量，用于模拟加入本次请求后是否会超过策略阈值。",
+          "after": "最近一分钟不含本次请求；模拟会将本次请求计入。"
+        },
+        {
+          "key": "redaction.disableConfirm",
+          "before": "确认禁用脱敏策略“{{name}}”？该策略的全部检测与脱敏规则将立即停止，已绑定的 {{count}} 个项目会以未脱敏内容直连服务商。",
+          "after": "确认禁用脱敏策略“{{name}}”？检测与脱敏将立即停止；{{count}} 个绑定项目的内容会未经脱敏发往服务商。"
+        },
+        {
+          "key": "redaction.strict",
+          "before": "严格 · 禁止流式",
+          "after": "禁用流式响应"
+        },
+        {
+          "key": "redaction.bounded",
+          "before": "有界 · 有界规则（执行规则当前仍保守拒绝流式）",
+          "after": "仅有界规则；执行规则仍拒绝流式"
+        },
+        {
+          "key": "redaction.detectStream",
+          "before": "仅检测 · 流式仅检测",
+          "after": "流式仅检测，不脱敏"
+        },
+        {
+          "key": "redaction.priorityHint",
+          "before": "0–10000；数值越高越先执行，拒绝规则始终优先。",
+          "after": "0–10000；数值越高越先执行。"
+        }
+      ],
+      "removed_keys": [
+        "developer.waitingDescription",
+        "custody.posture",
+        "custody.stable",
+        "custody.updated",
+        "settings.overviewEyebrow",
+        "settings.activationCurrentDescription",
+        "settings.mfaNotEnabled",
+        "settings.authenticatorDevicesDescription",
+        "settings.systemDescription",
+        "settings.configPreviewDescription",
+        "settings.effectiveConfigYamlDescription",
+        "dashboard.firstRun.eyebrow",
+        "dashboard.firstRun.pageDescription",
+        "dashboard.firstRun.description",
+        "dashboard.firstRun.context.description",
+        "usage.noCallsDescription",
+        "advisor.description",
+        "operations.auditEmptyDescription",
+        "providers.fixedCapabilityDescription",
+        "providers.providerDependencyHint",
+        "providers.credentialDetailsDescription"
+      ],
+      "added_keys": [
+        "developer.imageURLLabel"
+      ]
+    },
+    "en-US": {
+      "changed": 155,
+      "removed": 21,
+      "added": 1,
+      "rewritten_characters_before": 19890,
+      "rewritten_characters_after": 12505,
+      "changes": [
+        {
+          "key": "runGovernance.firstRun.description",
+          "before": "The console configures governance and inspects evidence. Your application creates Work Units and Runs, sends model requests, and closes their lifecycle; an independent acceptance system reports the Outcome. The guide advances as each result becomes visible.",
+          "after": "Your app opens and closes Work Units and Runs. An independent evaluator reports Outcomes; the console shows configuration and evidence."
+        },
+        {
+          "key": "runGovernance.firstRun.finishedDescription",
+          "before": "The project has produced a Work Unit, Run, and final Outcome. Continue operating from the overview, attempt evidence, and result analytics.",
+          "after": "Continue in the overview, call details or result analysis."
+        },
+        {
+          "key": "runGovernance.firstRun.steps.run.detail",
+          "before": "One complete execution is one Run. Then give every request, retry, and fallback in that execution the same X-Halro-Run-ID.",
+          "after": "Use the same X-Halro-Run-ID for every request, retry and fallback in one execution."
+        },
+        {
+          "key": "runGovernance.firstRun.steps.outcome.detail",
+          "before": "Close the Run and Work Unit, then use the independent acceptance key to report a structured result. The guide completes when a final Outcome appears.",
+          "after": "Close the Run and Work Unit, then report a final Outcome with an independent acceptance key."
+        },
+        {
+          "key": "runGovernance.firstRun.apiDescription",
+          "before": "Run these in order and retain the wku_, run_, and out_ identifiers returned by each step.",
+          "after": "Run in order and keep each returned identifier."
+        },
+        {
+          "key": "runGovernance.firstRun.apiBoundary",
+          "before": "Set HALRO_GATEWAY_URL, HALRO_ORCHESTRATOR_KEY, and HALRO_ACCEPTANCE_KEY first. The console does not execute these application lifecycle calls for you. Never paste real keys into this page or commit them to source control.",
+          "after": "Set HALRO_GATEWAY_URL, HALRO_ORCHESTRATOR_KEY and HALRO_ACCEPTANCE_KEY, then run the examples in your app. Never paste real keys into this page or commit them."
+        },
+        {
+          "key": "runGovernance.outcomeDefinitionsDescription",
+          "before": "Definitions are immutable versions. New Work Units freeze the latest enabled version.",
+          "after": "New Work Units freeze the enabled version; historical versions are immutable."
+        },
+        {
+          "key": "runGovernance.versionEffectHint",
+          "before": "Every change creates an immutable version and affects only new Work Units. Existing Work Units keep their frozen version.",
+          "after": "New versions affect future Work Units only. Existing units keep their frozen version; historical versions cannot change."
+        },
+        {
+          "key": "runGovernance.noGovernanceProjectsDescription",
+          "before": "Enable Run Governance for a project before inspecting Work Units, Runs, and outcomes.",
+          "after": "Enable Run Governance in project settings first."
+        },
+        {
+          "key": "runGovernance.inspectAttemptEvidence",
+          "before": "Inspect attempts for price evidence",
+          "after": "See call details for price evidence"
+        },
+        {
+          "key": "runGovernance.toggleDefinitionDescription",
+          "before": "{{action}} “{{name}}” by creating a new immutable version. Existing Work Units keep their frozen version.",
+          "after": "Create an immutable version to {{action}} “{{name}}”; existing Work Units keep their frozen version."
+        },
+        {
+          "key": "developer.gatewayKeyHint",
+          "before": "Kept in this page's memory only — never written to browser storage, URLs, or config.",
+          "after": "Page memory only; never saved to browser storage, URLs, or config."
+        },
+        {
+          "key": "developer.imageURLPlaceholder",
+          "before": "Image URL (https://…) or data:image/…;base64,…",
+          "after": "https://… or data:image/…"
+        },
+        {
+          "key": "developer.rawJSONHint",
+          "before": "Code examples and live debugging both use the complete JSON object entered here.",
+          "after": "Code and debugging both use this JSON."
+        },
+        {
+          "key": "developer.secretBoundary",
+          "before": "Examples read the key from HALRO_API_KEY. Plaintext Gateway Keys are never displayed or stored.",
+          "after": "Reads HALRO_API_KEY from the environment; plaintext keys are not shown or saved."
+        },
+        {
+          "key": "developer.awaitingHeaders",
+          "before": "After a request is sent, real headers such as Content-Type and Request ID will appear here.",
+          "after": "Real response headers appear after sending."
+        },
+        {
+          "key": "developer.disabledDescription",
+          "before": "This instance is configured with admin.developer_workbench: disabled. Enabling it makes the admin listener carry real gateway traffic as well.",
+          "after": "Enable admin.developer_workbench to use this page. The admin listener will then carry real gateway calls."
+        },
+        {
+          "key": "developer.noProjectsDescription",
+          "before": "Create an enabled project with at least one public model alias before generating an integration request.",
+          "after": "Create an enabled project and authorize a model alias first."
+        },
+        {
+          "key": "developer.hintUnauthorized",
+          "before": "An access boundary refused this call: the key's scope, the aliases the project authorizes, or its source-IP rule.",
+          "after": "Check key scopes, project model authorization, and source-IP rules."
+        },
+        {
+          "key": "developer.hintCodes.model_not_found",
+          "before": "The gateway has no such public model alias, or the alias has no enabled route. Check it on the Routes page.",
+          "after": "Alias missing or no enabled route. Check Routes."
+        },
+        {
+          "key": "developer.hintCodes.model_not_allowed",
+          "before": "The alias exists, but this project is not authorized to call it. Add it to the project's allowed aliases.",
+          "after": "This project is not authorized for the alias. Add it in Projects."
+        },
+        {
+          "key": "developer.hintCodes.gateway_key_scope_denied",
+          "before": "This Gateway Key's scope does not cover the operation; inference needs the inference scope. Use a key that does.",
+          "after": "Insufficient key scope. Inference requires inference; use another key."
+        },
+        {
+          "key": "developer.hintCodes.unsupported_feature",
+          "before": "The target deployment lacks a capability this request uses (vision, tool calls, streaming). Use another deployment, or drop the field.",
+          "after": "The deployment lacks a requested capability. Change deployments or remove the field."
+        },
+        {
+          "key": "developer.hintCodes.token_limit_exceeded",
+          "before": "The estimated input tokens exceed the project's ceiling. Shorten the input or raise max_input_tokens.",
+          "after": "Input exceeds the project token limit. Shorten it or adjust max_input_tokens."
+        },
+        {
+          "key": "developer.hintCodes.token_guard_blocked",
+          "before": "A Token Guard policy refused this request. Check the policy attached to the project.",
+          "after": "Blocked by Token Guard. Check the project policy."
+        },
+        {
+          "key": "developer.hintCodes.budget_exceeded",
+          "before": "The project's budget is spent, so the gateway refused before calling upstream. Raise the daily budget or wait for the next period.",
+          "after": "Budget exhausted; upstream was not called. Raise the budget or wait for the next period."
+        },
+        {
+          "key": "developer.hintCodes.invalid_api_key",
+          "before": "The Gateway Key is invalid, disabled, or does not belong to the selected project.",
+          "after": "The Gateway Key is invalid or disabled. Use another key."
+        },
+        {
+          "key": "developer.hintCodes.provider_error",
+          "before": "The upstream provider returned an error. The gateway rewrites it to provider_error and the upstream's own text never reaches the caller — its code and request ID are in the failure detail under Usage → Final failures.",
+          "after": "The upstream error was redacted. Find its original code and request ID in Usage → Final failures."
+        },
+        {
+          "key": "developer.hintCodes.accounting_unavailable",
+          "before": "Accounting is unavailable, so the gateway refused the request fail-closed without calling upstream.",
+          "after": "Accounting unavailable. The request was refused without calling upstream."
+        },
+        {
+          "key": "developer.hintCodes.accounting_capacity_exhausted",
+          "before": "The accounting state held in memory reached ledger.max_hot_state_bytes, so the gateway refused new work until admitted requests settle. Retry shortly, or raise the limit.",
+          "after": "Accounting memory reached ledger.max_hot_state_bytes. New requests are paused; retry later or raise the limit."
+        },
+        {
+          "key": "developer.hintCodes.streaming_unsupported",
+          "before": "The gateway cannot carry a streamed response right now. This is an internal failure, not a deployment capability: use a standard response and check the server log.",
+          "after": "Gateway streaming failure. Use a standard response and check server logs."
+        },
+        {
+          "key": "developer.billedElsewhere",
+          "before": "Note: this call was billed to “{{billed}}”, not the “{{selected}}” selected above. The Gateway Key decides the project; the picker does not.",
+          "after": "Billed to “{{billed}}”, while “{{selected}}” is selected. The Gateway Key determines billing."
+        },
+        {
+          "key": "developer.historyBoundary",
+          "before": "Kept in this page's memory only and gone on reload; it holds no Gateway Key and no response body.",
+          "after": "Page memory only, cleared on reload. No key or response body is kept."
+        },
+        {
+          "key": "developer.jsonEdited",
+          "before": "This JSON is yours. Switching modes or changing the API contract will not overwrite it.",
+          "after": "Changing mode or API keeps your edited JSON."
+        },
+        {
+          "key": "developer.debugKeyStepUpHint",
+          "before": "Minting a debug key re-verifies your identity and issues a real, billable Gateway Key that expires in 24 hours.",
+          "after": "Shown once, valid after sign-out, expires in 24 hours. Calls are billed by actual usage."
+        },
+        {
+          "key": "custody.redaction",
+          "before": "Only purpose, state, provider, and verification time are exposed.",
+          "after": "Only redacted slot metadata is shown."
+        },
+        {
+          "key": "custody.offlineOnly",
+          "before": "Mutations and recovery remain offline CLI operations.",
+          "after": "Changes and recovery require the offline CLI."
+        },
+        {
+          "key": "custody.keySlotsMissingDescription",
+          "before": "Key Slots mode requires verified Primary and Recovery Slots. Stop changes and inspect the runbook.",
+          "after": "Verified Primary and Recovery Slots are required. Stop changes and inspect the runbook."
+        },
+        {
+          "key": "auth.stepUpDestructive",
+          "before": "This cannot be undone. Re-confirm your identity to continue.",
+          "after": "Cannot be undone. Confirm your identity."
+        },
+        {
+          "key": "auth.stepUpSecurityControl",
+          "before": "This edit changes a control the gateway enforces. Re-confirm your identity to continue.",
+          "after": "This changes a gateway control. Confirm your identity."
+        },
+        {
+          "key": "auth.stepUpMintKey",
+          "before": "A gateway key is shown once and stays valid after this session ends. Re-confirm your identity to continue.",
+          "after": "The key is shown once and remains valid after sign-out. Confirm your identity."
+        },
+        {
+          "key": "cluster.standaloneDescription",
+          "before": "HA is not configured on this instance. Establishing a cluster requires member initialization, seeding, and target-environment acceptance from the HA runbook.",
+          "after": "Before enabling HA, follow the runbook to initialize and seed members and validate the target environment."
+        },
+        {
+          "key": "cluster.localOnly",
+          "before": "These are this member's observations. A connected session does not prove that a peer is healthy or caught up. Inspect each member and fence the former Primary before a failover.",
+          "after": "Local observations do not prove peer health or catch-up. Verify each member and isolate the old Primary before switching."
+        },
+        {
+          "key": "cluster.peersDescription",
+          "before": "Shows only whether this member has an authenticated data session with each peer. Peer replication indexes are not available here.",
+          "after": "Authenticated sessions only; peer replication progress is not shown."
+        },
+        {
+          "key": "settings.instanceDescription",
+          "before": "Settings in this section affect the instance, other administrators, or gateway operation.",
+          "after": "Affects this instance and all administrators."
+        },
+        {
+          "key": "settings.activationStaleDescription",
+          "before": "A durable Admin change has not reached every live snapshot. Halro is returning 503 for data-plane traffic until all affected domains recover.",
+          "after": "Saved configuration is not fully active. Requests return 503 until recovery."
+        },
+        {
+          "key": "settings.activationRecovery",
+          "before": "Recovery retries every 5 seconds and needs no operator action. If this persists, follow docs/runbooks/configuration-stale.md: check the server log for the failing domain, then re-save the affected policy or restart the instance.",
+          "after": "Retries every 5 seconds. If recovery stalls, follow docs/runbooks/configuration-stale.md to identify the failed domain, then re-save its policy or restart."
+        },
+        {
+          "key": "settings.addAuthenticatorDescription",
+          "before": "The current account should retain at least two independent sign-in methods.",
+          "after": "Keep two independent sign-in methods."
+        },
+        {
+          "key": "settings.revokeWarning",
+          "before": "This device will stop approving sign-in immediately. Confirm with another authenticator when available.",
+          "after": "This device will immediately lose sign-in approval access."
+        },
+        {
+          "key": "settings.recoveryMethodsDescription",
+          "before": "Recovery codes are single use and should be stored offline.",
+          "after": "Recovery codes are single-use. Store them offline."
+        },
+        {
+          "key": "settings.confirmRecoverySaved",
+          "before": "I have stored these recovery codes in a safe place and understand they cannot be shown again.",
+          "after": "I saved these securely and understand they cannot be viewed after closing."
+        },
+        {
+          "key": "settings.effectiveConfig",
+          "before": "System configuration",
+          "after": "Startup configuration"
+        },
+        {
+          "key": "settings.effectiveConfigDescription",
+          "before": "The startup configuration this instance is actually running; taken from the process, so it may not match the file on disk word for word.",
+          "after": "Running startup configuration with defaults applied; it may differ from the file on disk."
+        },
+        {
+          "key": "settings.reloadDescription",
+          "before": "The material this process is holding right now. SIGHUP re-reads the certificates, the Metrics client CA, the log level, and the log file; every other change still needs a restart.",
+          "after": "SIGHUP reloads certificates, metrics client CAs, log level, and log file only. Other changes require a restart."
+        },
+        {
+          "key": "settings.writePathDescription",
+          "before": "Every accounting record costs one disk flush and one turn of a project lock. The lower of those two ceilings is how many requests per second this instance can handle.",
+          "after": "Limited by the lower of disk-write and per-project lock throughput."
+        },
+        {
+          "key": "settings.writePathIdle",
+          "before": "No accounting writes since this start — one Gateway request fills these in",
+          "after": "No accounting writes since startup. Send a Gateway request to populate this view."
+        },
+        {
+          "key": "settings.writePathBoundByWAL",
+          "before": "Bound by the disk flush: one writer serves the whole instance, so more projects will not raise it.",
+          "after": "Shared disk writes are the bottleneck; splitting projects will not help."
+        },
+        {
+          "key": "settings.writePathBoundByProject",
+          "before": "Bound by the per-project lock: splitting the load across projects raises the total.",
+          "after": "The per-project lock is the bottleneck; splitting projects can improve total throughput."
+        },
+        {
+          "key": "settings.writePathNotCoalescing",
+          "before": "Each flush is currently carrying {{size}} records, so coalescing is not doing anything — that is a shortage of concurrency, not a slow disk. Under concurrent load one flush carries up to {{max}}, which raises the ceiling to about {{rate}} req/s.",
+          "after": "Only {{size}} records per flush at current concurrency. Higher concurrency can batch {{max}} records, reaching about {{rate}} requests/s."
+        },
+        {
+          "key": "settings.newPasswordHint",
+          "before": "At least 8 characters; a passphrase is recommended; all existing sessions are revoked after success",
+          "after": "At least 8 characters. All old sessions end after the change."
+        },
+        {
+          "key": "settings.usageWindowHint",
+          "before": "How many days the attempt log and the failed-request list show by default. Every record stays in the on-disk history index; shortening this deletes nothing and costs no memory.",
+          "after": "Changes the default display range only. History is retained."
+        },
+        {
+          "key": "settings.usageWindowConfigIgnored",
+          "before": "config.yaml says {{days}} days. It seeded this on first start and has no say now; the setting here decides.",
+          "after": "The {{days}} days in config.yaml initialize this setting only. This page now controls it."
+        },
+        {
+          "key": "settings.accountingVersionHint",
+          "before": "Increments on each applied change. Budgets either side of a change are separate balances, so a switch cannot disturb a day already in progress.",
+          "after": "Increments on activation. Each version has a separate budget balance."
+        },
+        {
+          "key": "settings.accountingZoneHint",
+          "before": "An IANA name such as Asia/Shanghai. Fixed offsets like UTC+08:00 are rejected because they cannot represent daylight saving time.",
+          "after": "Use an IANA zone such as Asia/Shanghai, not a fixed offset such as UTC+08:00."
+        },
+        {
+          "key": "settings.accountingConfigIgnored",
+          "before": "usage.timezone in config.yaml is {{timezone}}. It seeds this setting on first start only; from then on this page decides.",
+          "after": "usage.timezone={{timezone}} initializes the value only. This page now controls it."
+        },
+        {
+          "key": "settings.accountingConfirmLead",
+          "before": "From {{from}} to {{to}}. Three things follow:",
+          "after": "{{from}} → {{to}}"
+        },
+        {
+          "key": "settings.accountingResetWindowDetail",
+          "before": "The new zone's day already began before the switch instant, so it is a fresh budget balance and resets again at {{at}} (UTC {{utc}}). Within one wall-clock day the project therefore gets close to twice its daily allowance.",
+          "after": "Switching starts a fresh budget balance, which resets again at {{at}} (UTC {{utc}}). Available budget in one calendar day may nearly double."
+        },
+        {
+          "key": "settings.startupDescription",
+          "before": "Listeners, TLS, storage paths, provider private-network policy, and metrics authentication can only be changed in config.yaml.",
+          "after": "Change config.yaml for listeners, TLS, storage, private-network policy, and metrics authentication."
+        },
+        {
+          "key": "adminUsers.roleHints.administrator",
+          "before": "Everything you can do, including creating and deleting other administrators.",
+          "after": "Can manage all resources, including other administrators."
+        },
+        {
+          "key": "adminUsers.roleHints.read_only",
+          "before": "Can read every configuration and usage view; the server refuses any write.",
+          "after": "Can view all configuration and usage. The server rejects writes."
+        },
+        {
+          "key": "adminUsers.deleteWarning",
+          "before": "Immediately removes the account {{username}}, all of its sessions, and any enrolled second factor. This cannot be undone.",
+          "after": "Immediately deletes {{username}}, all sessions, and authenticators. This cannot be undone."
+        },
+        {
+          "key": "dashboard.firstRun.details.request_failed",
+          "before": "The previous verification failed. The guide remains available so you can fix and retry.",
+          "after": "Verification failed; fix the issue and retry."
+        },
+        {
+          "key": "dashboard.firstRun.failure.description",
+          "before": "The guide remains available. Use the request details below to locate the failure, then retry.",
+          "after": "Use the request details below to diagnose the failure, then retry."
+        },
+        {
+          "key": "dashboard.trendDescriptions.requests",
+          "before": "Uses final request outcomes; missing hours are zero-filled without bridging gaps.",
+          "after": "Final request outcomes; empty hours are zero and gaps stay disconnected."
+        },
+        {
+          "key": "dashboard.trendDescriptions.success_rate",
+          "before": "Successful final requests / all final requests; no-traffic hours remain blank.",
+          "after": "Successful / finalized requests; no traffic stays blank."
+        },
+        {
+          "key": "dashboard.trendDescriptions.latency_p95",
+          "before": "Hourly end-to-end request P95; hours without complete samples remain blank.",
+          "after": "Hourly end-to-end P95; no complete samples stays blank."
+        },
+        {
+          "key": "dashboard.trendDescriptions.tokens",
+          "before": "Provider-reported and conservatively estimated tokens are charted separately.",
+          "after": "Reported tokens and conservative estimates are plotted separately."
+        },
+        {
+          "key": "dashboard.trendDescriptions.cost",
+          "before": "Only attempts with known cost are shown, split into confirmed and estimated values; unknown cost is excluded.",
+          "after": "Known costs only, split into confirmed and estimated; unknown costs are excluded."
+        },
+        {
+          "key": "dashboard.rejectionsSinceStartup",
+          "before": "Rejection counters are cumulative since process start.",
+          "after": "Cumulative since startup"
+        },
+        {
+          "key": "dashboard.breakdownFootnote",
+          "before": "Calls use the Provider Attempt scope; routing, retries, and fallback can create multiple calls.",
+          "after": "Counts upstream attempts, including retries and fallbacks."
+        },
+        {
+          "key": "usage.emptyDescription",
+          "before": "No records match these filters. Widen the time range or clear a filter and try again.",
+          "after": "Widen the time range or clear filters and retry."
+        },
+        {
+          "key": "usage.attemptsDescription",
+          "before": "Each row is one provider attempt. Retries and fallbacks for the same request appear separately.",
+          "after": "One upstream attempt per row; retries and fallbacks have separate records."
+        },
+        {
+          "key": "usage.failures.emptyDescription",
+          "before": "A request that fell back and then succeeded is not counted here. Widen the range or clear a filter.",
+          "after": "Only final failures are counted; successful fallbacks are excluded. Widen the range or clear filters."
+        },
+        {
+          "key": "usage.failures.policyRejectedDetail",
+          "before": "This request was admitted but never reached an upstream, so it has no provider error class. The rate-limit, circuit and budget figures explain it.",
+          "after": "Accepted without an upstream call; check rate-limit, circuit-breaker and budget metrics for the refusal."
+        },
+        {
+          "key": "usage.summary.emptyDescription",
+          "before": "Try another range, or confirm this accounting period saw traffic at all.",
+          "after": "Adjust the range or confirm there was traffic in this accounting period."
+        },
+        {
+          "key": "usage.summary.timezoneChanged",
+          "before": "Accounting time-zone changes in this range: {{count}}. Starting with {{period}}, the same local date before and after the change covers a different interval.",
+          "after": "{{count}} accounting-timezone changes since {{period}}; identical dates before and after a change cover different intervals."
+        },
+        {
+          "key": "usage.summary.latencyApproximate",
+          "before": "P95 is read off a histogram and reports the bucket it falls in; samples above 120s are reported only as \"> 120s\".",
+          "after": "P95 uses the histogram bucket's upper bound; samples above 120 seconds show “> 120s”."
+        },
+        {
+          "key": "advisor.rules.attempt_header_timeout_reachable",
+          "before": "Can the per-call timeout ever fire?",
+          "after": "Per-call timeout"
+        },
+        {
+          "key": "advisor.rules.retry_fits_route_budget",
+          "before": "Is there time for the retries against one upstream?",
+          "after": "Retry time budget"
+        },
+        {
+          "key": "advisor.rules.attempt_budget_reaches_fanout",
+          "before": "Does every fallback route get a turn?",
+          "after": "Fallback coverage"
+        },
+        {
+          "key": "advisor.rules.suspended_scopes",
+          "before": "Is any upstream paused?",
+          "after": "Paused upstreams"
+        },
+        {
+          "key": "advisor.rules.unclassified_refusals",
+          "before": "Is every upstream refusal understood?",
+          "after": "Refusal classification"
+        },
+        {
+          "key": "advisor.consequences.attempt_header_timeout_reachable.ok",
+          "before": "Yes. A call that has not started answering within {{header}} is abandoned; the whole request may take {{route}}, so the time left goes to the next fallback.",
+          "after": "Per-call timeout {{header}} is within the {{route}} request budget, leaving time for fallbacks."
+        },
+        {
+          "key": "advisor.consequences.attempt_header_timeout_reachable.warn",
+          "before": "No. The per-call timeout ({{header}}) is not shorter than the whole-request timeout ({{route}}), so the request always times out first: one hanging upstream spends the whole request and no fallback gets a turn. Set the per-call timeout below the whole-request timeout.",
+          "after": "Per-call timeout {{header}} reaches the {{route}} request budget, leaving no time for fallbacks. Shorten it."
+        },
+        {
+          "key": "advisor.consequences.retry_fits_route_budget.ok",
+          "before": "Yes. Attempts per upstream: {{perTarget}}. Even if every one waits the full {{header}}, together they stay within the request's {{route}}.",
+          "after": "{{perTarget}} attempts of {{header}} each fit within the {{route}} request budget."
+        },
+        {
+          "key": "advisor.consequences.retry_fits_route_budget.warn",
+          "before": "No. Attempts per upstream: {{perTarget}}. If every one waits the full {{header}}, together they exceed the request's {{route}}, so the last retry is cut off by the request timeout and never answers.",
+          "after": "{{perTarget}} attempts of {{header}} exceed the {{route}} request budget; the last retry may be cut off."
+        },
+        {
+          "key": "advisor.consequences.attempt_budget_reaches_fanout.ok",
+          "before": "Yes. At most {{total}} attempts per request and {{perTarget}} per upstream reach {{reachable}} fallbacks; the alias with the most, \"{{model}}\", has {{widest}}, so all of them get a turn.",
+          "after": "{{total}} total attempts, {{perTarget}} per upstream, reach {{reachable}} fallbacks. “{{model}}” has the most ({{widest}}); all are reachable."
+        },
+        {
+          "key": "advisor.consequences.attempt_budget_reaches_fanout.okSingle",
+          "before": "Yes. Every model alias has a single route so far, so none can be left out.",
+          "after": "Each alias has one reachable route."
+        },
+        {
+          "key": "advisor.consequences.attempt_budget_reaches_fanout.warn",
+          "before": "Not all. Alias \"{{model}}\" has {{widest}} fallbacks but the attempt limit reaches only {{reachable}}; the rest are enabled and never called. Raise the per-request attempt limit.",
+          "after": "“{{model}}” has {{widest}} fallbacks; only {{reachable}} are reachable. Raise the total attempt limit."
+        },
+        {
+          "key": "advisor.consequences.suspended_scopes.ok",
+          "before": "No. Every configured fallback can take requests right now.",
+          "after": "All configured fallbacks can accept requests."
+        },
+        {
+          "key": "advisor.consequences.suspended_scopes.warn",
+          "before": "Paused right now: {{suspended}}. Routing skips everything paused. An \"indefinite\" pause does not lift on its own — replace the credential or clear it; the others lift when their window ends.",
+          "after": "Routing skips {{suspended}} paused objects. Indefinite pauses require a replacement credential or manual clearing; others expire automatically."
+        },
+        {
+          "key": "advisor.consequences.suspended_scopes.warnUnclassified",
+          "before": "Paused right now: {{suspended}}. Routing skips everything paused. Some pauses carry no reason: those are triggered by consecutive failures, and the failures may be this instance's own per-call timeout ({{header}}) cutting calls off. Check that timeout before the upstream. An \"indefinite\" pause does not lift on its own — replace the credential or clear it.",
+          "after": "Routing skips {{suspended}} paused objects. Unexplained pauses may come from this instance’s {{header}} per-call timeout; check it first. Indefinite pauses need a replacement credential or manual clearing."
+        },
+        {
+          "key": "advisor.consequences.unclassified_refusals.ok",
+          "before": "Yes. Upstream refusals since start: {{observed}}. Each was handled by its recognized reason (rate limit, quota, credential).",
+          "after": "All {{observed}} upstream refusals since startup were handled by their recognized cause."
+        },
+        {
+          "key": "advisor.consequences.unclassified_refusals.okNone",
+          "before": "No upstream has refused a request since this process started.",
+          "after": "No upstream refusals since startup."
+        },
+        {
+          "key": "advisor.consequences.unclassified_refusals.warn",
+          "before": "Of {{observed}} upstream refusals, {{unclassified}} had no recognizable reason, so they were treated as a brief upstream blip and retried soon. A quota or credential problem among them is being handled the wrong way.",
+          "after": "{{unclassified}} of {{observed}} refusals were unclassified and retried as transient failures. Check for quota or credential problems."
+        },
+        {
+          "key": "operations.deleteConfirm",
+          "before": "Delete the alert webhook “{{name}}”? It stops receiving alert events immediately, its secret is destroyed, and this cannot be undone.",
+          "after": "Delete “{{name}}”? This URL stops receiving alerts and its secret is permanently destroyed. This cannot be undone."
+        },
+        {
+          "key": "operations.auditTrail",
+          "before": "Tamper-evident operation trail",
+          "after": "Audit log"
+        },
+        {
+          "key": "operations.disableConfirm",
+          "before": "Disable the alert webhook “{{name}}”? It will stop receiving alert events immediately.",
+          "after": "Disable “{{name}}”? This URL will stop receiving alerts."
+        },
+        {
+          "key": "operations.secretRequiredForNewDestination",
+          "before": "Changing the endpoint or header requires the secret again. A stored secret is never rebound to a new destination.",
+          "after": "Enter the secret again when changing the URL or header; the saved secret is not transferred."
+        },
+        {
+          "key": "operations.urlHint",
+          "before": "Proxies and redirects are disabled at runtime, and every DNS result is validated",
+          "after": "No proxy or redirects; every DNS result is validated."
+        },
+        {
+          "key": "operations.optionalSecret",
+          "before": "Webhook secret (optional)",
+          "after": "Webhook secret"
+        },
+        {
+          "key": "operations.secretHint",
+          "before": "The secret is bound to the webhook URL and header audience and is never returned",
+          "after": "Bound to this URL and header; never returned after saving."
+        },
+        {
+          "key": "deployments.scheduleTimezoneHint",
+          "before": "The provider's own zone, as an IANA name such as Asia/Shanghai. This is not the accounting timezone and does not move with it.",
+          "after": "The provider’s IANA timezone, such as Asia/Shanghai; independent of the accounting timezone."
+        },
+        {
+          "key": "deployments.cachedInputHint",
+          "before": "Rate for prompt tokens the provider serves from its own cache; usually far below the input rate. Follows the input rate until edited, and 0 bills cache hits as free",
+          "after": "Rate for provider cache hits. Follows the input rate until edited; 0 makes cache hits free."
+        },
+        {
+          "key": "deployments.declareBeyondCatalogDescription",
+          "before": "The built-in catalog recorded nothing about these, so they save with operator-declared evidence rather than reviewed-catalog evidence. If the upstream does not support them, the gateway rejects the request at runtime. Detection measures them instead, and is billable.",
+          "after": "These capabilities save as operator declarations, not catalog evidence. Unsupported calls may be refused upstream. You can detect them instead; detection may incur charges."
+        },
+        {
+          "key": "deployments.widenDeclarationDescription",
+          "before": "This edit turns on capabilities the deployment did not record before. The invocation identity is locked, so detection cannot establish them — saving records them as an administrator's claim.",
+          "after": "New capabilities save as operator declarations. The invocation identity is locked, so detection cannot be repeated."
+        },
+        {
+          "key": "deployments.modelCatalogOfferHint",
+          "before": "This provider interface lists no models. These come from Halro's model catalog and do not mean the account is entitled to them. You can also enter a model ID.",
+          "after": "This list comes from Halro’s model catalog, not account entitlement. You can also enter a model ID."
+        },
+        {
+          "key": "deployments.detectionUnverifiableDescription",
+          "before": "Automatic verification can only ask whether a model chats, embeds, or moderates. Image generation, transcription and speech are never probed — one probe would really produce the content and the charge — so a model whose work is those cannot be established this way. That is not a fault in the model; declare its capabilities under manual setup.",
+          "after": "Automatic checks cover chat, embeddings, and moderation. Image and audio capabilities are not probed because they generate content and charges; declare them manually. Unverified does not mean broken."
+        },
+        {
+          "key": "deployments.detectionRefusedDescription",
+          "before": "This is the provider's answer to this request, not Halro's judgment. Below are the status and identifier it returned, but never its message body. If the model's documentation says otherwise, this interface most likely expects a different request shape. Compare the returned status and identifier with the documentation, or declare the capability under advanced setup.",
+          "after": "The provider refused this probe. Compare the status and identifiers below with its documentation, or declare capabilities manually. Error bodies are not shown."
+        },
+        {
+          "key": "deployments.detectionUnestablishedDescription",
+          "before": "That is not the same as the model refusing them — this run simply did not settle it, so they stay off. Detect again, or declare them yourself under manual setup, if you need them.",
+          "after": "Unverified does not mean unsupported. These capabilities stay off; detect again or declare them manually."
+        },
+        {
+          "key": "deployments.coveredElsewhereDescription",
+          "before": "The built-in catalog lists it under {{profiles}}, and this provider has none of those bound. Pick a provider that binds one, or enable it here — or carry on and declare the capabilities yourself.",
+          "after": "The catalog lists this model under {{profiles}}, which this provider has not bound. Switch providers, enable an interface, or declare capabilities manually."
+        },
+        {
+          "key": "deployments.capabilityModelHint",
+          "before": "Choose the reviewed model actually hosted by this Azure Deployment or custom target. Halro preselects its capabilities, while saving the mapping as your declaration.",
+          "after": "Select the model actually hosted by this target to preselect capabilities. The mapping saves as your declaration."
+        },
+        {
+          "key": "routes.emptyDescription",
+          "before": "An alias is the name an application puts in its model field, such as chat-fast. The application never learns the provider or the upstream model behind it. A route is what publishes one: create a route, give it an alias, and point it at a deployment.",
+          "after": "Give a deployment a public alias for applications to use in their model field."
+        },
+        {
+          "key": "routes.publicAliasHint",
+          "before": "The name applications put in their request. Pick an existing alias to add a target to it; type a new name to start one.",
+          "after": "Choose an existing alias to add a target, or enter a new name to create an alias."
+        },
+        {
+          "key": "routes.priorityHint",
+          "before": "Lower is tried first. When adding a fallback to an existing alias, use a number above every target it already has.",
+          "after": "Lower values run first; give a fallback a value above the existing targets."
+        },
+        {
+          "key": "routes.joinDuplicateDeployment",
+          "before": "A target already points at this deployment, so the save is refused. One deployment is one failure domain, not a fallback.",
+          "after": "This deployment is already a target of the alias and cannot be added twice."
+        },
+        {
+          "key": "routes.joinStrategyConflict",
+          "before": "This alias's enabled targets use the other strategy, so the save is refused. An alias has one strategy.",
+          "after": "An alias has one strategy; this selection differs from its existing targets."
+        },
+        {
+          "key": "projects.keyScopesHint",
+          "before": "inference allows model calls. discovery requires inference and additionally lets the key list the Project's aliases through GET /v1/models; without it the key calls the alias it was given and is told nothing about the others. The remaining scopes separately control Work Unit creation, Run creation, Run attachment, governance reads, and business outcome reports.",
+          "after": "inference allows model calls. discovery lists this project’s aliases and requires inference; without it, known aliases remain callable. Other scopes control Work Unit/Run creation, Run attachment, governance reads, and outcome reports."
+        },
+        {
+          "key": "providers.capabilitySectionDescription",
+          "before": "Choose the applicable capabilities exposed by this connection; each model may select only a subset.",
+          "after": "Each model can expose only a subset."
+        },
+        {
+          "key": "providers.noProxiesDescription",
+          "before": "Add an approved CONNECT proxy here, then select it on a provider connection. Changes are encrypted and hot-loaded without restarting Halro.",
+          "after": "Add an approved CONNECT proxy, then select it on a provider connection."
+        },
+        {
+          "key": "providers.egressTrustDescription",
+          "before": "The proxy can observe the destination IP, port, and TLS server name. Halro still validates the Provider certificate for its original hostname with the system trust store; this is not certificate pinning, and an already trusted proxy CA remains trusted. Provider-executed tools and upstream-side network calls do not pass through this connector.",
+          "after": "Certificates are checked against the provider hostname without pinning; proxy CAs in the system trust store remain trusted. Upstream tools and networking bypass this connector."
+        },
+        {
+          "key": "providers.proxyAuthenticationDescription",
+          "before": "Enter Basic Auth only when the proxy requires it. Credentials are encrypted at rest and are never shown again.",
+          "after": "Credentials are encrypted at rest and never shown again."
+        },
+        {
+          "key": "providers.productHint",
+          "before": "Which product this key was issued for. It decides the endpoint, the balance it draws on, and what the connections built on it can do — a key is sealed to one and cannot be moved to another.",
+          "after": "The product determines the endpoint, balance, and capabilities. A credential cannot be rebound after creation."
+        },
+        {
+          "key": "providers.providerRegionHint",
+          "before": "Used to build this credential's regional Bedrock Mantle endpoint. Configure each Bedrock credential independently in Admin.",
+          "after": "Sets this credential’s regional Bedrock Mantle endpoint."
+        },
+        {
+          "key": "providers.regionByEndpointHint",
+          "before": "One API served from two regional addresses. The accounts, balances and keys are separate, and a key used against the other address fails as an authentication error rather than as a wrong host.",
+          "after": "Regional accounts, balances, and keys are separate. A key used with the wrong endpoint fails authentication."
+        },
+        {
+          "key": "providers.billableProbeDescription",
+          "before": "The Anthropic Messages API has no free metadata endpoint, so a connection test issues a real inference call bounded to one output token. The other two Mantle implementations read model metadata and are not billed.",
+          "after": "Testing Anthropic Messages makes a real inference call, limited to one output token, and may incur a charge. Other Mantle interfaces read free model metadata."
+        },
+        {
+          "key": "providers.anthropicBetasHint",
+          "before": "Empty rejects every anthropic-beta header. Enter a comma-separated list; only the tokens listed here are forwarded, and anything else is refused. Beta features can move work upstream (code execution, MCP egress) or change what a response means, so accept them one at a time. Native mode only.",
+          "after": "Native mode only. Comma-separated; blank or unlisted anthropic-beta tokens are refused. Review each token: betas may enable upstream code execution or MCP networking, or change response semantics."
+        },
+        {
+          "key": "providers.bedrockProjectHint",
+          "before": "Leave empty to use the account default project; a proj_ identifier associates every request from this instance with that project. A wrkspc_ identifier belongs to a different product and is not accepted here.",
+          "after": "Blank uses the account default. A proj_ ID assigns all requests on this connection to that project. wrkspc_ IDs are not accepted."
+        },
+        {
+          "key": "providers.credentialExpiryHint",
+          "before": "When the upstream stops honoring this secret. Leave empty if there is no declared end. A console reminder only — it does not disable the credential.",
+          "after": "A reminder of upstream expiry only; it does not disable the credential. Leave blank if none."
+        },
+        {
+          "key": "providers.validationNameRequired",
+          "before": "Required — the name identifies this connection when you attach a deployment to it.",
+          "after": "Enter a provider name."
+        },
+        {
+          "key": "providers.validationCredentialRequired",
+          "before": "Select an encrypted credential. If the list is empty, save one for this provider type and access surface first.",
+          "after": "Select a credential for this provider type and access surface; create one if none is available."
+        },
+        {
+          "key": "providers.validationCapabilityRequired",
+          "before": "Enable at least one capability, otherwise no deployment can route to this provider.",
+          "after": "Expose at least one capability."
+        },
+        {
+          "key": "providers.matrixUnavailable",
+          "before": "The list of capabilities this instance supports could not be read, so nothing can be created yet. Retry, or check that you are still signed in.",
+          "after": "Capabilities could not be loaded, so creation is unavailable. Retry or sign in again."
+        },
+        {
+          "key": "providers.capabilityEgressWarningDescription",
+          "before": "{{capabilities}}: with this on, the upstream may run tools of its own and make its own network requests to do so. That traffic does not pass through Halro, is not held to the outbound host limits, and does not appear in the audit trail. Turn it on only where you trust the provider to do this.",
+          "after": "{{capabilities}} let the provider run tools and access networks outside Halro, outbound host limits, and the audit trail. Enable only if you trust the provider to do this."
+        },
+        {
+          "key": "providers.apiVersionHint",
+          "before": "Pin the Azure data-plane API version explicitly; an administrator changes it during upgrades",
+          "after": "Pins the Azure API version; an administrator changes it during upgrades."
+        },
+        {
+          "key": "providers.maxConcurrencyHint",
+          "before": "0 means unlimited; protects the upstream account and deployments",
+          "after": "0 means unlimited."
+        },
+        {
+          "key": "policies.ewmaHint",
+          "before": "The system continuously learns traffic changes with recommended settings. Anomalies are recorded and alerted on, but requests are never rejected automatically. Select Advanced settings to customize sensitivity, observation periods, and activation thresholds.",
+          "after": "Learns traffic patterns and records and alerts on anomalies; it never rejects requests automatically. Tune it in Advanced settings."
+        },
+        {
+          "key": "policies.blockWarning",
+          "before": "Temporary block is not a hard rate limiter; requests are allowed until both sample and violation thresholds are met.",
+          "after": "Requests remain allowed until both the sample and violation thresholds are reached."
+        },
+        {
+          "key": "policies.ewmaEnableHint",
+          "before": "When off, no traffic baseline is learned and no spike alerts are emitted. Fixed thresholds are unaffected.",
+          "after": "Disabling stops learning and anomaly alerts; fixed thresholds are unchanged."
+        },
+        {
+          "key": "policies.previewWindowHint",
+          "before": "The “last minute” values represent traffic already recorded before this request. They are used to simulate whether adding this request would cross a policy threshold.",
+          "after": "The last-minute totals exclude this request; the simulation adds it."
+        },
+        {
+          "key": "redaction.disableConfirm",
+          "before": "Disable redaction policy “{{name}}”? Every detection and redaction rule stops immediately. Bound Projects that will send unredacted content to providers: {{count}}.",
+          "after": "Disable redaction policy “{{name}}”? All rules stop immediately. Bound projects: {{count}}. Their content will reach providers unredacted."
+        },
+        {
+          "key": "redaction.strict",
+          "before": "Strict · streaming disabled",
+          "after": "Streaming disabled"
+        },
+        {
+          "key": "redaction.bounded",
+          "before": "Bounded · bounded rules (enforcement rules still conservatively reject streaming)",
+          "after": "Bounded rules only; enforcement rules still reject streaming"
+        },
+        {
+          "key": "redaction.detectStream",
+          "before": "Detect only · streaming detection only",
+          "after": "Streaming detection only; no redaction"
+        },
+        {
+          "key": "redaction.priorityHint",
+          "before": "0–10000; higher values run first, while reject rules always take precedence.",
+          "after": "0–10000; higher values run first."
+        }
+      ],
+      "removed_keys": [
+        "developer.waitingDescription",
+        "custody.posture",
+        "custody.stable",
+        "custody.updated",
+        "settings.overviewEyebrow",
+        "settings.activationCurrentDescription",
+        "settings.mfaNotEnabled",
+        "settings.authenticatorDevicesDescription",
+        "settings.systemDescription",
+        "settings.configPreviewDescription",
+        "settings.effectiveConfigYamlDescription",
+        "dashboard.firstRun.eyebrow",
+        "dashboard.firstRun.pageDescription",
+        "dashboard.firstRun.description",
+        "dashboard.firstRun.context.description",
+        "usage.noCallsDescription",
+        "advisor.description",
+        "operations.auditEmptyDescription",
+        "providers.fixedCapabilityDescription",
+        "providers.providerDependencyHint",
+        "providers.credentialDetailsDescription"
+      ],
+      "added_keys": [
+        "developer.imageURLLabel"
+      ]
+    }
+  },
+  "placeholderChanges": [],
+  "login": {
+    "sourceIdenticalToBaseline": true,
+    "keysPerLanguage": 28,
+    "changedKeys": []
+  }
+}

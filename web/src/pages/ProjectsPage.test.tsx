@@ -55,6 +55,30 @@ describe("projects page", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  it("opens AI integration for each selected project without requiring write access", async () => {
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [project({ enabled: false })], next_cursor: "" } as never);
+    const config = vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "https://gateway.example", enabled: false });
+    const mint = vi.spyOn(api, "createKey");
+    const execute = vi.spyOn(api, "developerExecute");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(["session"], { username: "viewer", role: "read_only" });
+    render(<QueryClientProvider client={client}><NotificationProvider><ProjectsPage /></NotificationProvider></QueryClientProvider>);
+    const entry = await screen.findByRole("button", { name: "AI 接入" });
+    expect(entry).toBeEnabled();
+    entry.focus();
+    fireEvent.click(entry);
+    const dialog = screen.getByRole("dialog", { name: "AI 接入" });
+    expect(within(dialog).getByText("Inference")).toBeVisible();
+    expect(within(dialog).getByText("项目已停用，启用后可导出接入说明。")).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "复制接入说明" })).toBeDisabled();
+    await waitFor(() => expect(config).toHaveBeenCalledOnce());
+    expect(mint).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "AI 接入" })).not.toBeInTheDocument();
+    expect(entry).toHaveFocus();
+  });
+
   it("opens the create form after the policies page filled the shared cache", async () => {
     // The policies page pages the same resources through useInfiniteQuery. Sharing a query
     // key would hand this page {pages} instead of {items} and blank the whole console.
@@ -233,7 +257,65 @@ describe("projects page", () => {
     const enable = screen.getByRole("checkbox", { name: /启用项目/ });
     const actions = screen.getByRole("button", { name: "创建项目" }).closest<HTMLElement>(".sticky-form-actions")!;
     expect(actions).toContainElement(enable);
-    expect(within(actions).getByText("启用项目 · 已启用")).toBeVisible();
+    expect(within(actions).getByText("启用项目")).toBeVisible();
+  });
+
+  it("keeps budget and model access visible while folding optional controls with summaries", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByLabelText("每日预算（USD）")).toBeVisible();
+    expect(within(dialog).getByText("允许的公共模型别名")).toBeVisible();
+    const capacity = within(dialog).getByText("请求限制").closest("details")!;
+    expect(capacity).not.toHaveAttribute("open");
+    expect(capacity.querySelector("summary")).toHaveTextContent("60 RPM · 10万 TPM");
+    expect(within(dialog).getByLabelText("最大并发")).not.toBeVisible();
+    fireEvent.click(capacity.querySelector("summary")!);
+    expect(within(dialog).getByLabelText("最大并发")).toBeVisible();
+    fireEvent.change(within(dialog).getByLabelText("最大并发"), { target: { value: "12" } });
+    fireEvent.click(capacity.querySelector("summary")!);
+    expect(capacity.querySelector("summary")).toHaveTextContent("并发 12");
+  });
+
+  it("reveals a collapsed security section when submitting an invalid CIDR", async () => {
+    const create = vi.spyOn(api, "createProject").mockResolvedValue({} as never);
+    vi.mocked(api.routes).mockResolvedValue({ items: [
+      { id: "rt_live", public_model: "chat", deployment_id: "dep_live", strategy: "ordered", enabled: true },
+    ] } as never);
+    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment("dep_live")] } as never);
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "Protected" } });
+    fireEvent.click(await screen.findByRole("checkbox", { name: /chat/ }));
+    const security = screen.getByText("安全与访问").closest("details")!;
+    fireEvent.click(security.querySelector("summary")!);
+    fireEvent.change(screen.getByLabelText(/^允许的 CIDR/), { target: { value: "invalid-range" } });
+    fireEvent.click(security.querySelector("summary")!);
+    fireEvent.submit(screen.getByRole("button", { name: "创建项目" }).closest("form")!);
+    await waitFor(() => expect(security).toHaveAttribute("open"));
+    expect(screen.getByLabelText(/^允许的 CIDR/)).toHaveAttribute("aria-invalid", "true");
+    await waitFor(() => expect(screen.getByLabelText(/^允许的 CIDR/)).toHaveFocus());
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("retains configured run ceilings and queue depth in collapsed summaries", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
+    const run = screen.getByText("运行治理", { selector: ".disclosure-title" }).closest("details")!;
+    fireEvent.click(run.querySelector("summary")!);
+    fireEvent.click(within(run).getByRole("checkbox"));
+    fireEvent.change(screen.getByLabelText("最大活跃 Runs"), { target: { value: "25" } });
+    fireEvent.change(screen.getByLabelText("最大开放 Work Units"), { target: { value: "40" } });
+    fireEvent.click(run.querySelector("summary")!);
+    expect(run.querySelector("summary")).toHaveTextContent("Runs ≤ 25 · Work Units ≤ 40");
+    expect(screen.getByLabelText("最大活跃 Runs")).not.toBeVisible();
+
+    const deferred = screen.getByText("延迟取回", { selector: ".disclosure-title" }).closest("details")!;
+    fireEvent.click(deferred.querySelector("summary")!);
+    fireEvent.click(within(deferred).getByRole("checkbox"));
+    fireEvent.change(screen.getByLabelText(/^队列深度/), { target: { value: "30" } });
+    fireEvent.click(deferred.querySelector("summary")!);
+    expect(deferred.querySelector("summary")).toHaveTextContent("已启用 · 队列 30");
   });
 
   it("renders a project whose allowed_models came back as null", async () => {
@@ -527,7 +609,7 @@ describe("projects page", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
     fireEvent.change(screen.getByLabelText("名称"), { target: { value: "Renamed" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存并应用" }));
 
     await waitFor(() => expect(update).toHaveBeenCalledOnce());
     expect(update.mock.calls[0][1]).toMatchObject({ max_request_bytes: bytes });
@@ -569,7 +651,7 @@ describe("projects page", () => {
     fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
     expect(screen.getByLabelText(/流式请求时长上限/)).toHaveValue(600);
     fireEvent.change(screen.getByLabelText("名称"), { target: { value: "Renamed" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存并应用" }));
 
     await waitFor(() => expect(update).toHaveBeenCalledOnce());
     expect(update.mock.calls[0][1]).toMatchObject({ max_stream_duration_seconds: 600 });

@@ -29,3 +29,7 @@ beforeEach(() => {
     providerProfilesFixture as unknown as ProviderProfilesCatalog,
   );
 });
+
+beforeEach(() => {
+  vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: false, policy: "optional", required: false, authenticators: [] });
+});

@@ -9,6 +9,19 @@ import { RedactionPoliciesSection } from "./RedactionPoliciesSection";
 describe("RedactionPoliciesSection form safety", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("offers clearing filters when configured policies have no matches", async () => {
+    renderSection([{
+      id: "rdp_existing", name: "Production", enabled: true, mode: "strict", revision: 7,
+      rules: [],
+    } as unknown as RedactionPolicy]);
+    expect(screen.getByText("Production")).toBeVisible();
+    fireEvent.change(screen.getByPlaceholderText("名称或策略 ID"), { target: { value: "absent" } });
+    expect(screen.getByText("没有匹配结果")).toBeVisible();
+    expect(screen.queryByText("还没有脱敏策略")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "清除筛选" }));
+    expect(screen.getByText("Production")).toBeVisible();
+  });
+
   it("creates policies disabled and converts enabled rules when detect-only streaming is selected", async () => {
     const create = vi.spyOn(api, "createRedactionPolicy").mockResolvedValue({} as never);
     renderSection();
@@ -17,7 +30,7 @@ describe("RedactionPoliciesSection form safety", () => {
     const dialog = screen.getByRole("dialog", { name: "创建脱敏策略" });
     const actions = dialog.querySelector<HTMLElement>(".redaction-form-actions")!;
     expect(within(actions).getByRole("checkbox", { name: "启用此策略" })).not.toBeChecked();
-    expect(within(dialog).getByText("启用此策略 · 已禁用")).toBeInTheDocument();
+    expect(within(dialog).getByText("启用此策略")).toBeInTheDocument();
 
     fireEvent.change(within(dialog).getByLabelText("策略名称"), { target: { value: "Safe stream" } });
     fireEvent.click(within(dialog).getByRole("radio", { name: /仅检测/ }));
@@ -25,7 +38,7 @@ describe("RedactionPoliciesSection form safety", () => {
     expect(within(dialog).getByLabelText("动作")).toHaveValue("detect_only");
     expect(within(dialog).getByRole("option", { name: "掩码" })).toBeDisabled();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "编译并保存" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存并应用" }));
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       name: "Safe stream",
@@ -47,26 +60,26 @@ describe("RedactionPoliciesSection form safety", () => {
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "入站" }));
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "出站" }));
     fireEvent.change(within(dialog).getByLabelText("类型"), { target: { value: "regex" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "编译并保存" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存并应用" }));
 
     expect(create).not.toHaveBeenCalled();
     expect(within(dialog).getByText("请输入规则名称")).toBeInTheDocument();
 
     fireEvent.change(within(dialog).getByLabelText(/^名称/), { target: { value: "Custom" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "编译并保存" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存并应用" }));
     expect(within(dialog).getByText("至少选择一个作用方向")).toBeInTheDocument();
 
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "入站" }));
     fireEvent.change(within(dialog).getByLabelText(/^优先级/), { target: { value: "" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "编译并保存" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存并应用" }));
     expect(within(dialog).getByText("请输入 0–10000 之间的整数")).toBeInTheDocument();
 
     fireEvent.change(within(dialog).getByLabelText(/^优先级/), { target: { value: "10" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "编译并保存" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存并应用" }));
     expect(within(dialog).getByText("请输入 RE2 正则表达式")).toBeInTheDocument();
 
     fireEvent.change(within(dialog).getByLabelText("类型"), { target: { value: "dictionary" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "编译并保存" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存并应用" }));
     expect(within(dialog).getByText("至少输入一个字典项")).toBeInTheDocument();
     expect(create).not.toHaveBeenCalled();
   });
@@ -129,9 +142,9 @@ describe("RedactionPoliciesSection form safety", () => {
     // Editing an existing policy can take enforcement away, so the server asks
     // who is doing it — but only once the re-authentication window has closed,
     // which is what the first save finds out.
-    fireEvent.click(within(dialog).getByRole("button", { name: "编译并保存" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存并应用" }));
     fireEvent.change(await within(dialog).findByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "编译并保存" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存并应用" }));
 
     await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
     expect(update).toHaveBeenLastCalledWith("rdp_existing", expect.objectContaining({
@@ -170,7 +183,7 @@ describe("RedactionPoliciesSection form safety", () => {
     // so it asks first — the same weight the delete action carries.
     fireEvent.click(screen.getByRole("button", { name: "禁用" }));
     const dialog = await screen.findByRole("alertdialog");
-    expect(within(dialog).getByText(/未脱敏内容直连服务商/)).toBeVisible();
+    expect(within(dialog).getByText(/内容会未经脱敏发往服务商/)).toBeVisible();
     fireEvent.click(within(dialog).getByRole("button", { name: "禁用" }));
     fireEvent.change(await within(dialog).findByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "禁用" }));
@@ -198,7 +211,7 @@ describe("RedactionPoliciesSection form safety", () => {
     fireEvent.change(items, { target: { value: "客户 名单\n内部 代号" } });
     expect(items).toHaveValue("客户 名单\n内部 代号");
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "编译并保存" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存并应用" }));
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     // Normalisation happens once, at the boundary.
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
@@ -228,12 +241,12 @@ describe("RedactionPoliciesSection form safety", () => {
     fireEvent.click(await screen.findByRole("button", { name: "＋ 新建脱敏策略" }));
     const dialog = screen.getByRole("dialog", { name: "创建脱敏策略" });
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "编译并保存" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存并应用" }));
     expect(within(dialog).getByLabelText(/^策略名称/)).toHaveFocus();
 
     fireEvent.change(within(dialog).getByLabelText(/^策略名称/), { target: { value: "Policy" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "移除" }));
-    fireEvent.click(within(dialog).getByRole("button", { name: "编译并保存" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存并应用" }));
     expect(within(dialog).getByRole("button", { name: "＋ 添加规则" })).toHaveFocus();
   });
 
@@ -293,7 +306,7 @@ describe("RedactionPoliciesSection form safety", () => {
     fireEvent.click(await screen.findByRole("button", { name: "＋ 新建脱敏策略" }));
     const dialog = screen.getByRole("dialog", { name: "创建脱敏策略" });
     fireEvent.change(within(dialog).getByLabelText("策略名称"), { target: { value: "Pending" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "编译并保存" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存并应用" }));
 
     await waitFor(() => expect(within(dialog).getByRole("button", { name: "取消" })).toBeDisabled());
     expect(within(dialog).getByRole("button", { name: "关闭" })).toBeDisabled();

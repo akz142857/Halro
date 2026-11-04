@@ -181,7 +181,7 @@ export function UsageSummaryPanel() {
       <article className="panel chart-panel">
         <header className="panel-header dashboard-panel-header">
           <div>
-            <p className="eyebrow">{t("usage.summary.trendEyebrow", { start: report.start, end: report.end })}</p>
+            <p className="panel-note">{t("usage.summary.trendEyebrow", { start: report.start, end: report.end })}</p>
             <h2>{t(`dashboard.trendMetrics.${metric}`)}</h2>
           </div>
           <SegmentedTabs
@@ -217,7 +217,6 @@ export function UsageSummaryPanel() {
         <article className="panel">
           <header className="panel-header">
             <div>
-              <p className="eyebrow">{t("usage.summary.byDimension")}</p>
               <h2>{t(`usage.summary.dimensions.${groupedBy}`)}</h2>
             </div>
             {report.groups_truncated && (

@@ -5,13 +5,12 @@ import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
 import { OnboardingContextBanner } from "../OnboardingContext";
 import { api } from "../api";
-import { ConfirmButton, EmptyState, ErrorState, Field, Loading, PageHeader, type ReauthValues } from "../components";
+import { requestBody, codeExample, validGatewayBaseURL, integrationPath, type IntegrationEndpoint as Endpoint, type IntegrationLanguage as Language } from "../integration";
+import { ConfirmButton, DisclosureSection, EmptyState, ErrorState, Field, Loading, Modal, PageHeader, type ReauthValues } from "../components";
 import { navigate } from "../navigation";
 import { money, useInstantFormatter } from "../format";
 import type { UsageRequestSummary } from "../types";
 
-type Endpoint = "responses" | "chat" | "embeddings";
-type Language = "curl" | "javascript" | "python" | "go" | "java";
 type RequestMode = "form" | "json";
 type ResponseView = "body" | "headers";
 type ExecutionOutcome = "idle" | "running" | "completed" | "httpError" | "cancelled" | "failed" | "truncated";
@@ -148,7 +147,8 @@ export function DeveloperPage() {
   const [language, setLanguage] = useState<Language>("curl");
   const [copyStatus, setCopyStatus] = useState("");
   const [responseView, setResponseView] = useState<ResponseView>("body");
-  const [codeExpanded, setCodeExpanded] = useState(false);
+  const [codeDrawerOpen, setCodeDrawerOpen] = useState(false);
+  const [connectionSettingsOpen, setConnectionSettingsOpen] = useState(false);
   const [execution, setExecution] = useState<ExecutionState>(emptyExecution);
   // This session's calls. A debugging tool that forgets the previous request
   // cannot answer "what did I change", which is most of what debugging is.
@@ -229,7 +229,7 @@ export function DeveloperPage() {
   const parsedJSON = useMemo(() => parseJSON(rawJSON), [rawJSON]);
   const body = requestMode === "json" ? parsedJSON.value : formBody;
   const isStreaming = endpoint !== "embeddings" && body?.stream === true;
-  const path = endpoint === "chat" ? "/v1/chat/completions" : `/v1/${endpoint}`;
+  const path = integrationPath(endpoint);
   const gatewayURLValid = validGatewayBaseURL(gatewayURL);
   // A local file is megabytes of base64: pasted into an integration sample it drowns the
   // request it is meant to explain, so the sample names the file where the real request
@@ -317,11 +317,10 @@ export function DeveloperPage() {
     const timer = setTimeout(() => setResponseCopyStatus(""), copyStatusTimeoutMillis);
     return () => clearTimeout(timer);
   }, [responseCopyStatus]);
-  // Picking a language is only meaningful if the sample is on screen, so reveal it.
+  // Language changes affect only the integration sample, never the request editor.
   const selectLanguage = (next: Language) => {
     setLanguage(next);
     setCopyStatus("");
-    setCodeExpanded(true);
   };
   const fillJSONFromForm = () => {
     setRawJSON(JSON.stringify(formBody, null, 2));
@@ -537,9 +536,8 @@ export function DeveloperPage() {
   return (
     <section className="developer-page">
       <PageHeader
-        eyebrow={t("developer.eyebrow")}
         title={t("developer.title")}
-        description={t("developer.description")}
+        action={selectedProject && developerConfig.data?.enabled !== false ? <button type="button" className="button secondary" onClick={() => setCodeDrawerOpen(true)}>{t("developer.integrationCode")}</button> : undefined}
       />
       <OnboardingContextBanner />
       {developerConfig.data?.enabled === false && (
@@ -557,10 +555,8 @@ export function DeveloperPage() {
         <div className="developer-workbench">
           <section className="developer-config-panel" aria-labelledby="developer-request-setup">
             <header className="developer-panel-header">
-              <div><p className="eyebrow">{t("developer.stepRequest")}</p><h2 id="developer-request-setup">{t("developer.requestSetup")}</h2></div>
-              {/* A state label, not an action: in the page header's action slot
-                  it occupied the place a control belongs. */}
-              <span className="badge developer-preview-badge">{t("developer.previewBadge")}</span>
+              <div><h2 id="developer-request-setup">{t("developer.requestSetup")}</h2></div>
+              <button type="button" className="button ghost developer-connection-settings" aria-label={t("developer.connectionSettings")} onClick={() => setConnectionSettingsOpen(true)}><span className="developer-connection-project">{selectedProject.name}</span><span>{t("developer.connectionSettings")}</span></button>
             </header>
             <div className="developer-mode-tabs" role="tablist" aria-label={t("developer.requestMode")}>
               <button id="developer-request-tab-form" type="button" role="tab" tabIndex={requestMode === "form" ? 0 : -1} aria-selected={requestMode === "form"} aria-controls={requestMode === "form" ? "developer-request-panel-form" : undefined} onKeyDown={(event) => moveTab(event, ["form", "json"], requestMode, selectRequestMode, "developer-request-tab")} onClick={() => selectRequestMode("form")}>{t("developer.formMode")}</button>
@@ -568,14 +564,9 @@ export function DeveloperPage() {
             </div>
             <div id={`developer-request-panel-${requestMode}`} role="tabpanel" aria-labelledby={`developer-request-tab-${requestMode}`}>
             <div className="developer-config-fields">
-              <Field label={t("developer.project")} hint={t("developer.projectFilterHint")}>
-                <select value={selectedProject.id} onChange={(event) => setProjectID(event.target.value)}>
-                  {availableProjects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}
-                </select>
-              </Field>
               {/* In JSON mode the body below is the source of truth; leaving the picker live
                   would show one model while sending — and billing — another. */}
-              <Field label={t("developer.publicModel")} hint={requestMode === "json" ? t("developer.jsonModeOverride") : aliasTarget || undefined}>
+              <Field label={t("developer.publicModel")} hint={requestMode === "json" ? t("developer.jsonModeOverride") : undefined}>
                 <select value={model} disabled={requestMode === "json"} onChange={(event) => setModel(event.target.value)}>
                   {(selectedProject.allowed_models ?? []).map((route) => <option value={route} key={route}>{route}</option>)}
                 </select>
@@ -587,15 +578,8 @@ export function DeveloperPage() {
                   <option value="embeddings">{t("developer.endpointEmbeddings")}</option>
                 </select>
               </Field>
-              <Field
-                label={t("developer.gatewayURL")}
-                hint={developerConfig.isError ? t("developer.gatewayURLUnavailable") : t("developer.gatewayURLHint")}
-                error={gatewayURL && !gatewayURLValid ? t("developer.invalidGatewayURL") : undefined}
-              >
-                <input autoComplete="off" type="url" value={gatewayURL} onChange={(event) => setGatewayURL(event.target.value)} spellCheck={false} />
-              </Field>
               <div className="field developer-key-field">
-                <label htmlFor="developer-gateway-key">{t("developer.gatewayKey")}</label>
+                <div className="developer-key-heading"><label htmlFor="developer-gateway-key">{t("developer.gatewayKey")}</label><small id="developer-gateway-key-hint">{t("developer.keyPageOnly")}</small></div>
                 <div className="developer-secret-input">
                   <input
                     id="developer-gateway-key"
@@ -612,18 +596,18 @@ export function DeveloperPage() {
                     {showGatewayKey ? t("developer.hideKey") : t("developer.showKey")}
                   </button>
                   <ConfirmButton
-                    className="button secondary developer-create-key"
+                    className="button ghost developer-create-key"
                     label={t("developer.createDebugKey")}
-                    confirmLabel={t("auth.stepUpMintKey")}
+                    confirmLabel={t("developer.debugKeyStepUpHint")}
                     disabled={readOnly || createDebugKey.isPending}
                     onOpen={beginDebugKeyOperation}
                     requireStepUp
                     onConfirm={(reauth) => createDebugKey.mutateAsync(reauth)}
                   />
                 </div>
-                <small id="developer-gateway-key-hint">{t("developer.gatewayKeyHint")}</small>
-                <small className="developer-key-stepup">{t("developer.debugKeyStepUpHint")}</small>
-                {createDebugKey.isError && <ErrorState error={createDebugKey.error} />}
+                {/* The confirmation owns this mutation's failures and step-up.
+                    Repeating its error here mislabels the expected identity
+                    challenge as a failure and leaves it behind after Cancel. */}
                 {createdKeyName && (
                   <p className="developer-created-key" role="status">
                     {t("developer.debugKeyCreated", { name: createdKeyName })}{" "}
@@ -639,8 +623,8 @@ export function DeveloperPage() {
                     <textarea autoComplete="off" rows={6} value={input} placeholder={t("developer.inputPlaceholder")} onChange={(event) => setInput(event.target.value)} />
                   </Field>
                   {endpoint !== "embeddings" && (
-                    <div className="field developer-image-field">
-                      <label htmlFor="developer-image-url">{t("developer.images")}</label>
+                    <DisclosureSection className="developer-image-field" title={t("developer.images")} summary={[images.length ? t("developer.imageCount", { count: images.length }) : "", images.some((image) => !image.inline) ? t("developer.remoteImageFetch") : ""].filter(Boolean).join(" · ")} defaultOpen={images.length > 0} invalid={Boolean(imageProblem)}>
+                      <label htmlFor="developer-image-url">{t("developer.imageURLLabel")}</label>
                       <div className="developer-image-add">
                         <input autoComplete="off"
                           id="developer-image-url"
@@ -697,16 +681,8 @@ export function DeveloperPage() {
                         </ul>
                       )}
                       <small id="developer-image-hint">{t("developer.imagesHint")}</small>
-                    </div>
+                    </DisclosureSection>
                   )}
-                  <div className="developer-response-mode">
-                    <span>{t("developer.responseMode")}</span>
-                    <div role="group" aria-label={t("developer.responseMode")}>
-                      <button type="button" aria-pressed={!streamRequested} className={!streamRequested ? "selected" : ""} onClick={() => setStream(false)}>{t("developer.standardResponse")}</button>
-                      <button type="button" aria-pressed={streamRequested} className={streamRequested ? "selected" : ""} disabled={endpoint === "embeddings"} onClick={() => setStream(true)}>{t("developer.sseResponse")}</button>
-                    </div>
-                    {endpoint === "embeddings" && <small>{t("developer.embeddingsNoStream")}</small>}
-                  </div>
                 </>
               ) : (
                 <>
@@ -724,17 +700,15 @@ export function DeveloperPage() {
                 </>
               )}
             </div>
-            <div className="developer-request-summary" role="group" aria-label={t("developer.requestDetails")}>
-              <div><small>{t("developer.method")}</small><strong>POST</strong></div>
-              <div><small>{t("developer.path")}</small><code>{path}</code></div>
-              <div><small>{t("developer.auth")}</small><strong>{t("developer.authValue")}</strong></div>
-              <div><small>{t("developer.bodySize")}</small><strong>{requestLimit > 0 ? `${formatBytes(requestBytes)} / ${formatBytes(requestLimit)}` : formatBytes(requestBytes)}</strong></div>
-            </div>
             <div className="developer-send-bar">
               <p className="developer-send-note">{t("developer.costReminder")}</p>
               {/* Send and cancel are separate controls: a double click on one toggling button
                   used to abort a request the gateway had already begun billing. */}
               <div className="developer-send-actions">
+                {requestMode === "form" && <div className="developer-response-mode">
+                    <label className="developer-stream-control"><input type="checkbox" checked={streamRequested} disabled={endpoint === "embeddings"} onChange={(event) => setStream(event.target.checked)} /><span>{t("developer.stream")}</span></label>
+                    {endpoint === "embeddings" && <small>{t("developer.embeddingsNoStream")}</small>}
+                  </div>}
                 <button type="button" className="button primary developer-send" disabled={readOnly || !canSend || running} aria-busy={running} onClick={execute}>
                   {t("developer.sendRequest")}
                 </button>
@@ -754,45 +728,12 @@ export function DeveloperPage() {
           </section>
 
           <div className="developer-output-column">
-            <section className="developer-code-panel" aria-labelledby="developer-code-heading">
-              <header className="developer-panel-header compact">
-                {/* Numbered 02 once, between the request and its response,
-                    while defaulting to collapsed — the sample is a by-product
-                    of the request, not a step on the way to sending it. */}
-                <div><h2 id="developer-code-heading">{t("developer.integrationCode")}</h2></div>
-                <button className="button ghost" disabled={!code} onClick={copy}>{t("developer.copyCode")}</button>
-              </header>
-              {/* The toggle sits beside the tablist, not inside it: a tablist may only contain tabs. */}
-              <div className="developer-code-tabbar">
-                <div className="developer-code-tabs" role="tablist" aria-label={t("developer.codeLanguage")}>
-                  {languages.map((item) => (
-                    <button id={`developer-code-tab-${item}`} type="button" role="tab" tabIndex={language === item ? 0 : -1} aria-selected={language === item} aria-controls={language === item ? `developer-code-panel-${item}` : undefined} onKeyDown={(event) => moveTab(event, languages, language, selectLanguage, "developer-code-tab")} onClick={() => selectLanguage(item)} key={item}>{languageLabel(item)}</button>
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  className="button ghost developer-code-toggle"
-                  aria-expanded={codeExpanded}
-                  aria-controls={`developer-code-panel-${language}`}
-                  onClick={() => setCodeExpanded((value) => !value)}
-                >
-                  <span>{codeExpanded ? t("developer.collapseCode") : t("developer.expandCode")}</span>
-                  {/* Reserves the other label's width so toggling never resizes the bar. */}
-                  <span aria-hidden="true">{codeExpanded ? t("developer.expandCode") : t("developer.collapseCode")}</span>
-                </button>
-              </div>
-              <div id={`developer-code-panel-${language}`} role="tabpanel" aria-labelledby={`developer-code-tab-${language}`}>
-                {codeExpanded && <pre className="developer-code"><code>{code || t("developer.codeUnavailable")}</code></pre>}
-                <footer className="developer-code-footnote"><span>{t("developer.secretBoundary")}</span><span role="status" aria-live="polite">{copyStatus}</span></footer>
-              </div>
-            </section>
-
             <section className="developer-response-panel" aria-labelledby="developer-response-heading">
               <header className="developer-panel-header compact">
-                <div><p className="eyebrow">{t("developer.stepResponse")}</p><h2 id="developer-response-heading">{t("developer.response")}</h2></div>
-                <button className="button ghost" disabled={!execution.usageAvailable} onClick={() => navigate(`/admin/usage?request_id=${encodeURIComponent(execution.requestID)}`)}>{t("developer.openUsage")}</button>
+                <div><h2 id="developer-response-heading">{t("developer.response")}</h2></div>
+                {execution.outcome !== "idle" && <button className="button ghost" disabled={!execution.usageAvailable} onClick={() => navigate(`/admin/usage?request_id=${encodeURIComponent(execution.requestID)}`)}>{t("developer.openUsage")}</button>}
               </header>
-              <div className="developer-response-meta" role="group" aria-label={t("developer.responseMetadata")}>
+              {execution.outcome !== "idle" && <div className="developer-response-meta" role="group" aria-label={t("developer.responseMetadata")}>
                 <div><small>{t("developer.httpStatus")}</small><strong>{execution.status ? `${execution.status} ${execution.statusText || ""}`.trim() : "—"}</strong></div>
                 <div><small>{t("developer.requestID")}</small><code>{execution.requestID || "—"}</code></div>
                 <div><small>{t("developer.latency")}</small><strong>{execution.latency == null ? running ? "…" : "—" : `${execution.latency} ms`}</strong></div>
@@ -804,8 +745,7 @@ export function DeveloperPage() {
                   <small>{t("developer.billedProject")}</small>
                   <strong>{settlement
                     ? billedProject?.name || settlement.project_id
-                    : execution.outcome === "idle" ? "—"
-                      : execution.settlementUnavailable ? t("developer.settlementMissing") : t("developer.settlementPending")}</strong>
+                    : execution.settlementUnavailable ? t("developer.settlementMissing") : t("developer.settlementPending")}</strong>
                 </div>
                 <div>
                   <small>{t("developer.tokens")}</small>
@@ -824,7 +764,7 @@ export function DeveloperPage() {
                     : "—"}</strong>
                   {settlement && execution.estimated?.cost && <small className="developer-settlement-note">{t("developer.costEstimated")}</small>}
                 </div>
-              </div>
+              </div>}
               {billedElsewhere && (
                 <p className="developer-billing-mismatch" role="status">
                   {t("developer.billedElsewhere", {
@@ -864,7 +804,7 @@ export function DeveloperPage() {
                 </div>
                 {execution.outcome === "idle" ? <div className="developer-response-empty" data-view={responseView}>
                   <span aria-hidden="true">{responseView === "body" ? "{ }" : "H"}</span>
-                  <div><strong>{t("developer.awaitingResponse")}</strong><p>{responseView === "body" ? t("developer.awaitingBody") : t("developer.awaitingHeaders")}</p></div>
+                  <strong>{t("developer.awaitingResponse")}</strong>
                 </div> : waitingForFirstBytes ? <div className="developer-response-waiting">
                   {/* "The body is empty" is a finding, and while the request is in
                       flight it is the wrong one: nothing has arrived yet. A
@@ -873,13 +813,11 @@ export function DeveloperPage() {
                   <span className="loading-bar" aria-hidden="true" />
                   <div>
                     <strong>{t(responseStreaming ? "developer.waitingForFirstEvent" : "developer.waitingForResponse")}</strong>
-                    <p>{t("developer.waitingDescription")}</p>
                   </div>
                 </div> : <div className="developer-response-result">
                   <pre tabIndex={0} role="region" aria-label={responseView === "body" ? t("developer.responseBody") : t("developer.responseHeaders")}><code>{responseView === "body" ? execution.body || (execution.outcome === "failed" ? execution.error : "") || t(execution.outcome === "cancelled" ? "developer.cancelledBeforeBody" : "developer.emptyResponseBody") : execution.headers || t("developer.awaitingHeaders")}</code></pre>
                 </div>}
               </div>
-              <footer className="developer-response-footnote">{t("developer.responseDescription")}</footer>
             </section>
 
             {/* Debugging is comparing one call against the last one, and the
@@ -887,7 +825,7 @@ export function DeveloperPage() {
             {history.length > 0 && (
               <section className="developer-history-panel" aria-labelledby="developer-history-heading">
                 <header className="developer-panel-header compact">
-                  <div><p className="eyebrow">{t("developer.stepHistory")}</p><h2 id="developer-history-heading">{t("developer.history")}</h2></div>
+                  <div><h2 id="developer-history-heading">{t("developer.history")}</h2></div>
                   <button className="button ghost" onClick={() => setHistory([])}>{t("developer.clearHistory")}</button>
                 </header>
                 <ul className="developer-history-list">
@@ -941,6 +879,41 @@ export function DeveloperPage() {
               </section>
             )}
           </div>
+          {connectionSettingsOpen && <Modal title={t("developer.connectionSettings")} onClose={() => setConnectionSettingsOpen(false)}>
+            <div className="developer-connection-modal">
+              <Field label={t("developer.project")} hint={t("developer.projectFilterHint")}>
+                <select value={selectedProject.id} onChange={(event) => setProjectID(event.target.value)}>
+                  {availableProjects.map((project) => <option value={project.id} key={project.id}>{project.name}</option>)}
+                </select>
+              </Field>
+              {aliasTarget && <p className="developer-connection-target">{aliasTarget}</p>}
+              <p className="panel-note">{t("developer.gatewayKeyHint")}</p>
+            </div>
+          </Modal>}
+          {codeDrawerOpen && <Modal drawer title={t("developer.integrationCode")} onClose={() => setCodeDrawerOpen(false)}>
+            <section className="developer-code-panel developer-code-drawer" aria-label={t("developer.integrationCode")}>
+              <Field
+                label={t("developer.gatewayURL")}
+                hint={developerConfig.isError ? t("developer.gatewayURLUnavailable") : t("developer.gatewayURLHint")}
+                error={gatewayURL && !gatewayURLValid ? t("developer.invalidGatewayURL") : undefined}
+              >
+                <input autoComplete="off" type="url" value={gatewayURL} onChange={(event) => setGatewayURL(event.target.value)} spellCheck={false} />
+              </Field>
+              <code className="developer-code-path">POST {path} · {formatBytes(requestBytes)}</code>
+              <div className="developer-code-tabbar">
+                <div className="developer-code-tabs" role="tablist" aria-label={t("developer.codeLanguage")}>
+                  {languages.map((item) => (
+                    <button id={`developer-code-tab-${item}`} type="button" role="tab" tabIndex={language === item ? 0 : -1} aria-selected={language === item} aria-controls={language === item ? `developer-code-panel-${item}` : undefined} onKeyDown={(event) => moveTab(event, languages, language, selectLanguage, "developer-code-tab")} onClick={() => selectLanguage(item)} key={item}>{languageLabel(item)}</button>
+                  ))}
+                </div>
+                <button className="button ghost" disabled={!code} onClick={copy}>{t("developer.copyCode")}</button>
+              </div>
+              <div id={`developer-code-panel-${language}`} role="tabpanel" aria-labelledby={`developer-code-tab-${language}`}>
+                <pre className="developer-code"><code>{code || t("developer.codeUnavailable")}</code></pre>
+                <footer className="developer-code-footnote"><span>{t("developer.secretBoundary")}</span><span role="status" aria-live="polite">{copyStatus}</span></footer>
+              </div>
+            </section>
+          </Modal>}
         </div>
       )}
     </section>
@@ -1023,24 +996,6 @@ function parseJSON(value: string): { value?: Record<string, unknown>; error: boo
   }
 }
 
-function requestBody(endpoint: Endpoint, model: string, input: string, stream: boolean, images: readonly ImageInput[]) {
-  if (endpoint === "embeddings") return { model, input };
-  if (endpoint === "chat") {
-    const content = images.length
-      ? [{ type: "text", text: input }, ...images.map((image) => ({ type: "image_url", image_url: { url: image.url } }))]
-      : input;
-    return { model, messages: [{ role: "user", content }], stream };
-  }
-  if (!images.length) return { model, input, stream };
-  // Responses carries the image on the message item, and its content parts are decoded
-  // strictly: image_url is the URL itself, not an object.
-  const content = [
-    { type: "input_text", text: input },
-    ...images.map((image) => ({ type: "input_image", image_url: image.url })),
-  ];
-  return { model, input: [{ type: "message", role: "user", content }], stream };
-}
-
 /** The integration sample stands in for the base64 rather than reprinting it. */
 function sampleImage(image: ImageInput): ImageInput {
   return image.inline ? { ...image, url: `data:${image.mediaType};base64,<BASE64_OF_${image.name}>` } : image;
@@ -1104,52 +1059,4 @@ function moveTab<T extends string>(event: KeyboardEvent<HTMLButtonElement>, item
   const next = items[nextIndex];
   select(next);
   requestAnimationFrame(() => document.getElementById(idPrefix + "-" + next)?.focus());
-}
-
-function validGatewayBaseURL(value: string) {
-  try {
-    const parsed = new URL(value);
-    return (parsed.protocol === "http:" || parsed.protocol === "https:") && !parsed.username && !parsed.password && !parsed.search && !parsed.hash;
-  } catch {
-    return false;
-  }
-}
-
-// Java text blocks keep the JSON readable without escaping every quote. The closing
-// delimiter has to sit on its own line, and any embedded backslash still needs escaping.
-function javaTextBlock(json: string) {
-  return `"""\n${json.replace(/\\/g, "\\\\").replace(/"""/g, '\\"\\"\\"')}\n"""`;
-}
-
-function shellQuote(value: string) {
-  return "'" + value.replace(/'/g, "'\"'\"'") + "'";
-}
-
-function curlExample(url: string, json: string, streaming: boolean) {
-  return [
-    `curl${streaming ? " -N" : ""} ${shellQuote(url)}`,
-    "  -H \"Authorization: Bearer $HALRO_API_KEY\"",
-    "  -H \"Content-Type: application/json\"",
-    // Halro does not negotiate on Accept, but a client that asks for the
-    // stream it is about to read is the shape every official SDK sends, and it
-    // is what keeps working if negotiation is ever added.
-    ...(streaming ? ["  -H \"Accept: text/event-stream\""] : []),
-    `  --data-binary ${shellQuote(json)}`,
-  ].join(" \\\n");
-}
-
-function codeExample(language: Language, baseURL: string, path: string, body: object) {
-  const url = `${baseURL.replace(/\/$/, "")}${path}`;
-  const json = JSON.stringify(body, null, 2);
-  const streaming = "stream" in body && body.stream === true;
-  if (language === "curl") return curlExample(url, json, streaming);
-  if (language === "javascript" && streaming) return `const response = await fetch(${JSON.stringify(url)}, {\n  method: "POST",\n  headers: {\n    "Authorization": \`Bearer \${process.env.HALRO_API_KEY}\`,\n    "Content-Type": "application/json",\n    "Accept": "text/event-stream",\n  },\n  body: JSON.stringify(${json.replace(/\n/g, "\n  ")}),\n});\n\nif (!response.ok) {\n  throw new Error(\`Halro returned \${response.status}: \${await response.text()}\`);\n}\n\nconst reader = response.body.getReader();\nconst decoder = new TextDecoder();\nwhile (true) {\n  const { value, done } = await reader.read();\n  if (done) break;\n  console.log(decoder.decode(value, { stream: true }));\n}`;
-  if (language === "python" && streaming) return `import json\nimport os\nimport requests\n\npayload = json.loads(${JSON.stringify(JSON.stringify(body))})\nresponse = requests.post(\n    ${JSON.stringify(url)},\n    headers={\n        "Authorization": f"Bearer {os.environ['HALRO_API_KEY']}",\n        "Content-Type": "application/json",\n        "Accept": "text/event-stream",\n    },\n    json=payload,\n    stream=True,\n)\nresponse.raise_for_status()\nfor line in response.iter_lines():\n    if line:\n        print(line.decode("utf-8"))`;
-  if (language === "go" && streaming) return `payload := []byte(${JSON.stringify(JSON.stringify(body))})\nreq, err := http.NewRequest(http.MethodPost, ${JSON.stringify(url)}, bytes.NewReader(payload))\nif err != nil { log.Fatal(err) }\nreq.Header.Set("Authorization", "Bearer "+os.Getenv("HALRO_API_KEY"))\nreq.Header.Set("Content-Type", "application/json")\nreq.Header.Set("Accept", "text/event-stream")\n\nresp, err := http.DefaultClient.Do(req)\nif err != nil { log.Fatal(err) }\ndefer resp.Body.Close()\nif resp.StatusCode < 200 || resp.StatusCode >= 300 {\n    responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))\n    log.Fatalf("Halro returned %s: %s", resp.Status, responseBody)\n}\n\nscanner := bufio.NewScanner(resp.Body)\nscanner.Buffer(make([]byte, 64<<10), 1<<20)\nfor scanner.Scan() {\n    fmt.Println(scanner.Text())\n}\nif err := scanner.Err(); err != nil { log.Fatal(err) }`;
-  if (language === "java" && streaming) return `String payload = ${javaTextBlock(json)};\n\nHttpRequest request = HttpRequest.newBuilder()\n    .uri(URI.create(${JSON.stringify(url)}))\n    .header("Authorization", "Bearer " + System.getenv("HALRO_API_KEY"))\n    .header("Content-Type", "application/json")\n    .header("Accept", "text/event-stream")\n    .POST(HttpRequest.BodyPublishers.ofString(payload))\n    .build();\n\nHttpResponse<Stream<String>> response = HttpClient.newHttpClient()\n    .send(request, HttpResponse.BodyHandlers.ofLines());\nif (response.statusCode() < 200 || response.statusCode() >= 300) {\n    throw new IllegalStateException("Halro returned " + response.statusCode() + ": "\n        + response.body().collect(java.util.stream.Collectors.joining("\\n")));\n}\nresponse.body().forEach(System.out::println);`;
-  if (language === "javascript") return `const response = await fetch(${JSON.stringify(url)}, {\n  method: "POST",\n  headers: {\n    "Authorization": \`Bearer \${process.env.HALRO_API_KEY}\`,\n    "Content-Type": "application/json",\n  },\n  body: JSON.stringify(${json.replace(/\n/g, "\n  ")}),\n});\n\n// A refusal is a perfectly readable JSON body, so without this the gateway's\n// error envelope is printed as if it were an answer.\nif (!response.ok) {\n  throw new Error(\`Halro returned \${response.status}: \${await response.text()}\`);\n}\n\nconsole.log(await response.json());`;
-  if (language === "python") return `import json\nimport os\nimport requests\n\npayload = json.loads(${JSON.stringify(JSON.stringify(body))})\nresponse = requests.post(\n    ${JSON.stringify(url)},\n    headers={\n        "Authorization": f"Bearer {os.environ['HALRO_API_KEY']}",\n        "Content-Type": "application/json",\n    },\n    json=payload,\n)\nresponse.raise_for_status()\nprint(response.json())`;
-  if (language === "go") return `payload := []byte(${JSON.stringify(JSON.stringify(body))})\nreq, err := http.NewRequest(http.MethodPost, ${JSON.stringify(url)}, bytes.NewReader(payload))\nif err != nil { log.Fatal(err) }\nreq.Header.Set("Authorization", "Bearer "+os.Getenv("HALRO_API_KEY"))\nreq.Header.Set("Content-Type", "application/json")\n\nresp, err := http.DefaultClient.Do(req)\nif err != nil { log.Fatal(err) }\ndefer resp.Body.Close()\n\nresponseBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))\nif err != nil { log.Fatal(err) }\nif resp.StatusCode < 200 || resp.StatusCode >= 300 {\n    log.Fatalf("Halro returned %s: %s", resp.Status, responseBody)\n}\nfmt.Println(string(responseBody))`;
-  if (language === "java") return `String payload = ${javaTextBlock(json)};\n\nHttpRequest request = HttpRequest.newBuilder()\n    .uri(URI.create(${JSON.stringify(url)}))\n    .header("Authorization", "Bearer " + System.getenv("HALRO_API_KEY"))\n    .header("Content-Type", "application/json")\n    .POST(HttpRequest.BodyPublishers.ofString(payload))\n    .build();\n\nHttpResponse<String> response = HttpClient.newHttpClient()\n    .send(request, HttpResponse.BodyHandlers.ofString());\nif (response.statusCode() < 200 || response.statusCode() >= 300) {\n    throw new IllegalStateException("Halro returned " + response.statusCode() + ": " + response.body());\n}\nSystem.out.println(response.body());`;
-  throw new Error("unsupported code language");
 }

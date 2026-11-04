@@ -154,6 +154,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.click(screen.getByRole("button", { name: "＋ 出站代理" }));
     fireEvent.change(screen.getByLabelText("代理名称"), { target: { value: "公司出口" } });
     fireEvent.change(screen.getByLabelText(/^HTTP CONNECT 代理地址/), { target: { value: "https://proxy.example.com:8443" } });
+    expandDisclosure("代理认证（可选）");
     fireEvent.change(screen.getByLabelText("Basic Auth 用户名"), { target: { value: "halro" } });
     fireEvent.change(screen.getByLabelText(/^Basic Auth 密码/), { target: { value: "secret" } });
     fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
@@ -168,16 +169,36 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(await screen.findByText("出站代理已保存；运行时仍在重试应用，数据面保持拒绝流量")).toBeVisible();
   });
 
+  it("opens invalid proxy authentication and focuses its error after submission", async () => {
+    const create = vi.spyOn(api, "createProviderEgressProxy").mockResolvedValue({} as never);
+    renderPage();
+    fireEvent.click(await screen.findByRole("tab", { name: /出站代理/ }));
+    fireEvent.click(screen.getByRole("button", { name: "＋ 出站代理" }));
+    fireEvent.change(screen.getByLabelText("代理名称"), { target: { value: "Corporate" } });
+    fireEvent.change(screen.getByLabelText(/^HTTP CONNECT 代理地址/), { target: { value: "https://proxy.example:8443" } });
+    expandDisclosure("代理认证（可选）");
+    fireEvent.change(screen.getByLabelText("Basic Auth 用户名"), { target: { value: "halro" } });
+    const disclosure = screen.getByText("代理认证（可选）", { selector: ".disclosure-title" }).closest("details")!;
+    fireEvent.click(disclosure.querySelector("summary")!);
+    expect(disclosure).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
+    expect(await screen.findByText("用户名和密码必须同时填写，或同时留空。")).toBeVisible();
+    expect(disclosure).toHaveAttribute("open");
+    await waitFor(() => expect(screen.getByLabelText(/^Basic Auth 密码/)).toHaveFocus());
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it("shows internal address access as an explicit least-privilege exception", async () => {
     renderPage();
 
     fireEvent.click(await screen.findByRole("tab", { name: /出站代理/ }));
     fireEvent.click(screen.getByRole("button", { name: "＋ 出站代理" }));
 
+    expandDisclosure("网络访问例外");
     const boundary = screen.getByRole("group", { name: "网络访问例外" });
     expect(boundary).toBeVisible();
     expect(screen.getByText("默认保护已开启")).toBeVisible();
-    expect(screen.getByText("私网与回环地址均保持阻止。")).toBeVisible();
+    expect(screen.queryByText("私网与回环地址均保持阻止。")).not.toBeInTheDocument();
     expect(screen.queryByText("网络信任范围扩大")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("checkbox", { name: /私有网络地址/ }));
@@ -215,6 +236,42 @@ describe("ProvidersPage profile and credential bindings", () => {
 
   // The form submits an explicit anchor and one flat capability set. Which
   // companion profile serves each remaining capability is the server's answer.
+  it("keeps required connection fields visible and configures capabilities only once on demand", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByLabelText("加密凭据")).toBeVisible();
+    expect(within(dialog).getByRole("combobox", { name: "API 接口" })).toBeVisible();
+    expect(within(dialog).getByRole("option", { name: "Responses" })).toBeInTheDocument();
+    expect(within(dialog).queryByText(/服务商类型决定 API 家族/)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("代理信任边界")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/所选凭据绑定的是/)).not.toBeInTheDocument();
+    expect(screen.getByText("开放能力", { selector: ".disclosure-title" }).closest("details")).not.toHaveAttribute("open");
+    expect(within(dialog).getByRole("checkbox", { name: "对话" })).not.toBeVisible();
+    expect(dialog.querySelectorAll(".capability-summary")).toHaveLength(0);
+    expandDisclosure("开放能力");
+    expect(within(dialog).getAllByRole("checkbox", { name: "对话" })).toHaveLength(1);
+    expect(within(dialog).getByRole("checkbox", { name: "对话" })).toBeChecked();
+  });
+
+  it("preserves configured connection options and exposes them in the collapsed summary", async () => {
+    const create = vi.spyOn(api, "createProvider").mockResolvedValue({} as never);
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "Limited" } });
+    expandDisclosure("连接选项");
+    fireEvent.change(screen.getByLabelText(/^服务商最大并发/), { target: { value: "7" } });
+    const disclosure = screen.getByText("连接选项", { selector: ".disclosure-title" }).closest("details")!;
+    fireEvent.click(disclosure.querySelector("summary")!);
+    expect(disclosure).not.toHaveAttribute("open");
+    expect(screen.getByText("直连 · 并发 7")).toBeVisible();
+    fireEvent.change(screen.getByLabelText("API 接口"), { target: { value: "openai.responses.v1" } });
+    expect(screen.getByText(/已按所选接口更新地址、凭据和开放能力/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create.mock.calls[0][0]).toMatchObject({ max_concurrency: 7, profile_id: "openai.responses.v1" });
+  });
+
   it("submits one flat capability set and no profile split", async () => {
     const create = vi.spyOn(api, "createProvider").mockResolvedValue({} as never);
     renderPage();
@@ -223,8 +280,9 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "OpenAI" } });
     // Offered and left off: the media capabilities belong to a profile this
     // credential can also reach, and turning one on is the operator's move.
+    expandDisclosure("开放能力");
     expect(screen.getByRole("checkbox", { name: /图像/ })).not.toBeChecked();
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     const submitted = create.mock.calls[0][0] as Record<string, unknown>;
@@ -431,10 +489,13 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(screen.getByText("已启用 · 需重测")).toBeVisible();
     fireEvent.click(screen.getByLabelText("更多操作 — Proxied provider"));
     fireEvent.click(screen.getByRole("button", { name: "编辑 — Proxied provider" }));
+    expandDisclosure("连接选项");
     const egress = screen.getByRole("combobox", { name: /出站路径/ });
     expect(egress).toBeDisabled();
     expect(screen.getByText(/先停用或排空/)).toBeVisible();
-    expect(screen.getByText(/代理能够看到目标 IP、端口和 TLS 服务器名称/)).toBeVisible();
+    expect(screen.getByText(/代理可见目标 IP、端口和 TLS 服务器名/)).toBeVisible();
+    fireEvent.click(screen.getByText("代理信任边界", { selector: "summary" }));
+    expect(screen.getByText(/无证书固定，已受信的代理 CA 仍有效/)).toBeVisible();
   });
 
   it("requires a credential before a provider can be created", async () => {
@@ -443,7 +504,8 @@ describe("ProvidersPage profile and credential bindings", () => {
 
     const addProvider = await screen.findByRole("button", { name: "＋ 服务商" });
     await waitFor(() => expect(addProvider).toBeDisabled());
-    expect(screen.getByText("服务商连接必须绑定一个加密凭据；创建后才能继续配置上游。")).toBeInTheDocument();
+    expect(screen.getByText("需要先创建凭据")).toBeVisible();
+    expect(screen.getByRole("button", { name: "前往凭据库" })).toBeEnabled();
   });
 
   it("keeps credential creation modal and submission locked while the write is pending", async () => {
@@ -476,7 +538,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "Pending provider" } });
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     const dialog = screen.getByRole("dialog", { name: "创建服务商" });
@@ -485,7 +547,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     fireEvent.mouseDown(dialog.parentElement!);
     expect(screen.getByRole("dialog", { name: "创建服务商" })).toBeVisible();
-    fireEvent.click(within(dialog).getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "创建并应用" }));
     expect(create).toHaveBeenCalledOnce();
 
     finish({} as never);
@@ -503,7 +565,7 @@ describe("ProvidersPage profile and credential bindings", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "创建服务商" });
     expect(within(dialog).getByLabelText("加密凭据")).toHaveValue(openAICredential.id);
-    expect(within(dialog).getByRole("button", { name: "创建并热加载" })).toBeEnabled();
+    expect(within(dialog).getByRole("button", { name: "创建并应用" })).toBeEnabled();
   });
 
   // Whether deployments may use this upstream is the state the save commits, so
@@ -516,14 +578,15 @@ describe("ProvidersPage profile and credential bindings", () => {
     const toggle = await screen.findByLabelText("启用服务商");
     const bar = toggle.closest(".sticky-form-actions");
     expect(bar).not.toBeNull();
-    expect(bar).toContainElement(screen.getByRole("button", { name: "创建并热加载" }));
+    expect(bar).toContainElement(screen.getByRole("button", { name: "创建并应用" }));
     expect(bar).toContainElement(screen.getByRole("button", { name: "取消" }));
-    expect(within(bar as HTMLElement).getByText("启用服务商 · 已启用")).toBeVisible();
-    expect(within(bar as HTMLElement).getByText("启用后，模型部署可以使用这个上游连接。")).toBeVisible();
+    expect(within(bar as HTMLElement).getByText("启用服务商")).toBeVisible();
+    expect(within(bar as HTMLElement).queryByText("启用后，模型部署可以使用这个上游连接。")).not.toBeInTheDocument();
 
     // Turning it off has to change what the bar says it will do, not just the box.
     fireEvent.click(toggle);
-    expect(within(bar as HTMLElement).getByText("启用服务商 · 已禁用")).toBeVisible();
+    expect(within(bar as HTMLElement).getByText("启用服务商")).toBeVisible();
+    expect(toggle).not.toBeChecked();
     expect(within(bar as HTMLElement).getByText("模型部署无法使用这个上游连接")).toBeVisible();
   });
 
@@ -583,6 +646,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
 
+    expandDisclosure("开放能力");
     const chat = screen.getByRole("checkbox", { name: "对话" });
     const streaming = screen.getByRole("checkbox", { name: "流式" });
     expect(chat).toBeChecked();
@@ -991,7 +1055,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "minimax" } });
     expect(screen.getByText(/产品身份待人工确认/)).toBeVisible();
     fireEvent.click(screen.getByRole("checkbox", { name: /我已阅读当前地域的官方说明/ }));
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     expect(create.mock.calls[0][0]).toMatchObject({
@@ -1013,14 +1077,14 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "Coding Plan" } });
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bigmodel" } });
-    fireEvent.change(screen.getByLabelText(/^能力实现/), { target: { value: "bigmodel.cn.coding.chat.v1" } });
+    fireEvent.change(screen.getByLabelText(/^API 接口/), { target: { value: "bigmodel.cn.coding.chat.v1" } });
 
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
     expect(create).not.toHaveBeenCalled();
     const disclosure = screen.getByText("该订阅产品有专门使用条款").closest("details");
     expect(disclosure).toHaveAttribute("open");
     fireEvent.click(screen.getByRole("checkbox", { name: /我已阅读当前地域的官方说明/ }));
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     expect(create.mock.calls[0][0]).toMatchObject({
@@ -1058,10 +1122,10 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "Coding Plan" } });
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bigmodel" } });
-    fireEvent.change(screen.getByLabelText(/^能力实现/), { target: { value: "bigmodel.cn.coding.chat.v1" } });
+    fireEvent.change(screen.getByLabelText(/^API 接口/), { target: { value: "bigmodel.cn.coding.chat.v1" } });
     const checkbox = screen.getByRole("checkbox", { name: /我已阅读当前地域的官方说明/ });
     fireEvent.click(checkbox);
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     await waitFor(() => expect(checkbox).toBeDisabled());
     expect(checkbox.closest("details")).toHaveAttribute("open");
@@ -1069,7 +1133,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     await waitFor(() => expect(checkbox).toBeEnabled());
     await waitFor(() => expect(checkbox).toHaveFocus());
     fireEvent.click(checkbox);
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
     expect(create.mock.calls[1][0]).toMatchObject({
@@ -1097,14 +1161,14 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "Coding Plan" } });
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bigmodel" } });
-    fireEvent.change(screen.getByLabelText(/^能力实现/), { target: { value: "bigmodel.cn.coding.chat.v1" } });
+    fireEvent.change(screen.getByLabelText(/^API 接口/), { target: { value: "bigmodel.cn.coding.chat.v1" } });
     const checkbox = screen.getByRole("checkbox", { name: /我已阅读当前地域的官方说明/ });
     fireEvent.click(checkbox);
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     expect(await screen.findByText("无法刷新当前使用条款。请关闭表单，并在服务商目录恢复后重试。")).toBeVisible();
     expect(checkbox).toBeDisabled();
-    expect(screen.getByRole("button", { name: "创建并热加载" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "创建并应用" })).toBeDisabled();
   });
 
   it("lets a provider with a stale acknowledgement confirm the current revision in place", async () => {
@@ -1132,7 +1196,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.click(await screen.findByRole("button", { name: "编辑 — Coding Plan" }));
     expect(screen.getByText("该订阅产品有专门使用条款")).toBeVisible();
     fireEvent.click(screen.getByRole("checkbox", { name: /我已阅读当前地域的官方说明/ }));
-    fireEvent.click(screen.getByRole("button", { name: "保存并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存并应用" }));
 
     await waitFor(() => expect(update).toHaveBeenCalledOnce());
     expect(update.mock.calls[0][1]).toMatchObject({
@@ -1197,18 +1261,18 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "Z.AI" } });
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bigmodel" } });
-    fireEvent.change(screen.getByLabelText(/^能力实现/), { target: { value: "bigmodel.global.chat.v1" } });
+    fireEvent.change(screen.getByLabelText(/^API 接口/), { target: { value: "bigmodel.global.chat.v1" } });
     const address = screen.getByLabelText(/^基础地址/);
     fireEvent.change(address, { target: { value: "https://open.bigmodel.cn" } });
     const mismatch = screen.getByText("该官方端点属于另一个账号地域。请选择对应的产品地域，或改回当前地域的正确端点。");
     expect(mismatch).toBeVisible();
     expect(address).toHaveAttribute("aria-invalid", "true");
     expect(address.getAttribute("aria-describedby")).toContain(mismatch.id);
-    expect(screen.getByRole("button", { name: "创建并热加载" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "创建并应用" })).toBeDisabled();
     fireEvent.change(screen.getByLabelText(/^基础地址/), { target: { value: "https://zai.internal.example" } });
     expect(screen.getByText("正在使用自定义端点；产品账号地域保持不变，但无法从该端点验证地域。")).toBeVisible();
     fireEvent.change(screen.getByLabelText(/^基础地址/), { target: { value: "https://api.z.ai" } });
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     expect(create.mock.calls[0][0]).toMatchObject({
@@ -1249,11 +1313,11 @@ describe("ProvidersPage profile and credential bindings", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "OpenAI" } });
-    const implementation = screen.getByRole("combobox", { name: /^能力实现/ });
+    const implementation = screen.getByRole("combobox", { name: /^API 接口/ });
     expect(implementation).toHaveValue("openai.chat-embeddings.v1");
     expect(within(implementation).getAllByRole("option")).toHaveLength(2);
     fireEvent.change(implementation, { target: { value: "openai.responses.v1" } });
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     expect(create.mock.calls[0][0]).toMatchObject({
@@ -1267,14 +1331,15 @@ describe("ProvidersPage profile and credential bindings", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "Images only" } });
-    fireEvent.change(screen.getByRole("combobox", { name: /^能力实现/ }), { target: { value: implementationID } });
+    fireEvent.change(screen.getByRole("combobox", { name: /^API 接口/ }), { target: { value: implementationID } });
     // Clear the protocol defaults, including capabilities depending on Chat.
+    expandDisclosure("开放能力");
     const grid = screen.getByRole("checkbox", { name: /图像/ }).closest(".capability-grid")!;
     for (const input of within(grid as HTMLElement).getAllByRole("checkbox")) {
       if ((input as HTMLInputElement).checked) fireEvent.click(input);
     }
     fireEvent.click(screen.getByRole("checkbox", { name: /图像/ }));
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     expect(create.mock.calls[0][0]).toMatchObject({
       profile_id: "openai.media-resources.v1", access_surface: "openai-api",
@@ -1295,7 +1360,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.click(await screen.findByLabelText("更多操作 — Images only"));
     fireEvent.click(await screen.findByRole("button", { name: "编辑 — Images only" }));
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "Renamed images" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存并应用" }));
     await waitFor(() => expect(update).toHaveBeenCalledOnce());
     expect(update.mock.calls[0][1]).toMatchObject({
       name: "Renamed images", profile_id: "openai.media-resources.v1", capabilities: { images: true },
@@ -1416,9 +1481,9 @@ describe("ProvidersPage profile and credential bindings", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bedrock" } });
-    fireEvent.change(await screen.findByRole("combobox", { name: /^能力实现/ }), { target: { value: profile } });
+    fireEvent.change(await screen.findByRole("combobox", { name: /^API 接口/ }), { target: { value: profile } });
 
-    expect(screen.getByText("该能力实现使用固定协议，无需额外配置。")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "开放能力" })).toBeVisible();
     expect(screen.queryByRole("checkbox", { name: "对话" })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "向量嵌入" })).not.toBeInTheDocument();
   });
@@ -1445,7 +1510,7 @@ describe("ProvidersPage profile and credential bindings", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bedrock" } });
-    fireEvent.change(await screen.findByRole("combobox", { name: /^能力实现/ }), { target: { value: "bedrock.mantle.openai.chat.v1" } });
+    fireEvent.change(await screen.findByRole("combobox", { name: /^API 接口/ }), { target: { value: "bedrock.mantle.openai.chat.v1" } });
 
     // The hint lives inside the same label element, so the accessible name is
     // label plus hint; anchor on the label itself.
@@ -1494,9 +1559,9 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "AwsBedrockMantle" } });
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bedrock" } });
-    fireEvent.change(await screen.findByRole("combobox", { name: /^能力实现/ }), { target: { value: "bedrock.mantle.openai.chat.v1" } });
+    fireEvent.change(await screen.findByRole("combobox", { name: /^API 接口/ }), { target: { value: "bedrock.mantle.openai.chat.v1" } });
     fireEvent.change(screen.getByLabelText(/^Bedrock 项目/), { target: { value: "proj_wahool1" } });
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("这里要填 AWS 项目的 id（proj_ 开头），不是项目名称");
@@ -1529,12 +1594,12 @@ describe("ProvidersPage profile and credential bindings", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bedrock" } });
-    fireEvent.change(await screen.findByRole("combobox", { name: /^能力实现/ }), { target: { value: "bedrock.mantle.openai.chat.v1" } });
+    fireEvent.change(await screen.findByRole("combobox", { name: /^API 接口/ }), { target: { value: "bedrock.mantle.openai.chat.v1" } });
     fireEvent.change(screen.getByLabelText(/^Bedrock 项目/), { target: { value: "5amaxg" } });
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     expect(create).not.toHaveBeenCalled();
-    expect(await screen.findByText(/必填；模型部署选择上游连接时看到的就是这个名称/)).toBeVisible();
+    expect(await screen.findByText("请输入服务商名称。")).toBeVisible();
     expect(screen.getByText(/必须是 AWS 签发的 proj_ 开头加字母数字的 ID/)).toBeVisible();
     expect(screen.getByLabelText(/^服务商名称/)).toHaveAttribute("aria-invalid", "true");
     // The reason sits on the field, so the field is what the form scrolls to
@@ -1546,7 +1611,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     // paste, so it is refused by name rather than as a generic format error.
     fireEvent.change(screen.getByLabelText(/^Bedrock 项目/), { target: { value: "wrkspc_abc123" } });
     fireEvent.change(screen.getByLabelText(/^服务商名称/), { target: { value: "AwsBedrockMantle" } });
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     expect(create).not.toHaveBeenCalled();
     expect(await screen.findByText(/Claude Platform on AWS 的工作区标识/)).toBeVisible();
@@ -1554,13 +1619,13 @@ describe("ProvidersPage profile and credential bindings", () => {
     // `default` is AWS's name for the account default project, which is what an
     // empty value already means, so it is normalised away rather than sent.
     fireEvent.change(screen.getByLabelText(/^Bedrock 项目/), { target: { value: " default " } });
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     expect(create.mock.calls[0][0]).toMatchObject({ name: "AwsBedrockMantle", bedrock_project_id: "" });
     // The save closed its own modal, so its confirmation has no anchor left on
     // the page and belongs in the notification column.
-    expect(await screen.findByText("服务商已创建并热加载")).toBeVisible();
+    expect(await screen.findByText("服务商已创建并应用")).toBeVisible();
   });
 
   // Every field that failed keeps its message, and the first one takes focus.
@@ -1587,10 +1652,10 @@ describe("ProvidersPage profile and credential bindings", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bedrock" } });
-    fireEvent.change(await screen.findByRole("combobox", { name: /^能力实现/ }), { target: { value: "bedrock.mantle.openai.chat.v1" } });
+    fireEvent.change(await screen.findByRole("combobox", { name: /^API 接口/ }), { target: { value: "bedrock.mantle.openai.chat.v1" } });
     // Two refusals at once: an empty name and a malformed project id.
     fireEvent.change(screen.getByLabelText(/^Bedrock 项目/), { target: { value: "5amaxg" } });
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     // The move is scheduled on an animation frame, so each step waits one out —
     // otherwise the assertion reads the caret before anything could move it.
@@ -1620,15 +1685,16 @@ describe("ProvidersPage profile and credential bindings", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "OpenAI" } });
+    expandDisclosure("开放能力");
     for (const capability of screen.getAllByRole("checkbox")) {
       if ((capability as HTMLInputElement).checked && capability.getAttribute("aria-label") !== "启用") {
         fireEvent.click(capability);
       }
     }
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     expect(create).not.toHaveBeenCalled();
-    const alert = await screen.findByText(/至少启用一项能力/);
+    const alert = await screen.findByText("至少开放一项能力。");
     const container = alert.closest(".form-submit-error");
     expect(container).not.toBeNull();
     await waitFor(() => expect(scrolled).toContain(container));
@@ -1660,7 +1726,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "anthropic" } });
     const betas = await screen.findByLabelText(/^Anthropic Beta 允许列表/);
     fireEvent.change(betas, { target: { value: "Context-Management-2025-06-27" } });
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     expect(create).not.toHaveBeenCalled();
     expect(await screen.findByText(/只能包含小写字母/)).toBeVisible();
@@ -1688,6 +1754,7 @@ describe("ProvidersPage profile and credential bindings", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "anthropic" } });
+    expandDisclosure("开放能力");
     const egress = await screen.findByRole("checkbox", { name: /服务商侧执行工具/ });
     expect(egress).not.toBeChecked();
     expect(egress).not.toBeDisabled();
@@ -1716,12 +1783,17 @@ describe("ProvidersPage profile and credential bindings", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "anthropic" } });
+    expandDisclosure("开放能力");
     const egress = await screen.findByRole("checkbox", { name: /服务商侧执行工具/ });
-    expect(screen.queryByText(/这部分流量不经过 Halro/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/流量不经过 Halro/)).not.toBeInTheDocument();
 
     fireEvent.click(egress);
 
-    expect(await screen.findByText(/这部分流量不经过 Halro/)).toBeVisible();
+    expect(await screen.findByText(/流量不经过 Halro/)).toBeVisible();
+    const disclosure = screen.getByText("开放能力", { selector: ".disclosure-title" }).closest("details")!;
+    fireEvent.click(disclosure.querySelector("summary")!);
+    expect(disclosure).not.toHaveAttribute("open");
+    expect(screen.getByText(/流量不经过 Halro/)).toBeVisible();
     // Named in the reader's language, not as the implementation spells it.
     expect(screen.queryByText(/provider_executed_tools/)).not.toBeInTheDocument();
   });
@@ -1769,13 +1841,13 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "AwsBedrockMantle" } });
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bedrock" } });
-    fireEvent.change(await screen.findByRole("combobox", { name: /^能力实现/ }), { target: { value: "bedrock.mantle.openai.chat.v1" } });
+    fireEvent.change(await screen.findByRole("combobox", { name: /^API 接口/ }), { target: { value: "bedrock.mantle.openai.chat.v1" } });
     // The endpoint the credential is sealed to is in the option itself, so the
     // choice can be made without leaving the form.
     expect(screen.getByRole("option", { name: "AWS-EAST2-365 · https://bedrock-mantle.us-east-1.api.aws" })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText(/^基础地址/), { target: { value: "https://bedrock-mantle.us-east-2.api.aws" } });
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     expect(create).not.toHaveBeenCalled();
     // Short on the field that is wrong, with the endpoint to reconcile stated
@@ -1787,7 +1859,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     // A default port on one side and none on the other is the same endpoint,
     // which is how the server compares them too.
     fireEvent.change(screen.getByLabelText(/^基础地址/), { target: { value: "https://bedrock-mantle.us-east-1.api.aws:443" } });
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
   });
 
@@ -1815,7 +1887,7 @@ describe("ProvidersPage profile and credential bindings", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "OpenAI" } });
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("这份凭据加密时绑定的是 https://api.openai.com:443");
@@ -1842,7 +1914,7 @@ describe("ProvidersPage profile and credential bindings", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "OpenAI" } });
-    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("请求内容无效，请检查后重试。");
@@ -1873,7 +1945,7 @@ describe("ProvidersPage profile and credential bindings", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bedrock" } });
-    const implementation = await screen.findByRole("combobox", { name: /^能力实现/ });
+    const implementation = await screen.findByRole("combobox", { name: /^API 接口/ });
 
     fireEvent.change(implementation, { target: { value: "bedrock.mantle.anthropic.messages.v1" } });
     expect(screen.getByText("该实现的连接测试会产生费用")).toBeVisible();
@@ -1893,7 +1965,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bedrock" } });
 
-    const implementations = await screen.findByRole("combobox", { name: /^能力实现/ });
+    const implementations = await screen.findByRole("combobox", { name: /^API 接口/ });
     const offered = within(implementations).getAllByRole("option").map((option) => option.getAttribute("value"));
     expect(offered).toEqual([
       "bedrock.mantle.chat.v1",
@@ -1902,10 +1974,15 @@ describe("ProvidersPage profile and credential bindings", () => {
       "bedrock.mantle.openai.responses.v1",
       "bedrock.mantle.anthropic.messages.v1",
     ]);
-    expect(screen.getByText("该能力实现使用固定协议，无需额外配置。")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "开放能力" })).toBeVisible();
     expect(screen.queryByRole("checkbox", { name: "对话" })).not.toBeInTheDocument();
   });
 });
+
+function expandDisclosure(title: string) {
+  const disclosure = screen.getByText(title, { selector: ".disclosure-title" }).closest("details")!;
+  if (!disclosure.open) fireEvent.click(disclosure.querySelector("summary")!);
+}
 
 function renderPage() {
   const client = new QueryClient({

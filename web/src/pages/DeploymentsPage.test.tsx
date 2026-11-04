@@ -120,9 +120,12 @@ describe("deployment invocation target workflow", () => {
     expect(screen.queryByText("这个模型主要用于什么？")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("对话")).not.toBeInTheDocument();
     expect(screen.getByText("选择模型以查看能力")).toBeVisible();
-    expect(screen.getByText("选择服务商和实际调用的模型；能力接口默认由 Halro 自动确定。")).toBeVisible();
-    expect(screen.getByText("这里保存模型实际开放的能力；识别后可以继续关闭不需要的能力。")).toBeVisible();
-    expect(screen.getByText("运行限制").closest("details")).toBeNull();
+    expect(screen.queryByText("选择服务商和实际调用的模型；能力接口默认由 Halro 自动确定。")).not.toBeInTheDocument();
+    expect(screen.queryByText("这里保存模型实际开放的能力；识别后可以继续关闭不需要的能力。")).not.toBeInTheDocument();
+    const limits = screen.getByText("运行限制").closest("details")!;
+    expect(limits).not.toHaveAttribute("open");
+    expect(screen.getByLabelText(/^最大输出词元/)).not.toBeVisible();
+    fireEvent.click(limits.querySelector("summary")!);
     expect(screen.getByLabelText(/^最大输出词元/)).toBeVisible();
     expect(screen.queryByText("默认")).not.toBeInTheDocument();
   });
@@ -296,7 +299,7 @@ describe("deployment invocation target workflow", () => {
     expect(screen.getByText("新增能力需要管理员声明")).toBeVisible();
     expect(screen.queryByText("尚未完成")).not.toBeInTheDocument();
     // No second act to perform: the tick is the claim, and the commit says so.
-    expect(screen.queryByRole("button", { name: "保存并热加载" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "保存并应用" })).not.toBeInTheDocument();
     // A widening does not hot-reload into service; the bar states what it does.
     expect(screen.getByText("开启能力需要重新验证")).toBeVisible();
     expect(screen.getByText("保存后将处于停用状态。重新测试并启用后，它才能提供这项能力。")).toBeVisible();
@@ -920,7 +923,7 @@ describe("deployment invocation target workflow", () => {
 
     const card = (await screen.findByText("未能可靠识别能力")).closest(".notice")!;
     // Not "the model is broken" — what automatic verification can ask at all.
-    expect(card.textContent).toContain("图像生成、音频转写、语音这类能力不做自动验证");
+    expect(card.textContent).toContain("图像和音频能力可能产生内容及费用，不自动探测");
     // The rejected credential is named, because that is the actionable one.
     expect(card.textContent).toContain("对话 → 无权验证");
     expect(card.textContent).toContain("向量嵌入 → 无法确认");

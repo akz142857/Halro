@@ -57,11 +57,11 @@ export function GovernanceOverview({
 
   return <section className="governance-workspace" id="run-governance-panel" role="tabpanel" aria-labelledby="run-governance-tab-overview">
     <div className="governance-metrics" aria-label={t("runGovernance.overviewMetrics")}>
-      {metrics.map((metric) => <button type="button" key={metric.key} className={`governance-metric ${metric.tone}`} onClick={() => onOpenWorkUnits(metric.key)}><span>{metric.label}</span><strong>{metric.value}</strong><small>{t("runGovernance.openFilteredView")}</small></button>)}
+      {metrics.map((metric) => <button type="button" key={metric.key} className={`governance-metric ${metric.tone}`} onClick={() => onOpenWorkUnits(metric.key)}><span>{metric.label}</span><strong>{metric.value}</strong></button>)}
     </div>
     <div className="governance-overview-grid">
       <section className="governance-section">
-        <header className="governance-section-header"><div><p className="eyebrow">{t("runGovernance.recentActivity")}</p><h2>{t("runGovernance.recentWorkUnits")}</h2></div><button type="button" className="button ghost governance-section-action" onClick={() => onOpenWorkUnits("all")}>{t("runGovernance.viewAll")}<span aria-hidden="true">→</span></button></header>
+        <header className="governance-section-header"><div><h2>{t("runGovernance.recentWorkUnits")}</h2></div><button type="button" className="button ghost governance-section-action" onClick={() => onOpenWorkUnits("all")}>{t("runGovernance.viewAll")}<span aria-hidden="true">→</span></button></header>
         {recentUnits.length === 0 ? <EmptyState title={t("runGovernance.noWorkUnits")}>{t("runGovernance.noWorkUnitsDescription")}</EmptyState> : <div className="governance-list">{recentUnits.map((unit) => {
           const unitRuns = runs.filter((run) => run.work_unit_id === unit.id);
           const activity = latestActivity(unit, runs, outcomes);
@@ -73,8 +73,8 @@ export function GovernanceOverview({
         })}</div>}
       </section>
       <section className="governance-section">
-        <header className="governance-section-header"><div><p className="eyebrow">{t("runGovernance.attentionEyebrow")}</p><h2>{t("runGovernance.attentionQueue")}</h2></div><span className="governance-count">{attention.length}</span></header>
-        {attention.length === 0 ? <div className="governance-clear-state" role="status"><span className="governance-clear-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m6.5 12.5 3.5 3.5 7.5-8" /></svg></span><div><strong>{t("runGovernance.noAttentionNeeded")}</strong><p>{t("runGovernance.noAttentionDescription")}</p></div></div> : <div className="governance-list">{attention.map((item) => <article className="governance-attention-row" key={item.key}><GovernanceBadge tone={item.tone}>{item.title}</GovernanceBadge><CopyableID value={item.detail} label={t("runGovernance.workUnit")} /><button type="button" className="button ghost" onClick={() => onOpenWorkUnits("all", item.workUnitID)}>{t("runGovernance.viewDetails")}</button></article>)}</div>}
+        <header className="governance-section-header"><div><h2>{t("runGovernance.attentionQueue")}</h2></div><span className="governance-count">{attention.length}</span></header>
+        {attention.length === 0 ? <div className="governance-clear-state" role="status"><span className="governance-clear-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m6.5 12.5 3.5 3.5 7.5-8" /></svg></span><div><strong>{t("runGovernance.noAttentionNeeded")}</strong></div></div> : <div className="governance-list">{attention.map((item) => <article className="governance-attention-row" key={item.key}><GovernanceBadge tone={item.tone}>{item.title}</GovernanceBadge><CopyableID value={item.detail} label={t("runGovernance.workUnit")} /><button type="button" className="button ghost" onClick={() => onOpenWorkUnits("all", item.workUnitID)}>{t("runGovernance.viewDetails")}</button></article>)}</div>}
       </section>
     </div>
   </section>;

@@ -157,9 +157,7 @@ export function RoutesPage() {
   return (
     <>
       <PageHeader
-        eyebrow={t("routes.eyebrow")}
         title={t("routes.title")}
-        description={t("routes.description")}
         action={<button className="button primary" disabled={readOnly} onClick={() => setCreating(true)}>{t("routes.create")}</button>}
       />
       <OnboardingContextBanner />
@@ -616,8 +614,8 @@ function RouteForm({ current, routes, deployments, onClose }: { current?: Route;
               <label className="form-footer-enable">
                 <input type="checkbox" aria-label={t("routes.enable")} checked={routeEnabled} onChange={(event) => setRouteEnabled(event.target.checked)} />
                 <span>
-                  <strong>{t("routes.enable")} · {routeEnabled ? t("common.enabled") : t("common.disabled")}</strong>
-                  <small>{routeEnabled ? t("routes.enabledImpact", { alias: publicModel.trim() || t("routes.publicAlias") }) : t("routes.disabledImpact")}</small>
+                  <strong>{t("routes.enable")}</strong>
+                  {!routeEnabled && <small>{t("routes.disabledImpact")}</small>}
                 </span>
               </label>
             </div>

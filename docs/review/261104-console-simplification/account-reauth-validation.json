@@ -1,0 +1,254 @@
+{
+  "date": "2026-11-04",
+  "synthetic_only": true,
+  "reauth_and_feedback": {
+    "total": 36,
+    "passed": 36,
+    "failed": 0
+  },
+  "page_matrix": {
+    "passed": 36,
+    "total": 36
+  },
+  "project_all_sections_expanded": {
+    "passed": 12,
+    "total": 12
+  },
+  "spacing_contract": [
+    {
+      "mode": "block",
+      "display": "block",
+      "rowGap": 0,
+      "noticeMarginTop": 12,
+      "gapAbove": 12
+    },
+    {
+      "mode": "form-grid",
+      "display": "grid",
+      "rowGap": 16,
+      "noticeMarginTop": 0,
+      "gapAbove": 16
+    },
+    {
+      "mode": "settings-grid",
+      "display": "grid",
+      "rowGap": 14,
+      "noticeMarginTop": 0,
+      "gapAbove": 14
+    }
+  ],
+  "flow_evidence": [
+    {
+      "name": "developer-stepup-mfa-disabled-zh-CN-dark",
+      "passed": true,
+      "mfaEnabled": false,
+      "codeRequired": false,
+      "wrongPasswordErrorCount": 1,
+      "statusLoadingBlocked": true
+    },
+    {
+      "name": "price-confirm-mfa-disabled-zh-CN-dark",
+      "passed": true,
+      "mfaEnabled": false,
+      "codeRequired": false
+    },
+    {
+      "name": "price-restore-mfa-disabled-zh-CN-dark",
+      "passed": true,
+      "mfaEnabled": false,
+      "codeRequired": false
+    },
+    {
+      "name": "developer-stepup-mfa-enabled-zh-CN-dark",
+      "passed": true,
+      "mfaEnabled": true,
+      "codeRequired": true,
+      "wrongPasswordErrorCount": 1,
+      "statusLoadingBlocked": true
+    },
+    {
+      "name": "price-confirm-mfa-enabled-zh-CN-dark",
+      "passed": true,
+      "mfaEnabled": true,
+      "codeRequired": true
+    },
+    {
+      "name": "price-restore-mfa-enabled-zh-CN-dark",
+      "passed": true,
+      "mfaEnabled": true,
+      "codeRequired": true
+    },
+    {
+      "name": "settings-grid-spacing-zh-CN-dark",
+      "passed": true
+    },
+    {
+      "name": "login-spacing-zh-CN-dark",
+      "passed": true
+    },
+    {
+      "name": "grid-contract-spacing-zh-CN-dark",
+      "passed": true
+    },
+    {
+      "name": "developer-stepup-mfa-disabled-zh-CN-light",
+      "passed": true,
+      "mfaEnabled": false,
+      "codeRequired": false,
+      "wrongPasswordErrorCount": 1,
+      "statusLoadingBlocked": true
+    },
+    {
+      "name": "price-confirm-mfa-disabled-zh-CN-light",
+      "passed": true,
+      "mfaEnabled": false,
+      "codeRequired": false
+    },
+    {
+      "name": "price-restore-mfa-disabled-zh-CN-light",
+      "passed": true,
+      "mfaEnabled": false,
+      "codeRequired": false
+    },
+    {
+      "name": "developer-stepup-mfa-enabled-zh-CN-light",
+      "passed": true,
+      "mfaEnabled": true,
+      "codeRequired": true,
+      "wrongPasswordErrorCount": 1,
+      "statusLoadingBlocked": true
+    },
+    {
+      "name": "price-confirm-mfa-enabled-zh-CN-light",
+      "passed": true,
+      "mfaEnabled": true,
+      "codeRequired": true
+    },
+    {
+      "name": "price-restore-mfa-enabled-zh-CN-light",
+      "passed": true,
+      "mfaEnabled": true,
+      "codeRequired": true
+    },
+    {
+      "name": "settings-grid-spacing-zh-CN-light",
+      "passed": true
+    },
+    {
+      "name": "login-spacing-zh-CN-light",
+      "passed": true
+    },
+    {
+      "name": "grid-contract-spacing-zh-CN-light",
+      "passed": true
+    },
+    {
+      "name": "developer-stepup-mfa-disabled-en-US-dark",
+      "passed": true,
+      "mfaEnabled": false,
+      "codeRequired": false,
+      "wrongPasswordErrorCount": 1,
+      "statusLoadingBlocked": true
+    },
+    {
+      "name": "price-confirm-mfa-disabled-en-US-dark",
+      "passed": true,
+      "mfaEnabled": false,
+      "codeRequired": false
+    },
+    {
+      "name": "price-restore-mfa-disabled-en-US-dark",
+      "passed": true,
+      "mfaEnabled": false,
+      "codeRequired": false
+    },
+    {
+      "name": "developer-stepup-mfa-enabled-en-US-dark",
+      "passed": true,
+      "mfaEnabled": true,
+      "codeRequired": true,
+      "wrongPasswordErrorCount": 1,
+      "statusLoadingBlocked": true
+    },
+    {
+      "name": "price-confirm-mfa-enabled-en-US-dark",
+      "passed": true,
+      "mfaEnabled": true,
+      "codeRequired": true
+    },
+    {
+      "name": "price-restore-mfa-enabled-en-US-dark",
+      "passed": true,
+      "mfaEnabled": true,
+      "codeRequired": true
+    },
+    {
+      "name": "settings-grid-spacing-en-US-dark",
+      "passed": true
+    },
+    {
+      "name": "login-spacing-en-US-dark",
+      "passed": true
+    },
+    {
+      "name": "grid-contract-spacing-en-US-dark",
+      "passed": true
+    },
+    {
+      "name": "developer-stepup-mfa-disabled-en-US-light",
+      "passed": true,
+      "mfaEnabled": false,
+      "codeRequired": false,
+      "wrongPasswordErrorCount": 1,
+      "statusLoadingBlocked": true
+    },
+    {
+      "name": "price-confirm-mfa-disabled-en-US-light",
+      "passed": true,
+      "mfaEnabled": false,
+      "codeRequired": false
+    },
+    {
+      "name": "price-restore-mfa-disabled-en-US-light",
+      "passed": true,
+      "mfaEnabled": false,
+      "codeRequired": false
+    },
+    {
+      "name": "developer-stepup-mfa-enabled-en-US-light",
+      "passed": true,
+      "mfaEnabled": true,
+      "codeRequired": true,
+      "wrongPasswordErrorCount": 1,
+      "statusLoadingBlocked": true
+    },
+    {
+      "name": "price-confirm-mfa-enabled-en-US-light",
+      "passed": true,
+      "mfaEnabled": true,
+      "codeRequired": true
+    },
+    {
+      "name": "price-restore-mfa-enabled-en-US-light",
+      "passed": true,
+      "mfaEnabled": true,
+      "codeRequired": true
+    },
+    {
+      "name": "settings-grid-spacing-en-US-light",
+      "passed": true
+    },
+    {
+      "name": "login-spacing-en-US-light",
+      "passed": true
+    },
+    {
+      "name": "grid-contract-spacing-en-US-light",
+      "passed": true
+    }
+  ],
+  "limits": [
+    "All Admin APIs were synthetic; all external business requests blocked.",
+    "CSS contract harness clones actual ErrorState markup; independent business-flow screenshots also captured."
+  ]
+}

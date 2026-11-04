@@ -1,0 +1,77 @@
+{
+  "date": "2026-11-04",
+  "scope": "Project AI integration and signed model catalog spacing; local Docker only",
+  "frontend": {
+    "typecheck": "passed",
+    "test_files": 53,
+    "tests_passed": 822,
+    "production_build": "passed",
+    "initial_gzip_bytes": 246081,
+    "artifact_secret_scan_files_clean": 32
+  },
+  "project_ai_browser": {
+    "baseURL": "http://127.0.0.1:5275/admin/",
+    "syntheticOnly": true,
+    "total": 64,
+    "passed": 64,
+    "failed": 0
+  },
+  "catalog_browser": {
+    "baseURL": "http://127.0.0.1:5275/admin/",
+    "syntheticOnly": true,
+    "total": 24,
+    "passed": 24,
+    "failed": 0
+  },
+  "project_ai_cases": [
+    "project scope switch and all three endpoints",
+    "invalid URL recovery",
+    "missing server address and manual configuration",
+    "no authorized models",
+    "disabled project",
+    "disabled developer workbench",
+    "read-only role",
+    "long project name and model alias"
+  ],
+  "coverage": "zh-CN/en-US × dark/light × 1440/390; real UTF-8 download bytes, isolated-page clipboard capture, preview/copy/SKILL body equality, no mutations/execution or external API requests",
+  "skill_format": "Final generated SKILL.md passed skill-creator quick_validate.py",
+  "independent_forward_test": {
+    "passed": 6,
+    "total": 6,
+    "scope": "Independent agent read exported SKILL.md and temporary app skeleton only. All fetch calls mocked. Response-data and request-ID clarification added after feedback; final skill format revalidated."
+  },
+  "catalog_layout": {
+    "source_label_gap_px": 12,
+    "title_and_source_inset_px": 17,
+    "normal_header_height_px": 60,
+    "narrow_english_wrapped_header_height_px": 88,
+    "no_duplicate_header_border": true,
+    "no_document_overflow": true
+  },
+  "local_deployment": {
+    "image": "halro-local:console-project-ai-20261104",
+    "container": "halro",
+    "backup_container": "halro-before-project-ai-20261104-1793784956",
+    "data_volume": "halro-data-project-ai-20261104-1793784956",
+    "backup_data_volume": "halro-data-advisor-20261104-1793783583",
+    "ready": true,
+    "container_health": "healthy",
+    "readiness_http": 200,
+    "admin_http": 200,
+    "embedded_index_matches_build": true,
+    "embedded_index_sha256": "75e0ddfa2ae75c3e150e9e51f4e0148f58fa606c16c70140910a9e06a0afa51c"
+  },
+  "login_ui": "Login.tsx identical to baseline HEAD; no login-page changes in this round",
+  "limits": [
+    "Synthetic business API responses do not demonstrate live provider compatibility or capability.",
+    "No real provider call or key creation.",
+    "Keyboard and browser accessibility checks do not constitute VoiceOver testing."
+  ],
+  "post_deploy_browser": {
+    "baseURL": "http://127.0.0.1:28081/admin/",
+    "syntheticOnly": true,
+    "total": 2,
+    "passed": 2,
+    "failed": 0
+  }
+}

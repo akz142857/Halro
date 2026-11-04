@@ -54,7 +54,7 @@ export function AccountingTimezoneForm({ settings }: { settings: AccountingSetti
   return (
     <section className="panel settings-card">
       <header className="panel-header">
-        <div><p className="eyebrow">{t("settings.accountingEyebrow")}</p><h3>{t("settings.accountingTitle")}</h3></div>
+        <div><h3>{t("settings.accountingTitle")}</h3></div>
 
       </header>
       <dl className="settings-facts">

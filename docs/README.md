@@ -53,6 +53,7 @@ ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/rel
 
 | 已归档的设计方案 | 落地情况 |
 | --- | --- |
+| [全系统界面精简与体验升级](prd/console-interface-simplification.zh-CN.md) | 12 个主页面、首次设置与弹窗已迁移，登录页保持原样；共享折叠、文案分层、风险条件告知、键盘和窄屏修正已实施；[本地验收与证据边界](review/261104-console-simplification/execution.zh-CN.md)，源码随本次变更提交，未发布正式版本 |
 | [跨服务商模型选择与能力自动解析方案](prd/provider-model-selection-and-capability-resolution.zh-CN.md) | Phase 0–4 已实施，见 [ADR 0019](adr/0019-invocation-target-capability-resolution.md)、[ADR 0020](adr/0020-dynamic-signed-model-catalog.md)；动态签名目录默认关闭 |
 | [模型能力自动识别：保留的安全与任务契约](prd/model-capability-auto-detection.zh-CN.md) | 能力检测已实施；正文只保留检测的安全、预算与任务生命周期契约 |
 | [基于服务商与模型的能力选择升级方案](prd/model-aware-capability-selection.zh-CN.md) | 正文已迁入上面的解析方案，仅保留指向它的存根 |

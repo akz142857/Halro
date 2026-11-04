@@ -1,0 +1,169 @@
+{
+  "baseURL": "http://127.0.0.1:5275/admin/",
+  "syntheticOnly": true,
+  "total": 64,
+  "passed": 64,
+  "failed": 0,
+  "validationHistory": [
+    {
+      "stage": "initial build",
+      "completedPassed": 39,
+      "completedFailed": 13,
+      "interrupted": 1,
+      "report": "/private/tmp/halro-advisor-redesign-20261104/initial-report.json",
+      "note": "All-warn failures were an acceptance raw-vs-human-duration mismatch. Long-key failures exposed real unwrapped fallback dt label overflow. One later empty case was interrupted when the run was explicitly stopped."
+    },
+    {
+      "stage": "precise follow-up after duration assertion and scoped evidence CSS fixes",
+      "passed": 25,
+      "total": 25,
+      "report": "/private/tmp/halro-advisor-redesign-20261104/followup/report.json",
+      "selection": "/private/tmp/halro-advisor-redesign-20261104/pending-names.json",
+      "note": "Eight all-warn and eight long-key cases plus nine not yet completed cases; the 39 successful unchanged cases were not repeated."
+    }
+  ],
+  "measurements": {
+    "knownNormalRowsDesktopPx": [
+      44,
+      45,
+      45,
+      45,
+      45
+    ],
+    "knownNormalRowsNarrowPx": [
+      64,
+      65,
+      65,
+      65,
+      65
+    ],
+    "longEvidenceLayouts": {
+      "long-key-zh-CN-dark-1440": {
+        "selector": "div.advisor-check-body",
+        "scrollWidth": 818,
+        "clientWidth": 818,
+        "whiteSpace": "normal",
+        "overflowWrap": "normal",
+        "rect": {
+          "left": 525,
+          "right": 1343,
+          "width": 818
+        },
+        "overflowElements": []
+      },
+      "long-key-zh-CN-dark-390": {
+        "selector": "div.advisor-check-body",
+        "scrollWidth": 333,
+        "clientWidth": 333,
+        "whiteSpace": "normal",
+        "overflowWrap": "normal",
+        "rect": {
+          "left": 21,
+          "right": 354,
+          "width": 333
+        },
+        "overflowElements": []
+      },
+      "long-key-zh-CN-light-1440": {
+        "selector": "div.advisor-check-body",
+        "scrollWidth": 818,
+        "clientWidth": 818,
+        "whiteSpace": "normal",
+        "overflowWrap": "normal",
+        "rect": {
+          "left": 525,
+          "right": 1343,
+          "width": 818
+        },
+        "overflowElements": []
+      },
+      "long-key-zh-CN-light-390": {
+        "selector": "div.advisor-check-body",
+        "scrollWidth": 333,
+        "clientWidth": 333,
+        "whiteSpace": "normal",
+        "overflowWrap": "normal",
+        "rect": {
+          "left": 21,
+          "right": 354,
+          "width": 333
+        },
+        "overflowElements": []
+      },
+      "long-key-en-US-dark-1440": {
+        "selector": "div.advisor-check-body",
+        "scrollWidth": 818,
+        "clientWidth": 818,
+        "whiteSpace": "normal",
+        "overflowWrap": "normal",
+        "rect": {
+          "left": 525,
+          "right": 1343,
+          "width": 818
+        },
+        "overflowElements": []
+      },
+      "long-key-en-US-dark-390": {
+        "selector": "div.advisor-check-body",
+        "scrollWidth": 333,
+        "clientWidth": 333,
+        "whiteSpace": "normal",
+        "overflowWrap": "normal",
+        "rect": {
+          "left": 21,
+          "right": 354,
+          "width": 333
+        },
+        "overflowElements": []
+      },
+      "long-key-en-US-light-1440": {
+        "selector": "div.advisor-check-body",
+        "scrollWidth": 818,
+        "clientWidth": 818,
+        "whiteSpace": "normal",
+        "overflowWrap": "normal",
+        "rect": {
+          "left": 525,
+          "right": 1343,
+          "width": 818
+        },
+        "overflowElements": []
+      },
+      "long-key-en-US-light-390": {
+        "selector": "div.advisor-check-body",
+        "scrollWidth": 333,
+        "clientWidth": 333,
+        "whiteSpace": "normal",
+        "overflowWrap": "normal",
+        "rect": {
+          "left": 21,
+          "right": 354,
+          "width": 333
+        },
+        "overflowElements": []
+      }
+    }
+  },
+  "scope": "Eight scenarios × zh-CN/en-US × dark/light × 1440/390. Five real rule identifiers/evidence shapes follow internal/advisor/advisor.go. New/missing/long data are intentional synthetic forward-compatibility fixtures. No real Chrome, provider or Docker access; all undeclared APIs/external origins blocked. Keyboard/ARIA checks are not actual VoiceOver testing.",
+  "frontend": {
+    "typecheck": "passed",
+    "test_files": 51,
+    "tests_passed": 768,
+    "production_build": "passed",
+    "initial_gzip_bytes": 245666,
+    "artifact_secret_scan_files_clean": 30
+  },
+  "embedded_index_sha256": "b542bc7181bf2fb53a2b61153ae359829053cae6cd87a6052d5766814d8bf384",
+  "local_deployment": {
+    "image": "halro-local:console-advisor-20261104",
+    "container": "halro",
+    "backup_container": "halro-before-advisor-20261104-1793783583",
+    "data_volume": "halro-data-advisor-20261104-1793783583",
+    "backup_data_volume": "halro-data-polish-20261104-1793781929",
+    "ready": true,
+    "container_health": "healthy",
+    "readiness_http": 200,
+    "admin_http": 200,
+    "embedded_index_matches_build": true
+  }
+}

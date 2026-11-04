@@ -275,10 +275,12 @@ describe("design system themes", () => {
   // inline test result and removed that one-off action margin.
   // 692 → 691 when the page gutter and bottom safe space became
   // --layout-page-inline / --layout-page-block-end.
-  const bareSizeValueBaseline = 691;
+  // 691 → 679 as concise page headers, forms and the workbench adopt spacing tokens.
+  // 679 → 669 as the task-focused developer workbench adopts shared spacing.
+  const bareSizeValueBaseline = 669;
 
   it("does not add bare spacing or radius values beyond the current baseline", () => {
-    const styles = read("./styles.css") + read("./design-system/resource-list.css") + read("./design-system/resource-card.css");
+    const styles = read("./styles.css") + read("./pages/ProjectAIIntegration.css") + read("./design-system/resource-list.css") + read("./design-system/resource-card.css");
     const declarations = styles.matchAll(
       /\b(?:gap|row-gap|column-gap|padding|padding-top|padding-right|padding-bottom|padding-left|margin|margin-top|margin-right|margin-bottom|margin-left|border-radius|inset)\s*:\s*([^;{}]*)/g,
     );
@@ -355,7 +357,7 @@ describe("design system themes", () => {
   });
 
   it("declares no visible text below the type floor in business CSS", () => {
-    const styles = read("./styles.css");
+    const styles = read("./styles.css") + read("./pages/ProjectAIIntegration.css");
     const below = absoluteFontSizes(styles)
       .filter((size) => size.px < typeFloorPx)
       .map((size) => size.declaration);
@@ -434,7 +436,7 @@ describe("design system themes", () => {
   });
 
   it("does not express a disabled control through opacity", () => {
-    const styles = read("./styles.css") + read("./design-system/resource-list.css") + read("./design-system/resource-card.css");
+    const styles = read("./styles.css") + read("./pages/ProjectAIIntegration.css") + read("./design-system/resource-list.css") + read("./design-system/resource-card.css");
     const offenders: string[] = [];
     for (const rule of styles.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
       const selector = rule[1].trim().split("\n").pop()!.trim();
@@ -552,6 +554,31 @@ describe("component styling reaches the markup", () => {
     expect(checked, "no unqualified .notice status variant rules were found to check").toBe(3);
   });
 
+  it("lets gap-owning stacks separate feedback and form fields without added margins", () => {
+    const styles = read("./styles.css");
+    const feedback = [...styles.matchAll(/([^{}]+)\{([^}]*)\}/g)].find(([, selector]) =>
+      selector.includes(".runtime-editable") && selector.includes(".capability-detection-panel") && selector.includes(") > .notice"),
+    );
+    expect(feedback, "shared feedback stack rule is missing").toBeDefined();
+    expect(feedback![2]).toMatch(/margin-block:\s*0/);
+    expect(styles.indexOf(feedback![0])).toBeGreaterThan(styles.indexOf(".notice.error {"));
+    expect(ruleBody(styles, ":is(.form-grid, .price-form-grid) > .field")).toMatch(/margin-block:\s*0/);
+    expect(ruleBody(styles, ".price-version-form > .price-form-grid")).toMatch(/margin-block-end:\s*var\(--space-4\)/);
+    // The authentication entry layout must not inherit the console's defaults.
+    expect(ruleBody(styles, ":where(.main, .modal) .notice:where(:not(:first-child))")).toMatch(/margin-block-start:\s*var\(--space-3\)/);
+    expect(ruleBody(styles, ":where(.main, .modal) .notice:where(:not(:last-child))")).toMatch(/margin-block-end:\s*var\(--space-3\)/);
+  });
+
+  it("keeps diagnostic evidence a native disclosure with a touch-sized summary", () => {
+    const styles = read("./styles.css");
+    const summary = ruleBody(styles, ".advisor-check-summary");
+    expect(summary).toMatch(/display:\s*grid/);
+    expect(summary).toMatch(/min-height:\s*var\(--control-touch-block-size\)/);
+    expect(ruleBody(styles, ".advisor-check-body")).toMatch(/gap:\s*var\(--space-3\)/);
+    expect(ruleBody(styles, ".system-card.diagnostic-details")).toMatch(/padding:\s*0/);
+    expect(ruleBody(styles, ".diagnostic-details > p:where(:not(.notice, .write-path-caption, .write-path-meta))")).toMatch(/padding:\s*var\(--space-3\)\s+var\(--space-4\)/);
+  });
+
   // A class name in the markup with no rule anywhere renders at whatever the
   // cascade happens to give it, which is how an introductory sentence ended up
   // outweighing the dialog heading above it.
@@ -577,7 +604,7 @@ describe("component styling reaches the markup", () => {
   ];
 
   it("does not add class names the stylesheets never style", () => {
-    const cssFiles = ["./styles.css", "./design-system/index.css", "./design-system/components.css", "./design-system/resource-list.css", "./design-system/resource-card.css", "./design-system/tokens.css"];
+    const cssFiles = ["./styles.css", "./pages/ProjectAIIntegration.css", "./design-system/index.css", "./design-system/components.css", "./design-system/resource-list.css", "./design-system/resource-card.css", "./design-system/tokens.css"];
     let css = "";
     for (const file of cssFiles) {
       try {

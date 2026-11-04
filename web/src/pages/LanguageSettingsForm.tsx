@@ -1,8 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { ErrorState, Field } from "../components";
+import { ErrorState } from "../components";
 import { applyPreference } from "../i18n";
 import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
@@ -14,6 +14,7 @@ export function LanguageSettingsForm(props: { ui: InstanceUISettings; preference
 
 export function PersonalLanguageForm({ ui, preferences }: { ui: InstanceUISettings; preferences: AdminPreferences }) {
   const { t, i18n } = useTranslation();
+  const languageLabel = useId();
   const queryClient = useQueryClient();
   const { notify } = useNotify();
   const [locale, setLocale] = useState<LocalePreference>(preferences.locale);
@@ -34,18 +35,17 @@ export function PersonalLanguageForm({ ui, preferences }: { ui: InstanceUISettin
   return (
     <section className="panel settings-card language-settings">
       <header className="panel-header">
-        <div><p className="eyebrow">{t("settings.personalScope")}</p><h3>{t("settings.interfaceLanguage")}</h3></div>
+        <div><h3 id={languageLabel}>{t("settings.interfaceLanguage")}</h3></div>
         <span className="badge">{t("settings.onlyYou")}</span>
       </header>
-      <p className="panel-description">{t("settings.personalLanguageDescription")}</p>
       <div className="settings-form compact-form" aria-busy={preferenceMutation.isPending}>
-        <Field label={t("settings.interfaceLanguage")}>
-          <select value={locale} disabled={preferenceMutation.isPending} onChange={(event) => { const value = event.target.value as LocalePreference; setLocale(value); preferenceMutation.mutate(value); }}>
+        <div className="field">
+          <select aria-labelledby={languageLabel} value={locale} disabled={preferenceMutation.isPending} onChange={(event) => { const value = event.target.value as LocalePreference; setLocale(value); preferenceMutation.mutate(value); }}>
             <option value="system">{t("settings.followInstance")}</option>
             <option value="zh-CN">{t("common.localeZhCN")}</option>
             <option value="en-US">{t("common.localeEnUS")}</option>
           </select>
-        </Field>
+        </div>
         {preferenceMutation.isError && <ErrorState error={preferenceMutation.error} />}
       </div>
     </section>
@@ -54,6 +54,7 @@ export function PersonalLanguageForm({ ui, preferences }: { ui: InstanceUISettin
 
 export function InstanceLanguageForm({ ui, preferences }: { ui: InstanceUISettings; preferences: AdminPreferences }) {
   const { t, i18n } = useTranslation();
+  const languageLabel = useId();
   const readOnly = useIsReadOnly();
   const queryClient = useQueryClient();
   const { notify } = useNotify();
@@ -70,15 +71,15 @@ export function InstanceLanguageForm({ ui, preferences }: { ui: InstanceUISettin
   const instanceChanged = defaultLocale !== ui.default_locale;
   return (
     <section className="panel settings-card language-settings">
-      <header className="panel-header"><div><p className="eyebrow">{t("settings.instanceScope")}</p><h3>{t("settings.instanceLanguage")}</h3></div><span className="badge warning">{t("settings.allAdministrators")}</span></header>
+      <header className="panel-header"><div><h3 id={languageLabel}>{t("settings.instanceLanguage")}</h3></div><span className="badge">{t("settings.allAdministrators")}</span></header>
       <p className="panel-description">{t("settings.instanceLanguageDescription")}</p>
       <form className="settings-form compact-form" aria-busy={instanceMutation.isPending} onSubmit={(event) => { event.preventDefault(); instanceMutation.mutate(); }}>
-        <Field label={t("settings.instanceLanguage")}>
-          <select value={defaultLocale} onChange={(event) => { instanceMutation.reset(); setDefaultLocale(event.target.value as SupportedLocale); }}>
+        <div className="field">
+          <select aria-labelledby={languageLabel} value={defaultLocale} onChange={(event) => { instanceMutation.reset(); setDefaultLocale(event.target.value as SupportedLocale); }}>
             <option value="zh-CN">{t("common.localeZhCN")}</option>
             <option value="en-US">{t("common.localeEnUS")}</option>
           </select>
-        </Field>
+        </div>
         <div className="form-actions"><button className="button primary" disabled={readOnly || instanceMutation.isPending || !instanceChanged}>{instanceMutation.isPending ? t("settings.saving") : t("settings.saveInstanceLanguage")}</button></div>
         {instanceMutation.isError && <ErrorState error={instanceMutation.error} />}
       </form>

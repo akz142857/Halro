@@ -3,6 +3,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { api } from "../api";
 import {
   ConfirmButton,
+  DisclosureSection,
   EmptyState,
   ErrorState,
   Field,
@@ -81,14 +82,12 @@ export function OperationsPage() {
   return (
     <>
       <PageHeader
-        eyebrow={t("operations.eyebrow")}
         title={t("operations.title")}
-        description={t("operations.description")}
         action={<button className="button primary" disabled={readOnly} onClick={() => setEditing("new")}>{t("operations.addWebhook")}</button>}
       />
       <section className="panel operations-alerts">
         <header className="panel-header operations-panel-header">
-          <div><p className="eyebrow">{t("operations.outbound")}</p><h2>{t("operations.webhooks")}</h2></div>
+          <div><h2>{t("operations.webhooks")}</h2></div>
           <span className="count">{alerts.hasNextPage ? `${webhooks.length}+` : webhooks.length}</span>
         </header>
         {alerts.isPending && <Loading />}
@@ -109,7 +108,7 @@ export function OperationsPage() {
       </section>
       <section className="panel audit-panel">
         <header className="panel-header operations-panel-header">
-          <div><p className="eyebrow">{t("operations.recentAudit")}</p><h2>{t("operations.auditTrail")}</h2></div>
+          <div><h2>{t("operations.auditTrail")}</h2></div>
           {/* Every replay re-verifies the HMAC chain server-side and fails the request on a
               break, so the query's own state is the honest signal. A hardcoded green pill
               would keep claiming the chain is intact while the panel below shows an error. */}
@@ -124,7 +123,7 @@ export function OperationsPage() {
         {audit.isPending && <Loading />}
         {audit.isError && <ErrorState error={audit.error} />}
         {audit.isSuccess && auditRecords.length === 0 && (
-          <EmptyState title={t("operations.auditEmptyTitle")}>{t("operations.auditEmptyDescription")}</EmptyState>
+          <EmptyState title={t("operations.auditEmptyTitle")} />
         )}
         {auditRecords.length > 0 && (
           <div className="timeline" role="list" aria-label={t("operations.auditTrail")}>
@@ -350,6 +349,11 @@ function AlertForm({
         <Field label={t("operations.url")} hint={t("operations.urlHint")}>
           <input autoComplete="off" type="url" inputMode="url" value={url} onChange={(event) => setURL(event.target.value)} placeholder="https://hooks.example.com/halro" />
         </Field>
+        <DisclosureSection
+          title={t("operations.authentication")}
+          summary={t(!removeSecret && (secret || current?.secret_configured) ? "operations.authenticationConfigured" : "operations.authenticationNone")}
+          invalid={destinationChanged && !secret}
+        >
         <Field label={t("operations.header")}>
           <select value={header} disabled={removeSecret} onChange={(event) => setHeader(event.target.value)}>
             <option value="authorization">Authorization</option>
@@ -374,6 +378,7 @@ function AlertForm({
             <span>{t("operations.removeSecret")}</span>
           </label>
         )}
+        </DisclosureSection>
         <label className="check-row">
           <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
           <span>{t("operations.enableNow")}</span>

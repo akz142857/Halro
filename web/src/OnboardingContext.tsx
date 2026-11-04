@@ -13,7 +13,6 @@ export function OnboardingContextBanner() {
     <div className="onboarding-context" role="status">
       <div>
         <strong>{t("dashboard.firstRun.context.title")}</strong>
-        <span>{t("dashboard.firstRun.context.description")}</span>
       </div>
       <Link className="onboarding-context-back" href="/admin">
         <span className="onboarding-context-back-arrow" aria-hidden="true">←</span>

@@ -107,10 +107,9 @@ export function AppearanceForm({ preferences }: { preferences: AdminPreferences 
   return (
     <section className="panel settings-card appearance-settings">
       <header className="panel-header">
-        <div><p className="eyebrow">{t("settings.personalScope")}</p><h3>{t("settings.appearance.title")}</h3></div>
+        <div><h3>{t("settings.appearance.title")}</h3></div>
         <span className="badge">{t("settings.onlyYou")}</span>
       </header>
-      <p className="panel-description">{t("settings.appearance.description")}</p>
       <fieldset className="appearance-choices" aria-busy={status === "saving"}>
         <legend className="sr-only">{t("settings.appearance.legend")}</legend>
         {APPEARANCE_OPTIONS.map((value) => (

@@ -4,6 +4,7 @@ import { api, ApiError } from "../api";
 import {
   ConfirmButton,
   EmptyState,
+  DisclosureSection,
   ErrorState,
   Field,
   isStepUpPrompt,
@@ -370,9 +371,7 @@ export function ProvidersPage() {
   return (
     <div className="providers-page">
       <PageHeader
-        eyebrow={t("providers.eyebrow")}
         title={t("providers.title")}
-        description={t("providers.description")}
         action={
           activeView === "providers"
             ? <button className="button primary" disabled={readOnly || catalog.isError || (!pending && !canCreateProvider)} title={catalog.isError ? t("providers.matrixUnavailable") : !pending && !canCreateProvider ? t("providers.createCredentialFirst") : undefined} onClick={() => setProviderDialog(true)}>{t("providers.addProvider")}</button>
@@ -433,13 +432,13 @@ export function ProvidersPage() {
           </div>
           {activeView === "providers" && <section id="providers-panel" role="tabpanel" aria-labelledby="providers-tab" className="panel provider-resource-panel">
             {!canCreateProvider && (
-			  <div className="dependency-notice"><div><strong>{t("providers.credentialRequired")}</strong><span>{t("providers.providerDependencyHint")}</span></div><button className="button secondary" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => { selectView("credentials"); setCredentialDialog(true); }}>{t("providers.openCredentialVault")}</button></div>
+			  <div className="dependency-notice"><div><strong>{t("providers.credentialRequired")}</strong></div><button className="button secondary" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => { selectView("credentials"); setCredentialDialog(true); }}>{t("providers.openCredentialVault")}</button></div>
             )}
             {providerItems.length === 0 && canCreateProvider && (
               <EmptyState title={t("providers.noProviders")}>{t("providers.noProvidersDescription")}</EmptyState>
             )}
             {!!providerItems.length && <ResourceToolbar query={providerQuery} onQueryChange={setProviderQuery} queryPlaceholder={t("providers.searchProviders")} count={t("providers.resultCount", { visible: filteredProviders.length, total: providerItems.length })} status={providerStatus} onStatusChange={setProviderStatus} />}
-            {!!providerItems.length && !filteredProviders.length && <EmptyState title={t("providers.noMatches")}>{t("providers.noMatchesDescription")}</EmptyState>}
+            {!!providerItems.length && !filteredProviders.length && <EmptyState title={t("providers.noMatches")} action={<button className="button secondary" onClick={() => { setProviderQuery(""); setProviderStatus("all"); }}>{t("providers.clearFilters")}</button>}>{t("providers.noMatchesDescription")}</EmptyState>}
             {filteredProviders.map((provider) => (
               <ProviderRow
                 provider={provider}
@@ -459,7 +458,7 @@ export function ProvidersPage() {
               <EmptyState title={t("providers.noCredentials")}>{t("providers.noCredentialsDescription")}</EmptyState>
             )}
             {!!credentialItems.length && <ResourceToolbar query={credentialQuery} onQueryChange={setCredentialQuery} queryPlaceholder={t("providers.searchCredentials")} count={t("providers.resultCount", { visible: filteredCredentials.length, total: credentialItems.length })} />}
-            {!!credentialItems.length && !filteredCredentials.length && <EmptyState title={t("providers.noMatches")}>{t("providers.noMatchesDescription")}</EmptyState>}
+            {!!credentialItems.length && !filteredCredentials.length && <EmptyState title={t("providers.noMatches")} action={<button className="button secondary" onClick={() => setCredentialQuery("")}>{t("providers.clearFilters")}</button>}>{t("providers.noMatchesDescription")}</EmptyState>}
             {filteredCredentials.map((credential) => (
               <CredentialRow key={credential.id} credential={credential} catalog={catalog.data} highlighted={focusedCredentialID === credential.id} useCount={providerItems.filter((provider) => provider.credential_id === credential.id).length} onUsageClick={() => { setFocusedProviderCredentialID(credential.id); selectView("providers"); }} />
             ))}
@@ -569,6 +568,16 @@ function ProviderEgressProxyForm({ current, onClose }: { current?: ProviderEgres
   const [clearAuth, setClearAuth] = useState(false);
   const [allowCleartextAuth, setAllowCleartextAuth] = useState(current?.allow_cleartext_basic_auth ?? false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const formElement = useRef<HTMLFormElement>(null);
+  const [refusedSubmits, setRefusedSubmits] = useState(0);
+  useEffect(() => {
+    if (!refusedSubmits) return;
+    requestAnimationFrame(() => {
+      const invalid = formElement.current?.querySelector<HTMLElement>("[aria-invalid='true']");
+      invalid?.scrollIntoView?.({ block: "center" });
+      invalid?.focus();
+    });
+  }, [refusedSubmits]);
   const authWillExist = !clearAuth && Boolean(current?.authenticated || username || password);
   const mutation = useMutation({
     mutationFn: () => {
@@ -609,7 +618,7 @@ function ProviderEgressProxyForm({ current, onClose }: { current?: ProviderEgres
   const dirty = useDirty({ name, endpoint, allowPrivate, allowLoopback, username, password, clearAuth, allowCleartextAuth });
   return (
     <Modal title={t(current ? "providers.editProxy" : "providers.createProxy")} dirty={dirty} closeDisabled={mutation.isPending} onClose={onClose}>
-      <form className="provider-credential-form provider-egress-proxy-form" onSubmit={(event) => {
+      <form ref={formElement} className="provider-credential-form provider-egress-proxy-form" onSubmit={(event) => {
         event.preventDefault();
         const nextErrors: Record<string, string> = {};
         if (!name.trim()) nextErrors.name = t("providers.validationProxyNameRequired");
@@ -618,22 +627,18 @@ function ProviderEgressProxyForm({ current, onClose }: { current?: ProviderEgres
         else if (username.includes(":") || username.length > 1024 || password.length > 4096) nextErrors.authentication = t("providers.validationProxyAuthFormat");
         if (endpoint.trim().startsWith("http://") && authWillExist && !allowCleartextAuth) nextErrors.authentication = t("providers.validationProxyCleartextAuth");
         setErrors(nextErrors);
+        if (Object.keys(nextErrors).length) setRefusedSubmits((value) => value + 1);
         if (!Object.keys(nextErrors).length && (!stepUp.asked || stepUp.values.currentPassword)) mutation.mutate();
       }} autoComplete="off">
         <div className="provider-credential-form-body provider-egress-proxy-form-body">
-          <section className="proxy-form-section" aria-labelledby="proxy-connection-title">
-            <header><h3 id="proxy-connection-title">{t("providers.proxyConnectionTitle")}</h3><p>{t("providers.proxyConnectionDescription")}</p></header>
+          <section className="proxy-form-section" aria-label={t("providers.proxyConnectionTitle")}>
+
             <Field label={t("providers.proxyName")} error={errors.name}><input autoFocus value={name} onChange={(event) => { setName(event.target.value); setErrors((previous) => omitError(previous, "name")); }} /></Field>
-            <Field label={t("providers.proxyEndpointInput")} hint={`${t("providers.proxyEndpointInputHint")} ${t("providers.proxyEndpointHint")}`} error={errors.endpoint}><input inputMode="url" value={endpoint} onChange={(event) => { setEndpoint(event.target.value); setErrors((previous) => omitError(previous, "endpoint")); }} /></Field>
+            <Field label={t("providers.proxyEndpointInput")} hint={t("providers.proxyEndpointHint")} error={errors.endpoint}><input inputMode="url" value={endpoint} onChange={(event) => { setEndpoint(event.target.value); setErrors((previous) => omitError(previous, "endpoint")); }} /></Field>
           </section>
 
-          <section className={`proxy-form-section proxy-boundary-section${allowPrivate || allowLoopback ? " expanded" : ""}`} aria-labelledby="proxy-boundary-title">
-            <header>
-              <div><h3 id="proxy-boundary-title">{t("providers.proxyBoundarySectionTitle")}</h3><p id="proxy-boundary-description">{t("providers.proxyBoundarySectionDescription")}</p></div>
-              <span className="proxy-boundary-state" aria-live="polite">{allowPrivate || allowLoopback
-                ? t("providers.proxyBoundaryExceptions", { count: Number(allowPrivate) + Number(allowLoopback) })
-                : t("providers.proxyBoundaryProtected")}</span>
-            </header>
+          <DisclosureSection title={t("providers.proxyBoundarySectionTitle")} summary={allowPrivate || allowLoopback ? t("providers.proxyBoundaryExceptions", { count: Number(allowPrivate) + Number(allowLoopback) }) : t("providers.proxyBoundaryProtected")}>
+            <p id="proxy-boundary-description" className="field-hint">{t("providers.proxyBoundarySectionDescription")}</p>
             <fieldset className="proxy-boundary-options" aria-describedby="proxy-boundary-description">
               <legend className="visually-hidden">{t("providers.proxyBoundarySectionTitle")}</legend>
               <label className={`proxy-boundary-option${allowPrivate ? " selected" : ""}`}>
@@ -647,21 +652,21 @@ function ProviderEgressProxyForm({ current, onClose }: { current?: ProviderEgres
                 <span className="proxy-boundary-option-state">{t(allowLoopback ? "providers.proxyExceptionAllowed" : "providers.proxyExceptionBlocked")}</span>
               </label>
             </fieldset>
-            {allowPrivate || allowLoopback ? <div className="proxy-boundary-warning" role="status">
+          </DisclosureSection>
+            {(allowPrivate || allowLoopback) && <div className="proxy-boundary-warning" role="status">
               <span className="proxy-boundary-warning-icon" aria-hidden="true">!</span>
               <span><strong>{t("providers.proxyBoundaryTitle")}</strong><small>{t("providers.proxyBoundaryDescription")}</small></span>
-            </div> : <p className="proxy-boundary-default"><span aria-hidden="true">✓</span>{t("providers.proxyBoundaryDefault")}</p>}
-          </section>
+            </div>}
 
-          <section className="proxy-form-section proxy-auth-section" aria-labelledby="proxy-auth-title">
-            <header><h3 id="proxy-auth-title">{t("providers.proxyAuthenticationTitle")}</h3><p>{t("providers.proxyAuthenticationDescription")}</p></header>
+          <DisclosureSection title={t("providers.proxyAuthenticationTitle")} summary={authWillExist ? t("providers.proxyBasicAuth") : t("providers.proxyNoAuth")} invalid={Boolean(errors.authentication)}>
+            <p className="field-hint">{t("providers.proxyAuthenticationDescription")}</p>
             <div className="proxy-auth-grid">
               <Field label={t("providers.proxyUsername")}><input value={username} disabled={clearAuth} autoComplete="username" onChange={(event) => { setUsername(event.target.value); setErrors((previous) => omitError(previous, "authentication")); }} /></Field>
               <Field label={t("providers.proxyPassword")} hint={current?.authenticated ? t("providers.proxyPasswordPreserveHint") : undefined} error={errors.authentication}><input type="password" value={password} disabled={clearAuth} autoComplete="new-password" onChange={(event) => { setPassword(event.target.value); setErrors((previous) => omitError(previous, "authentication")); }} /></Field>
             </div>
             {current?.authenticated && <label className="form-inline-check"><input type="checkbox" checked={clearAuth} onChange={(event) => { setClearAuth(event.target.checked); if (event.target.checked) { setUsername(""); setPassword(""); } }} /><span>{t("providers.proxyClearAuth")}</span></label>}
-            {endpoint.trim().startsWith("http://") && authWillExist && <label className="form-inline-check warning-text"><input type="checkbox" checked={allowCleartextAuth} onChange={(event) => { setAllowCleartextAuth(event.target.checked); setErrors((previous) => omitError(previous, "authentication")); }} /><span>{t("providers.proxyAllowCleartextAuth")}</span></label>}
-          </section>
+          </DisclosureSection>
+          {endpoint.trim().startsWith("http://") && authWillExist && <label className="form-inline-check warning-text"><input type="checkbox" checked={allowCleartextAuth} onChange={(event) => { setAllowCleartextAuth(event.target.checked); setErrors((previous) => omitError(previous, "authentication")); }} /><span>{t("providers.proxyAllowCleartextAuth")}</span></label>}
           {mutation.isError && !stepUp.probing && <div className="proxy-form-feedback"><ErrorState error={mutation.error} /></div>}
           {stepUp.asked && <div className="proxy-form-feedback"><ReauthFields values={stepUp.values} onChange={stepUp.setValues} description={t("auth.stepUpSecurityControl")} /></div>}
         </div>
@@ -890,8 +895,7 @@ function CredentialRow({ credential, useCount, highlighted, catalog, onUsageClic
         </div>
         {expanded && <section id={`credential-details-${credential.id}`} className="credential-expanded-content" aria-label={t("providers.credentialDetailsTitle")}>
           <header className="credential-detail-header">
-            <div><small>{t("providers.technicalDetails")}</small><strong>{t("providers.credentialDetailsTitle")}</strong></div>
-            <p>{t("providers.credentialDetailsDescription")}</p>
+            <div><strong>{t("providers.credentialDetailsTitle")}</strong></div>
           </header>
           <dl className="credential-detail-grid">
             {/* The product first, in the words an operator bought it in; the
@@ -1272,6 +1276,7 @@ function ProviderForm({
     ? current.profile_id
     : connectionChoices(catalog, initialType)[0]?.profileID ?? defaultProfileID(catalog, initialType);
   const [profileID, setProfileID] = useState(initialProfile);
+  const [selectionUpdated, setSelectionUpdated] = useState(false);
   const [baseURL, setBaseURL] = useState(current?.base_url ?? endpointForType(catalog, initialType));
   const [apiVersion, setAPIVersion] = useState(current?.api_version ?? "");
   const [bedrockProjectID, setBedrockProjectID] = useState(current?.bedrock_project_id ?? "");
@@ -1496,10 +1501,9 @@ function ProviderForm({
             }
           }}
         >
-          <section className="provider-form-section" aria-labelledby="provider-connection-title">
-            <header><h3 id="provider-connection-title">{t("providers.connectionSection")}</h3><p>{t("providers.connectionSectionDescription")}</p></header>
+          <section className="provider-form-section" aria-label={t("providers.connectionSection")}>
             <div className="form-grid">
-          <Field label={t("providers.providerName")} error={errors.name}><input autoComplete="off" autoFocus value={name} onChange={(event) => { setName(event.target.value); setErrors((previous) => omitError(previous, "name")); }} /></Field>
+          <Field label={t("providers.providerName")} error={errors.name}><input data-provider-name autoComplete="off" autoFocus value={name} onChange={(event) => { setName(event.target.value); setErrors((previous) => omitError(previous, "name")); }} /></Field>
           <Field label={t("providers.type")}>
             <select value={type} onChange={(event) => {
               const next = event.target.value as ProviderType;
@@ -1512,13 +1516,14 @@ function ProviderForm({
               setCapabilities(connectionDefaults(catalog, next, first?.profileID ?? defaultProfileID(catalog, next)));
               setUsageWarningAcknowledged(false);
               setErrors({});
+              setSelectionUpdated(true);
               mutation.reset();
             }}>
               <ProviderTypeOptions t={t} />
             </select>
           </Field>
           {choices.length > 1 && (
-            <Field label={t("providers.capabilityImplementation")} hint={t("providers.implementationHint")}>
+            <Field label={t("providers.capabilityImplementation")}>
               <select value={anchorProfile} onChange={(event) => {
                 const next = choices.find((choice) => choice.profileID === event.target.value);
                 if (!next) return;
@@ -1529,18 +1534,27 @@ function ProviderForm({
                 setCapabilities(connectionDefaults(catalog, type, next.profileID));
                 setUsageWarningAcknowledged(false);
                 setErrors({});
+                setSelectionUpdated(true);
                 mutation.reset();
               }}>
                 {choices.map((choice) => (
                   <option value={choice.profileID} key={choice.profileID}>
-                    {t(`providers.profiles.${choice.profileID}`, {
+                    {t(`providers.interfaceNames.${choice.profileID}`, { defaultValue: t(`providers.profiles.${choice.profileID}`, {
                       defaultValue: productLabel(t, catalog, type, choice.offeringID, choice.regionID) || choice.profileID,
-                    })}
+                    }) })}
                   </option>
                 ))}
               </select>
             </Field>
           )}
+          {choices.length === 1 && <Field label={t("providers.capabilityImplementation")}><output>{t(`providers.interfaceNames.${anchorProfile}`, { defaultValue: t(`providers.profiles.${anchorProfile}`, { defaultValue: selectedChoice ? productLabel(t, catalog, type, selectedChoice.offeringID, selectedChoice.regionID) || anchorProfile : anchorProfile }) })}</output></Field>}
+          <Field label={t("providers.encryptedCredential")} error={errors.credentialID || credentialBaseURLMismatch}>
+            <select value={credentialID} onChange={(event) => { setCredentialID(event.target.value); setUsageWarningAcknowledged(false); setErrors((previous) => omitError(previous, "credentialID")); }}>
+              {!matchingCredentials.length && <option value="">{t("providers.credentialRequired")}</option>}
+              {matchingCredentials.map((credential) => <option value={credential.id} key={credential.id}>{credential.name} · {displayBoundBaseURL(credential.bound_base_url)}</option>)}
+            </select>
+          </Field>
+          {selectionUpdated && <p className="field-hint" role="status">{t("providers.selectionUpdated")}</p>}
           {usageWarningRequired && (
             <SubscriptionUsageDisclosure
               acknowledged={usageWarningAcknowledged}
@@ -1558,43 +1572,16 @@ function ProviderForm({
               wrong one fails as an authentication error, so the credential's
               own bound URL is what the field is checked against rather than a
               per-provider sentence. */}
-          <Field label={t("providers.baseURL")} error={fixedRegionMismatch ? t("providers.validationFixedRegionMismatch") : errors.baseURL} hint={
-            credentialBoundURL ? t("providers.baseURLBoundHint", { credential: credentialBoundURL }) : undefined
-          }>
+          <Field label={t("providers.baseURL")} error={fixedRegionMismatch ? t("providers.validationFixedRegionMismatch") : errors.baseURL} hint={credentialBaseURLMismatch ? t("providers.baseURLBoundHint", { credential: credentialBoundURL }) : undefined}>
             <input autoComplete="off" value={baseURL} onChange={(event) => {
               setBaseURL(event.target.value);
               setErrors((previous) => omitError(omitError(previous, "credentialID"), "baseURL"));
             }} />
           </Field>
           {fixedRegionUnverified && <p className="field-hint warning-text">{t("providers.fixedRegionUnverified")}</p>}
-          <Field label={t("providers.egressPath")} hint={t("providers.egressHint")}>
-            <select
-              value={egressProxyID}
-              disabled={Boolean(current && enabledDeploymentCount > 0)}
-              onChange={(event) => setEgressProxyID(event.target.value)}
-            >
-              <option value="">{t("providers.egressDirect")}</option>
-              {current?.egress_proxy_id && !egress.items.some((proxy) => proxy.id === current.egress_proxy_id) && (
-                <option value={current.egress_proxy_id}>{t("providers.egressMissing")} · {current.egress_proxy_id}</option>
-              )}
-              {egress.items.map((proxy) => (
-                <option value={proxy.id} key={proxy.id}>{proxy.name} · {proxy.endpoint_host}:{proxy.endpoint_port}</option>
-              ))}
-            </select>
-          </Field>
-          {current && enabledDeploymentCount > 0 && <p className="field-hint warning-text">{t("providers.egressLocked", { count: enabledDeploymentCount })}</p>}
-          <div className="notice warning">
-            <strong>{t("providers.egressTrustTitle")}</strong>
-            <span>{t("providers.egressTrustDescription")}</span>
-          </div>
           {type === "azure_openai" && (
             <Field label={t("providers.apiVersion")} hint={t("providers.apiVersionHint")}>
               <input autoComplete="off" value={apiVersion} onChange={(event) => setAPIVersion(event.target.value)} required />
-            </Field>
-          )}
-          {supportsAnthropicBetas && (
-            <Field label={t("providers.anthropicBetas")} hint={t("providers.anthropicBetasHint")} error={errors.anthropicBetas}>
-              <input autoComplete="off" value={anthropicBetas} placeholder={t("providers.anthropicBetasPlaceholder")} onChange={(event) => { setAnthropicBetas(event.target.value); setErrors((previous) => omitError(previous, "anthropicBetas")); }} />
             </Field>
           )}
           {selectedSurface === "bedrock-mantle" && (
@@ -1611,56 +1598,65 @@ function ProviderForm({
             </>
           )}
             </div>
-            <div className="provider-capabilities-group" aria-labelledby="provider-capabilities-title">
-              <header><h4 id="provider-capabilities-title">{t("providers.capabilitySummary")}</h4><p>{t(fixedCapabilities ? "providers.fixedCapabilityDescription" : "providers.capabilitySectionDescription")}</p></header>
-              <div className="capability-summary" aria-label={t("providers.capabilitySummary")}>
-                {visibleCapabilities.map((capability) => <span className="badge" key={capability}>{t(`capabilities.${capability}`)}</span>)}
-              </div>
-              {!fixedCapabilities && (
-                <div className="capability-disclosure capability-advanced">
-                  <header><span>{t("providers.advancedCapabilities")}</span><strong>{t("providers.selectedCapabilities", { count: visibleCapabilities.length })}</strong></header>
-                  <p className="capability-advanced-note">{t("providers.advancedCapabilitiesHint")}</p>
-                  <div className="capability-grid">{configurableCapabilities.map((capability) => { const unavailable = !capabilityCeiling[capability]; const warned = capabilityNeedsOptInWarning(catalog, capability); return <label className={`capability-option ${unavailable ? "unavailable" : ""}`} key={capability}><input type="checkbox" disabled={unavailable && !capabilities[capability]} checked={Boolean(capabilities[capability])} onChange={(event) => setCapabilities(updateCapabilitySelection(catalog, capabilities, capability, event.target.checked))} /><span>{t(`capabilities.${capability}`)}{unavailable && <small>{t("providers.unsupportedByInterface")}</small>}{!unavailable && warned && <small>{t("providers.capabilityEgressTag")}</small>}</span></label>; })}</div>
-                  {/* Every other capability decides what Halro will relay. These
-                      decide who else gets to make requests, and a checkbox row
-                      shows nothing of that — so the consequence is stated where
-                      it is accepted, in what it means rather than what it is
-                      called. Which capabilities these are comes from the server. */}
-                  {warnedCapabilities.length > 0 && (
-                    <div className="notice warning">
-                      <strong>{t("providers.capabilityEgressWarning")}</strong>
-                      <span>{t("providers.capabilityEgressWarningDescription", {
-                        capabilities: warnedCapabilities.map((capability) => t(`capabilities.${capability}`)).join(t("common.listSeparator")),
-                      })}</span>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
           </section>
-          <section className="provider-form-section" aria-labelledby="provider-capacity-title">
-            <header><h3 id="provider-capacity-title">{t("providers.capacitySection")}</h3><p>{t("providers.capacitySectionDescription")}</p></header>
+          <div className="provider-capabilities-group">
+            {fixedCapabilities ? <section aria-label={t("providers.allowedCapabilities")}>
+              <header><h3>{t("providers.allowedCapabilities")}</h3></header>
+              <div className="capability-summary">{visibleCapabilities.map((capability) => <span className="badge" key={capability}>{t(`capabilities.${capability}`)}</span>)}</div>
+            </section> : <DisclosureSection title={t("providers.allowedCapabilities")} summary={t("providers.selectedCapabilities", { count: visibleCapabilities.length })} invalid={Boolean(errors.capabilities)}>
+              <p className="field-hint">{t("providers.capabilitySectionDescription")}</p>
+              <div className="capability-grid">{configurableCapabilities.map((capability) => {
+                const unavailable = !capabilityCeiling[capability];
+                const warned = capabilityNeedsOptInWarning(catalog, capability);
+                return <label className={`capability-option ${unavailable ? "unavailable" : ""}`} key={capability}>
+                  <input type="checkbox" disabled={unavailable && !capabilities[capability]} checked={Boolean(capabilities[capability])} onChange={(event) => setCapabilities(updateCapabilitySelection(catalog, capabilities, capability, event.target.checked))} />
+                  <span>{t(`capabilities.${capability}`)}{unavailable && <small>{t("providers.unsupportedByInterface")}</small>}{!unavailable && warned && <small>{t("providers.capabilityEgressTag")}</small>}</span>
+                </label>;
+              })}</div>
+            </DisclosureSection>}
+            {/* Upstream networking remains visible even when capability choices are collapsed. */}
+            {warnedCapabilities.length > 0 && <div className="notice warning">
+              <strong>{t("providers.capabilityEgressWarning")}</strong>
+              <span>{t("providers.capabilityEgressWarningDescription", { capabilities: warnedCapabilities.map((capability) => t(`capabilities.${capability}`)).join(t("common.listSeparator")) })}</span>
+            </div>}
+          </div>
+          <DisclosureSection title={t("providers.connectionOptions")} summary={[
+            egressProxyID ? egress.items.find((proxy) => proxy.id === egressProxyID)?.name ?? t("providers.egressMissing") : t("providers.egressDirect"),
+            maxConcurrency ? t("providers.concurrencySummary", { count: maxConcurrency }) : t("providers.concurrencyUnlimited"),
+            supportsAnthropicBetas && anthropicBetas.trim() ? t("providers.betasConfigured") : "",
+          ].filter(Boolean).join(" · ")} invalid={Boolean(errors.anthropicBetas)}>
             <div className="form-grid">
-          <Field label={t("providers.maxConcurrency")} hint={t("providers.maxConcurrencyHint")}>
-            <input autoComplete="off"
-              type="number"
-              min="0"
-              value={maxConcurrency}
-              onChange={(event) => setMaxConcurrency(Number(event.target.value))}
-            />
-          </Field>
-          <Field label={t("providers.encryptedCredential")} error={errors.credentialID || credentialBaseURLMismatch}>
-            {/* The endpoint the credential is sealed to is what decides whether
-                it can be used here, so it is in the option rather than a detail
-                page the operator would have to leave the form to read. */}
-            <select value={credentialID} onChange={(event) => { setCredentialID(event.target.value); setUsageWarningAcknowledged(false); setErrors((previous) => omitError(previous, "credentialID")); }}>
-              {matchingCredentials.map((credential) => (
-                <option value={credential.id} key={credential.id}>{credential.name} · {displayBoundBaseURL(credential.bound_base_url)}</option>
+          <Field label={t("providers.egressPath")}>
+            <select
+              value={egressProxyID}
+              disabled={Boolean(current && enabledDeploymentCount > 0)}
+              onChange={(event) => setEgressProxyID(event.target.value)}
+            >
+              <option value="">{t("providers.egressDirect")}</option>
+              {current?.egress_proxy_id && !egress.items.some((proxy) => proxy.id === current.egress_proxy_id) && (
+                <option value={current.egress_proxy_id}>{t("providers.egressMissing")} · {current.egress_proxy_id}</option>
+              )}
+              {egress.items.map((proxy) => (
+                <option value={proxy.id} key={proxy.id}>{proxy.name} · {proxy.endpoint_host}:{proxy.endpoint_port}</option>
               ))}
             </select>
           </Field>
+          {current && enabledDeploymentCount > 0 && <p className="field-hint warning-text">{t("providers.egressLocked", { count: enabledDeploymentCount })}</p>}
+          <Field label={t("providers.maxConcurrency")} hint={t("providers.maxConcurrencyHint")}>
+            <input autoComplete="off" type="number" min="0" value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} />
+          </Field>
+          {supportsAnthropicBetas && (
+            <Field label={t("providers.anthropicBetas")} hint={t("providers.anthropicBetasHint")} error={errors.anthropicBetas}>
+              <input autoComplete="off" value={anthropicBetas} placeholder={t("providers.anthropicBetasPlaceholder")} onChange={(event) => { setAnthropicBetas(event.target.value); setErrors((previous) => omitError(previous, "anthropicBetas")); }} />
+            </Field>
+          )}
             </div>
-          </section>
+            <details className="provider-interface-details"><summary>{t("providers.technicalDetails")}</summary><p>{t(`providers.profiles.${anchorProfile}`, { defaultValue: "" })}</p><code>{anchorProfile}</code></details>
+          </DisclosureSection>
+          {egressProxyID && <div className="notice">
+            <span>{t("providers.egressTrustSummary")}</span>
+            <details><summary>{t("providers.egressTrustTitle")}</summary><p>{t("providers.egressTrustDescription")}</p></details>
+          </div>}
           {((mutation.isError && !stepUp.probing) || errors.capabilities) && (
             <div ref={submitError} tabIndex={-1} className="form-submit-error">
               {/* The one refusal with no field of its own to carry it. */}
@@ -1676,8 +1672,8 @@ function ProviderForm({
               <label className="form-footer-enable">
                 <input type="checkbox" aria-label={t("providers.enable")} checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
                 <span>
-                  <strong>{t("providers.enable")} · {enabled ? t("common.enabled") : t("common.disabled")}</strong>
-                  <small>{enabled ? t("providers.enableDescription") : t("providers.disabledImpact")}</small>
+                  <strong>{t("providers.enable")}</strong>
+                  {!enabled && <small>{t("providers.disabledImpact")}</small>}
                 </span>
               </label>
             </div>

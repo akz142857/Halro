@@ -1,0 +1,707 @@
+{
+  "date": "2026-11-04",
+  "scope": "Console-wide copy and feedback layout; Login unchanged",
+  "copy": {
+    "locales": {
+      "zh-CN": {
+        "changed": 155,
+        "removed": 21,
+        "added": 1,
+        "rewritten_characters_before": 7300,
+        "rewritten_characters_after": 4615,
+        "removed_keys": [
+          "developer.waitingDescription",
+          "custody.posture",
+          "custody.stable",
+          "custody.updated",
+          "settings.overviewEyebrow",
+          "settings.activationCurrentDescription",
+          "settings.mfaNotEnabled",
+          "settings.authenticatorDevicesDescription",
+          "settings.systemDescription",
+          "settings.configPreviewDescription",
+          "settings.effectiveConfigYamlDescription",
+          "dashboard.firstRun.eyebrow",
+          "dashboard.firstRun.pageDescription",
+          "dashboard.firstRun.description",
+          "dashboard.firstRun.context.description",
+          "usage.noCallsDescription",
+          "advisor.description",
+          "operations.auditEmptyDescription",
+          "providers.fixedCapabilityDescription",
+          "providers.providerDependencyHint",
+          "providers.credentialDetailsDescription"
+        ],
+        "added_keys": [
+          "developer.imageURLLabel"
+        ]
+      },
+      "en-US": {
+        "changed": 155,
+        "removed": 21,
+        "added": 1,
+        "rewritten_characters_before": 19890,
+        "rewritten_characters_after": 12505,
+        "removed_keys": [
+          "developer.waitingDescription",
+          "custody.posture",
+          "custody.stable",
+          "custody.updated",
+          "settings.overviewEyebrow",
+          "settings.activationCurrentDescription",
+          "settings.mfaNotEnabled",
+          "settings.authenticatorDevicesDescription",
+          "settings.systemDescription",
+          "settings.configPreviewDescription",
+          "settings.effectiveConfigYamlDescription",
+          "dashboard.firstRun.eyebrow",
+          "dashboard.firstRun.pageDescription",
+          "dashboard.firstRun.description",
+          "dashboard.firstRun.context.description",
+          "usage.noCallsDescription",
+          "advisor.description",
+          "operations.auditEmptyDescription",
+          "providers.fixedCapabilityDescription",
+          "providers.providerDependencyHint",
+          "providers.credentialDetailsDescription"
+        ],
+        "added_keys": [
+          "developer.imageURLLabel"
+        ]
+      }
+    },
+    "interpolation_changes": [],
+    "metric_scope": "Changed locale strings only; not total rendered interface density"
+  },
+  "login": {
+    "sourceIdenticalToBaseline": true,
+    "keysPerLanguage": 28,
+    "changedKeys": [],
+    "pixel_pairs_passed": 8,
+    "pixel_pairs_total": 8,
+    "different_pixels": 0,
+    "identical_png_bytes": true
+  },
+  "frontend": {
+    "typecheck": "passed",
+    "test_files": 51,
+    "tests_passed": 761,
+    "production_build": "passed",
+    "initial_gzip_bytes": 245022,
+    "artifact_secret_scan_files_clean": 30
+  },
+  "browser": {
+    "total": 456,
+    "passed": 456,
+    "failed": 0,
+    "uniquePageScenarios": 57,
+    "matrix": {
+      "locales": [
+        "zh-CN",
+        "en-US"
+      ],
+      "appearances": [
+        "dark",
+        "light"
+      ],
+      "widths": [
+        1440,
+        390
+      ],
+      "perGroup": 114
+    },
+    "supplemental": {
+      "advisorCorrectedSyntheticValues": {
+        "total": 16,
+        "passed": 16,
+        "note": "Same final build; these replace 16 earlier matrix Advisor cases with internally consistent warning evidence."
+      },
+      "runtimeSaveErrors": {
+        "total": 4,
+        "passed": 4,
+        "report": "/private/tmp/halro-system-polish-20261104/runtime-error-final/report.json"
+      },
+      "loginPixelPairs": {
+        "total": 8,
+        "passed": 8,
+        "identicalPNGBytes": true,
+        "differentPixels": 0,
+        "report": "/private/tmp/halro-system-polish-20261104/login-pixels-final/report.json"
+      },
+      "finalAffectedPages": {
+        "total": 24,
+        "passed": 24,
+        "report": "/private/tmp/halro-system-polish-20261104/final-inset/spacing.json"
+      }
+    },
+    "measurements": {
+      "routeVerticalFieldGap": {
+        "before": 32,
+        "after": 16,
+        "unit": "px"
+      },
+      "runtimeSaveError": {
+        "beforeGapBelow": 32,
+        "afterGapAbove": 14,
+        "afterGapBelow": 14,
+        "noticeMarginTop": 0,
+        "noticeMarginBottom": 0,
+        "unit": "px"
+      },
+      "diagnosticCardPadding": {
+        "beforeTop": 24,
+        "beforeLeft": 24,
+        "afterTop": 0,
+        "afterLeft": 0,
+        "unit": "px"
+      },
+      "advisorKeyboard": {
+        "keyboard": "Enter opens; Space closes; focus retained; Enter reopens",
+        "measurements": {
+          "summaryHeight": 44,
+          "summaryDisplay": "list-item",
+          "comparisonGap": 12,
+          "focused": true
+        },
+        "collapsedScreenshot": "/private/tmp/halro-system-polish-20261104/final-inset/advisor-keyboard-zh-CN-dark-390-collapsed.png"
+      },
+      "sharedFeedbackContract": [
+        {
+          "container": "block",
+          "variant": "normal",
+          "parentDisplay": "block",
+          "rowGap": 0,
+          "fieldMarginBottom": 16,
+          "noticeMarginTop": 12,
+          "noticeMarginBottom": 12,
+          "gapAbove": 16,
+          "gapBelow": 12,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "block",
+          "variant": "warning",
+          "parentDisplay": "block",
+          "rowGap": 0,
+          "fieldMarginBottom": 16,
+          "noticeMarginTop": 12,
+          "noticeMarginBottom": 12,
+          "gapAbove": 16,
+          "gapBelow": 12,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "block",
+          "variant": "error",
+          "parentDisplay": "block",
+          "rowGap": 0,
+          "fieldMarginBottom": 16,
+          "noticeMarginTop": 12,
+          "noticeMarginBottom": 18,
+          "gapAbove": 16,
+          "gapBelow": 18,
+          "lastNoticeMarginBottom": 18
+        },
+        {
+          "container": "block",
+          "variant": "info",
+          "parentDisplay": "block",
+          "rowGap": 0,
+          "fieldMarginBottom": 16,
+          "noticeMarginTop": 12,
+          "noticeMarginBottom": 16,
+          "gapAbove": 16,
+          "gapBelow": 16,
+          "lastNoticeMarginBottom": 16
+        },
+        {
+          "container": "block",
+          "variant": "success",
+          "parentDisplay": "block",
+          "rowGap": 0,
+          "fieldMarginBottom": 16,
+          "noticeMarginTop": 12,
+          "noticeMarginBottom": 12,
+          "gapAbove": 16,
+          "gapBelow": 12,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "form-grid",
+          "variant": "normal",
+          "parentDisplay": "grid",
+          "rowGap": 16,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 16,
+          "gapBelow": 16,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "form-grid",
+          "variant": "warning",
+          "parentDisplay": "grid",
+          "rowGap": 16,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 16,
+          "gapBelow": 16,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "form-grid",
+          "variant": "error",
+          "parentDisplay": "grid",
+          "rowGap": 16,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 16,
+          "gapBelow": 16,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "form-grid",
+          "variant": "info",
+          "parentDisplay": "grid",
+          "rowGap": 16,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 16,
+          "gapBelow": 16,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "form-grid",
+          "variant": "success",
+          "parentDisplay": "grid",
+          "rowGap": 16,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 16,
+          "gapBelow": 16,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "price-form-grid",
+          "variant": "normal",
+          "parentDisplay": "grid",
+          "rowGap": 16,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 16,
+          "gapBelow": 16,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "price-form-grid",
+          "variant": "warning",
+          "parentDisplay": "grid",
+          "rowGap": 16,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 16,
+          "gapBelow": 16,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "price-form-grid",
+          "variant": "error",
+          "parentDisplay": "grid",
+          "rowGap": 16,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 16,
+          "gapBelow": 16,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "price-form-grid",
+          "variant": "info",
+          "parentDisplay": "grid",
+          "rowGap": 16,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 16,
+          "gapBelow": 16,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "price-form-grid",
+          "variant": "success",
+          "parentDisplay": "grid",
+          "rowGap": 16,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 16,
+          "gapBelow": 16,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "settings-form",
+          "variant": "normal",
+          "parentDisplay": "grid",
+          "rowGap": 14,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 14,
+          "gapBelow": 14,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "settings-form",
+          "variant": "warning",
+          "parentDisplay": "grid",
+          "rowGap": 14,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 14,
+          "gapBelow": 14,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "settings-form",
+          "variant": "error",
+          "parentDisplay": "grid",
+          "rowGap": 14,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 14,
+          "gapBelow": 14,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "settings-form",
+          "variant": "info",
+          "parentDisplay": "grid",
+          "rowGap": 14,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 14,
+          "gapBelow": 14,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "settings-form",
+          "variant": "success",
+          "parentDisplay": "grid",
+          "rowGap": 14,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 14,
+          "gapBelow": 14,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "capability-detection-panel",
+          "variant": "normal",
+          "parentDisplay": "grid",
+          "rowGap": 12,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 12,
+          "gapBelow": 12,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "capability-detection-panel",
+          "variant": "warning",
+          "parentDisplay": "grid",
+          "rowGap": 12,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 12,
+          "gapBelow": 12,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "capability-detection-panel",
+          "variant": "error",
+          "parentDisplay": "grid",
+          "rowGap": 12,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 12,
+          "gapBelow": 12,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "capability-detection-panel",
+          "variant": "info",
+          "parentDisplay": "grid",
+          "rowGap": 12,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 12,
+          "gapBelow": 12,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "capability-detection-panel",
+          "variant": "success",
+          "parentDisplay": "grid",
+          "rowGap": 12,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 12,
+          "gapBelow": 12,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "usage-summary",
+          "variant": "normal",
+          "parentDisplay": "flex",
+          "rowGap": 16,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 16,
+          "gapBelow": 16,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "usage-summary",
+          "variant": "warning",
+          "parentDisplay": "flex",
+          "rowGap": 16,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 16,
+          "gapBelow": 16,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "usage-summary",
+          "variant": "error",
+          "parentDisplay": "flex",
+          "rowGap": 16,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 16,
+          "gapBelow": 16,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "usage-summary",
+          "variant": "info",
+          "parentDisplay": "flex",
+          "rowGap": 16,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 16,
+          "gapBelow": 16,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "usage-summary",
+          "variant": "success",
+          "parentDisplay": "flex",
+          "rowGap": 16,
+          "fieldMarginBottom": 0,
+          "noticeMarginTop": 0,
+          "noticeMarginBottom": 0,
+          "gapAbove": 16,
+          "gapBelow": 16,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "disclosure-body",
+          "variant": "normal",
+          "parentDisplay": "block",
+          "rowGap": 0,
+          "fieldMarginBottom": 16,
+          "noticeMarginTop": 12,
+          "noticeMarginBottom": 12,
+          "gapAbove": 16,
+          "gapBelow": 12,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "disclosure-body",
+          "variant": "warning",
+          "parentDisplay": "block",
+          "rowGap": 0,
+          "fieldMarginBottom": 16,
+          "noticeMarginTop": 12,
+          "noticeMarginBottom": 12,
+          "gapAbove": 16,
+          "gapBelow": 12,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "disclosure-body",
+          "variant": "error",
+          "parentDisplay": "block",
+          "rowGap": 0,
+          "fieldMarginBottom": 16,
+          "noticeMarginTop": 12,
+          "noticeMarginBottom": 18,
+          "gapAbove": 16,
+          "gapBelow": 18,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "disclosure-body",
+          "variant": "info",
+          "parentDisplay": "block",
+          "rowGap": 0,
+          "fieldMarginBottom": 16,
+          "noticeMarginTop": 12,
+          "noticeMarginBottom": 16,
+          "gapAbove": 16,
+          "gapBelow": 16,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "disclosure-body",
+          "variant": "success",
+          "parentDisplay": "block",
+          "rowGap": 0,
+          "fieldMarginBottom": 16,
+          "noticeMarginTop": 12,
+          "noticeMarginBottom": 12,
+          "gapAbove": 16,
+          "gapBelow": 12,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "table-cell",
+          "variant": "normal",
+          "parentDisplay": "table-cell",
+          "rowGap": 0,
+          "fieldMarginBottom": 16,
+          "noticeMarginTop": 12,
+          "noticeMarginBottom": 12,
+          "gapAbove": 16,
+          "gapBelow": 12,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "table-cell",
+          "variant": "warning",
+          "parentDisplay": "table-cell",
+          "rowGap": 0,
+          "fieldMarginBottom": 16,
+          "noticeMarginTop": 12,
+          "noticeMarginBottom": 12,
+          "gapAbove": 16,
+          "gapBelow": 12,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "table-cell",
+          "variant": "error",
+          "parentDisplay": "table-cell",
+          "rowGap": 0,
+          "fieldMarginBottom": 16,
+          "noticeMarginTop": 12,
+          "noticeMarginBottom": 18,
+          "gapAbove": 16,
+          "gapBelow": 18,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "table-cell",
+          "variant": "info",
+          "parentDisplay": "table-cell",
+          "rowGap": 0,
+          "fieldMarginBottom": 16,
+          "noticeMarginTop": 12,
+          "noticeMarginBottom": 16,
+          "gapAbove": 16,
+          "gapBelow": 16,
+          "lastNoticeMarginBottom": 0
+        },
+        {
+          "container": "table-cell",
+          "variant": "success",
+          "parentDisplay": "table-cell",
+          "rowGap": 0,
+          "fieldMarginBottom": 16,
+          "noticeMarginTop": 12,
+          "noticeMarginBottom": 12,
+          "gapAbove": 16,
+          "gapBelow": 12,
+          "lastNoticeMarginBottom": 0
+        }
+      ],
+      "fieldHints": {
+        "controlToHintGap": 6,
+        "unit": "px",
+        "note": "Shared Field small hint; contextual standalone hints retain their own container spacing."
+      },
+      "diagnosticParagraphInsets": [
+        {
+          "className": "write-path-caption",
+          "paddingLeft": 16,
+          "textInset": 17,
+          "headerTextInset": 17
+        },
+        {
+          "className": "write-path-meta",
+          "paddingLeft": 16,
+          "textInset": 17,
+          "headerTextInset": 17
+        },
+        {
+          "className": "",
+          "paddingLeft": 16,
+          "textInset": 17,
+          "headerTextInset": 17
+        }
+      ]
+    }
+  },
+  "workflow": {
+    "passed": 1,
+    "total": 1,
+    "case": "ordinary-configuration-task-chain"
+  },
+  "limits": [
+    "All business API responses synthetic; external business requests blocked.",
+    "CSS contract harnesses are identified separately from actual page checks.",
+    "Keyboard and Chromium accessibility trees; not VoiceOver.",
+    "The last diagnostic paragraph inset was a CSS-only follow-up with focused production rechecks."
+  ],
+  "final_css_recheck": {
+    "passed": 24,
+    "total": 24,
+    "login_pixel_pairs": 8,
+    "different_pixels": 0
+  },
+  "embedded_index_sha256": "efafd8c07ae42534cce44eab591f6c152c4d06f0c712b2c8f43166225fe0cec5",
+  "local_deployment": {
+    "image": "halro-local:console-polish-final-20261104",
+    "container": "halro",
+    "backup_container": "halro-before-polish-20261104-1793781929",
+    "data_volume": "halro-data-polish-20261104-1793781929",
+    "backup_data_volume": "halro-data-polish-20261104-1793781623",
+    "ready": true,
+    "container_health": "healthy",
+    "gateway_readiness": 200,
+    "admin_http": 200,
+    "embedded_index_matches_build": true
+  }
+}

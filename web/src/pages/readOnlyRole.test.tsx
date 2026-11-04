@@ -247,6 +247,7 @@ describe("destructive step-up", () => {
   // prompt that collects a password and then sends the old bodiless request
   // looks correct and protects nothing.
   it("sends the operator's own credentials with the delete", async () => {
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: true, policy: "optional", required: false, authenticators: [] });
     const route = {
       id: "route_chat", public_model: "chat", deployment_id: "deployment_gpt",
       priority: 10, strategy: "ordered", enabled: true, revision: 3, created_at: "", updated_at: "",
@@ -273,7 +274,7 @@ describe("destructive step-up", () => {
     await waitFor(() => expect(within(dialog).getByRole("button", { name: "删除" })).toBeDisabled());
 
     fireEvent.change(within(dialog).getByLabelText(/当前密码/), { target: { value: "correct horse battery staple" } });
-    fireEvent.change(within(dialog).getByLabelText(/身份验证器验证码/), { target: { value: "123456" } });
+    fireEvent.change(await within(dialog).findByLabelText(/身份验证器验证码/), { target: { value: "123456" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "删除" }));
 
     await waitFor(() => expect(remove).toHaveBeenCalledWith("route_chat", 3, {

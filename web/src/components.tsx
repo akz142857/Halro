@@ -2,7 +2,7 @@ import { cloneElement, Component, isValidElement, useEffect, useId, useLayoutEff
 import { createPortal } from "react-dom";
 import { ApiError } from "./api";
 import { useTranslation } from "react-i18next";
-import { useIsReadOnly, useSession } from "./session";
+import { useIsReadOnly, useMFAStatus, useSession } from "./session";
 import { errorDetail, localizedError } from "./i18n/errors";
 import { Link } from "./navigation";
 import { isSupportedTimeZone, supportedTimeZones, zoneOffsetLabel } from "./timezone";
@@ -13,21 +13,94 @@ export function PageHeader({
   description,
   action,
 }: {
-  eyebrow: string;
+  eyebrow?: string;
   title: string;
-  description: string;
+  description?: string;
   action?: ReactNode;
 }) {
   return (
     <header className="page-header">
       <div>
-        <p className="eyebrow">{eyebrow}</p>
+        {eyebrow && <p className="eyebrow">{eyebrow}</p>}
         <h1>{title}</h1>
-        <p className="page-description">{description}</p>
+        {description && <p className="page-description">{description}</p>}
       </div>
       {action && <div className="page-action">{action}</div>}
     </header>
   );
+}
+
+// Native disclosure keeps optional configuration one keyboard action away.
+// Its children remain mounted so collapsing never loses form values. Errors
+// reveal every enclosing disclosure before a form tries to focus the field.
+export function DisclosureSection({ title, summary, children, defaultOpen = false, invalid = false, className = "", id }: {
+  title: ReactNode;
+  summary?: ReactNode;
+  children: ReactNode;
+  defaultOpen?: boolean;
+  invalid?: boolean;
+  className?: string;
+  id?: string;
+}) {
+  const details = useRef<HTMLDetailsElement>(null);
+  const bodyID = useId();
+  const [expanded, setExpanded] = useState(defaultOpen || invalid);
+  useLayoutEffect(() => {
+    const element = details.current;
+    if (!element) return;
+    const form = element.closest("form");
+    const focusFirstError = (fallback: HTMLElement, native = false) => requestAnimationFrame(() => {
+      const selector = native ? '[aria-invalid="true"], input:invalid, select:invalid, textarea:invalid' : '[aria-invalid="true"]';
+      const field = Array.from((form ?? element).querySelectorAll<HTMLElement>(selector))
+        .find((candidate) => !candidate.matches(':disabled, input[type="hidden"]') && !candidate.closest('[hidden], [inert]')) ?? fallback;
+      let ancestor = field.parentElement;
+      while (ancestor) {
+        if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;
+        ancestor = ancestor.parentElement;
+      }
+      if (!field.isConnected) return;
+      field.scrollIntoView?.({ block: "nearest" });
+      field.focus();
+    });
+    const reveal = () => {
+      const field = element.querySelector<HTMLElement>('[aria-invalid="true"]');
+      if (!invalid && !field && !element.querySelector('.field-error')) return;
+      const wasClosed = !element.open;
+      let ancestor: HTMLElement | null = element;
+      while (ancestor) {
+        if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;
+        ancestor = ancestor.parentElement;
+      }
+      setExpanded(true);
+      if (wasClosed && field) focusFirstError(field);
+    };
+    reveal();
+    const observer = new MutationObserver(reveal);
+    observer.observe(element, { subtree: true, childList: true, attributes: true, attributeFilter: ["aria-invalid", "class"] });
+    const onInvalid = (event: Event) => {
+      let ancestor: HTMLElement | null = element;
+      while (ancestor) {
+        if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;
+        ancestor = ancestor.parentElement;
+      }
+      setExpanded(true);
+      const target = event.target as HTMLElement;
+      focusFirstError(target, true);
+    };
+    element.addEventListener("invalid", onInvalid, true);
+    const onSubmit = () => requestAnimationFrame(reveal);
+    form?.addEventListener("submit", onSubmit);
+    return () => { observer.disconnect(); element.removeEventListener("invalid", onInvalid, true); form?.removeEventListener("submit", onSubmit); };
+  }, [invalid]);
+  return <details id={id} className={`disclosure-section ${className}`.trim()} ref={details} open={expanded}
+    onToggle={(event) => setExpanded(event.currentTarget.open)}>
+    <summary aria-expanded={expanded} aria-controls={bodyID}>
+      <span className="disclosure-title">{title}</span>
+      {summary && <span className="disclosure-summary">{summary}</span>}
+      <span className="disclosure-chevron" aria-hidden="true">›</span>
+    </summary>
+    <div id={bodyID} className="disclosure-body">{children}</div>
+  </details>;
 }
 
 // The dot carries state through colour alone, which neither a screen reader nor a
@@ -208,14 +281,14 @@ export function EmptyState({
   action,
 }: {
   title: string;
-  children: ReactNode;
+  children?: ReactNode;
   action?: ReactNode;
 }) {
   return (
     <div className="empty-state">
       <div className="empty-mark" aria-hidden="true">H</div>
       <h2>{title}</h2>
-      <p>{children}</p>
+      {children && <p>{children}</p>}
       {action}
     </div>
   );
@@ -400,6 +473,10 @@ export function Modal({
   const { t } = useTranslation();
   const titleID = useId();
   const dialog = useRef<HTMLElement>(null);
+  // Capture the trigger before children commit autoFocus. An effect would
+  // remember a field inside the dialog, which is removed when it closes.
+  const returnFocus = useRef<HTMLElement | null>(document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  const initialFocusTarget = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   const closeDisabledRef = useRef(closeDisabled);
   // Escape, the backdrop and × all mean "close". A modal that declares itself dirty
@@ -426,15 +503,17 @@ export function Modal({
     if (!container) return;
     // Opening the prompt moves focus onto it; cancelling puts it back in the form.
     const selector = confirmingDiscard ? "[data-discard-initial]" : "[data-modal-initial]";
-    container.querySelector<HTMLElement>(selector)?.focus();
+    (container.querySelector<HTMLElement>(selector) ?? (!confirmingDiscard ? initialFocusTarget.current : null))?.focus();
   }, [confirmingDiscard]);
   useEffect(() => {
     const releaseScroll = holdDocumentStill();
-    const previouslyFocused = document.activeElement as HTMLElement | null;
     const container = dialog.current;
+    if (!initialFocusTarget.current && container?.contains(document.activeElement) && document.activeElement !== container) {
+      initialFocusTarget.current = document.activeElement as HTMLElement;
+    }
     // React applies autoFocus during commit, before this effect. Taking the focus back
     // to the container would strand the caret outside the field the form asked for.
-    const initial = container?.querySelector<HTMLElement>("[data-modal-initial]");
+    const initial = container?.querySelector<HTMLElement>("[data-modal-initial]") ?? initialFocusTarget.current;
     if (initial) initial.focus();
     else if (container && !container.contains(document.activeElement)) container.focus();
     const onKeyDown = (event: KeyboardEvent) => {
@@ -452,7 +531,16 @@ export function Modal({
       // While the discard prompt is up the form behind it is inert, so the trap
       // narrows to the prompt rather than tabbing through fields nobody can see.
       const scope = (confirmingRef.current && container.querySelector<HTMLElement>(".discard-prompt")) || container;
-      const focusable = Array.from(scope.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])')).filter((element) => !element.hasAttribute("hidden"));
+      const focusable = Array.from(scope.querySelectorAll<HTMLElement>('summary, button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])')).filter((element) => {
+        if (element.hasAttribute("tabindex") && element.tabIndex < 0) return false;
+        if (element.closest('[hidden], [inert]')) return false;
+        let ancestor: HTMLElement | null = element.parentElement;
+        while (ancestor && ancestor !== scope) {
+          if (ancestor instanceof HTMLDetailsElement && !ancestor.open && !ancestor.querySelector(":scope > summary")?.contains(element)) return false;
+          ancestor = ancestor.parentElement;
+        }
+        return true;
+      });
       if (!focusable.length) { event.preventDefault(); container.focus(); return; }
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
@@ -463,7 +551,7 @@ export function Modal({
     return () => {
       document.removeEventListener("keydown", onKeyDown);
       releaseScroll();
-      previouslyFocused?.focus();
+      if (returnFocus.current?.isConnected) returnFocus.current.focus();
     };
   }, []);
   return createPortal(
@@ -558,6 +646,7 @@ export function ConfirmButton({
   // that silently dropped the fields would read as the console losing the
   // request.
   const stepUp = useStepUpPrompt();
+  const mfa = useMFAStatus(open && requireStepUp && stepUp.asked);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<unknown>(null);
   const close = () => {
@@ -566,7 +655,9 @@ export function ConfirmButton({
     setPending(false);
     setOpen(false);
   };
+  const missingReauth = requireStepUp && stepUp.asked && (!stepUp.values.currentPassword || !mfa.data || mfa.isError || (mfa.data.enabled && !stepUp.values.totpCode.trim()));
   const submit = async () => {
+    if (pending || missingReauth) return;
     setFailure(null);
     setPending(true);
     try {
@@ -606,13 +697,13 @@ export function ConfirmButton({
             <p id={consequenceID}>{confirmLabel}</p>
             {requireStepUp && stepUp.asked && <ReauthFields values={stepUp.values} onChange={stepUp.setValues} description={t("auth.stepUpDestructive")} />}
             {Boolean(failure) && <ErrorState error={failure} />}
-            {Boolean(failure) && requireStepUp && <p className="form-note">{t("auth.stepUpRetryNeedsNewCode")}</p>}
+            {Boolean(failure) && requireStepUp && mfa.data?.enabled && <p className="form-note">{t("auth.stepUpRetryNeedsNewCode")}</p>}
             <div className="form-actions">
               <button type="button" className="button ghost" data-modal-initial disabled={pending} onClick={close}>{t("common.cancel")}</button>
               <button
                 type="button"
                 className="button danger"
-                disabled={pending || (requireStepUp && stepUp.asked && !stepUp.values.currentPassword)}
+                disabled={pending || missingReauth}
                 onClick={submit}
               >{pending ? t("common.working") : label}</button>
             </div>
@@ -815,14 +906,8 @@ export function useStepUpPrompt() {
   };
 }
 
-// Step-up re-authentication: the caller resupplies their own password and a
-// fresh TOTP code with the request itself, rather than being handed a
-// short-lived elevated session. Every destructive Admin action that asks for it
-// asks with these same two fields, so the operator learns the shape once.
-//
-// The TOTP field is optional in the markup because the server only demands a
-// code from an account that actually has an authenticator enrolled; requiring
-// it here would lock out an instance where MFA is still optional.
+// Step-up uses the current account's enrolled factors. The server remains the
+// authority for re-authentication; a mandatory policy is not enrollment.
 export function ReauthFields({
   values,
   onChange,
@@ -869,21 +954,23 @@ export function ReauthFields({
           onChange={(event) => onChange({ ...values, currentPassword: event.target.value })}
         />
       </Field>
-      {/* The qualifier goes in the hint, where every other field in the console
-          puts one. Folding it into the label made this the only label on the
-          form carrying its own explanation. */}
-      <Field label={t("auth.authenticatorCode")} hint={t("auth.authenticatorCodeWhenEnabled")}>
-        <input
-          inputMode="numeric"
-          pattern="[0-9]*"
-          maxLength={8}
-          autoComplete="one-time-code"
-          value={values.totpCode}
-          onChange={(event) => onChange({ ...values, totpCode: event.target.value })}
-        />
-      </Field>
+      <AuthenticatorCodeField value={values.totpCode} onChange={(totpCode) => onChange({ ...values, totpCode })} />
     </>
   );
+}
+
+export function AuthenticatorCodeField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const { t } = useTranslation();
+  const status = useMFAStatus();
+  useEffect(() => {
+    if (status.data?.enabled === false && value) onChange("");
+  }, [status.data?.enabled, value, onChange]);
+  if (status.isError) return <ErrorState error={status.error} action={<button type="button" className="button ghost" onClick={() => void status.refetch()}>{t("common.retry")}</button>} />;
+  if (!status.data) return <p role="status" className="form-note">{t("settings.loadingMFA")}</p>;
+  if (!status.data.enabled) return null;
+  return <Field label={t("auth.authenticatorCode")} hint={t("auth.authenticatorCodeWhenEnabled")}>
+    <input required inputMode="numeric" pattern="[0-9]*" maxLength={8} autoComplete="one-time-code" value={value} onChange={(event) => onChange(event.target.value)} />
+  </Field>;
 }
 
 /**

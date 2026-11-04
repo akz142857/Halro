@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
@@ -60,6 +60,7 @@ function attemptFixture(overrides: Partial<UsageRequestDetail["attempts"][number
 describe("DeveloperPage", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: false, policy: "optional", required: false, authenticators: [] });
     window.history.replaceState({}, "", "/admin/developer");
   });
 
@@ -71,23 +72,23 @@ describe("DeveloperPage", () => {
 
     expect(await screen.findByRole("heading", { name: "开发者工作台" })).toBeVisible();
     expect(await screen.findByRole("option", { name: "support-chat" })).toBeVisible();
+    expect(screen.queryByRole("textbox", { name: /Gateway 地址/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+    expect(document.querySelector(".developer-response-meta")).toBeNull();
+
+    openCode();
     expect(screen.getByRole("textbox", { name: /Gateway 地址/ })).toHaveValue("http://127.0.0.1:8080");
-    expect(screen.getByText("/v1/responses")).toBeVisible();
-
-    // The code area ships collapsed, so only the footnote mentions the variable until
-    // the sample is opened.
-    expect(screen.getAllByText(/HALRO_API_KEY/)).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "展开代码" }));
-    expect(screen.getAllByText(/HALRO_API_KEY/)).toHaveLength(2);
-    expect(screen.getByRole("button", { name: "发送请求" })).toBeDisabled();
-    expect(screen.getByText("等待真实请求")).toBeVisible();
-
+    expect(document.querySelector(".developer-code")?.textContent).toContain("/v1/responses");
+    expect(document.querySelector(".developer-code")?.textContent).toContain("HALRO_API_KEY");
+    expect(screen.queryByRole("button", { name: "展开代码" })).not.toBeInTheDocument();
+    closeCode();
     fireEvent.change(screen.getByLabelText("API 协议"), { target: { value: "chat" } });
-    expect(screen.getByText("/v1/chat/completions")).toBeVisible();
-    expect(screen.getByText(/messages/)).toBeVisible();
+    openCode();
+    expect(document.querySelector(".developer-code")?.textContent).toContain("/v1/chat/completions");
+    expect(document.querySelector(".developer-code")?.textContent).toContain("messages");
   });
 
-  it("exposes the complete first-phase UI without persisting the Gateway Key", async () => {
+  it("keeps JSON editing and secrets intact with optional code and connection dialogs", async () => {
     vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
     vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
     const localWrite = vi.spyOn(Storage.prototype, "setItem");
@@ -99,27 +100,100 @@ describe("DeveloperPage", () => {
     fireEvent.change(key, { target: { value: "hm_test_secret" } });
     expect(key).toHaveAttribute("type", "password");
     expect(localWrite).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("tab", { name: "原始 JSON" }));
-    const raw = screen.getByRole("textbox", { name: /原始请求 JSON/ });
+    fireEvent.click(screen.getByRole("tab", { name: "JSON" }));
+    const raw = screen.getByRole("textbox", { name: /请求 JSON/ });
     fireEvent.change(raw, { target: { value: "{" } });
     expect(screen.getByText("请输入有效的 JSON 对象。")).toBeVisible();
+    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+    openCode();
     expect(screen.getByRole("button", { name: "复制代码" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "发送请求" })).toBeDisabled();
+    closeCode();
     fireEvent.change(raw, { target: { value: '{"model":"raw-model","input":"hello","stream":false}' } });
-    fireEvent.click(screen.getByRole("button", { name: "展开代码" }));
-    expect(screen.getAllByText(/raw-model/)).toHaveLength(2);
+    openCode();
+    expect(document.querySelector(".developer-code")?.textContent).toContain("raw-model");
+    closeCode();
+    expect(raw).toHaveValue('{"model":"raw-model","input":"hello","stream":false}');
+    expect(key).toHaveValue("hm_test_secret");
+    expect(document.querySelector(".developer-response-meta")).toBeNull();
 
-    expect(screen.getByText("HTTP 状态")).toBeVisible();
-    expect(screen.getByText("Request ID")).toBeVisible();
-    expect(screen.getByText("延迟")).toBeVisible();
-    expect(screen.getByRole("button", { name: "查看用量记录" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("tab", { name: "响应头" }));
-    expect(screen.getByText(/发送请求后.*Content-Type/)).toBeVisible();
-
-    fireEvent.click(screen.getByRole("tab", { name: "表单模式" }));
+    fireEvent.click(screen.getByRole("tab", { name: "表单" }));
     fireEvent.change(screen.getByLabelText("API 协议"), { target: { value: "embeddings" } });
-    expect(screen.getByRole("button", { name: "SSE 流式" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "流式" })).toBeDisabled();
+  });
+
+  it("keeps idle free of invented response metrics and reveals real request metadata", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    let answer: (response: Response) => void = () => {};
+    vi.spyOn(api, "developerExecute").mockImplementation(() => new Promise<Response>((resolve) => { answer = resolve; }));
+    vi.spyOn(api, "usageRequest").mockResolvedValue(settlementFixture());
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    expect(screen.queryByRole("group", { name: "响应元数据" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "查看用量记录" })).not.toBeInTheDocument();
+    for (const label of ["HTTP 状态", "Request ID", "延迟", "计费项目"]) expect(screen.queryByText(label)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "synthetic-secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    const metadata = await screen.findByRole("group", { name: "响应元数据" });
+    expect(within(metadata).getByText("HTTP 状态")).toBeVisible();
+    expect(within(metadata).getByText("传输方式")).toBeVisible();
+    expect(screen.getByText("等待上游返回")).toBeVisible();
+    answer(new Response(JSON.stringify({ id: "response_metadata" }), { status: 200, headers: { "Content-Type": "application/json", "X-Request-ID": "req_debug_1" } }));
+    expect(await within(metadata).findByText("req_debug_1")).toBeVisible();
+    expect(await within(metadata).findByText("12 / 34")).toBeVisible();
+    expect(within(metadata).getByText("Checkout service")).toBeVisible();
+  });
+
+  it("preserves request input and the in-memory Key through the code drawer and restores focus", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const localWrite = vi.spyOn(Storage.prototype, "setItem");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    const input = screen.getByLabelText("输入");
+    const key = screen.getByLabelText("Gateway Key");
+    fireEvent.change(input, { target: { value: "Keep this input across drawers" } });
+    fireEvent.change(key, { target: { value: "hm_private_page_only" } });
+    const trigger = screen.getByRole("button", { name: "接入代码" });
+    trigger.focus();
+    openCode();
+    const drawer = screen.getByRole("dialog", { name: "接入代码" });
+    expect(drawer).toHaveTextContent("Keep this input across drawers");
+    expect(drawer).toHaveTextContent("HALRO_API_KEY");
+    expect(drawer).not.toHaveTextContent("hm_private_page_only");
+    closeCode();
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(input).toHaveValue("Keep this input across drawers");
+    expect(key).toHaveValue("hm_private_page_only");
+    expect(key).toHaveAttribute("type", "password");
+    expect(localWrite).not.toHaveBeenCalled();
+  });
+
+  it("treats connection project selection as filtering while retaining the actual billed project", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project, { ...project, id: "project_2", name: "Batch jobs" }], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const execute = vi.spyOn(api, "developerExecute").mockResolvedValue(new Response(JSON.stringify({ id: "cross_project" }), { status: 200, headers: { "Content-Type": "application/json", "X-Request-ID": "req_debug_1" } }));
+    vi.spyOn(api, "usageRequest").mockResolvedValue(settlementFixture({ project_id: project.id, cost_micros_usd: 2500 }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    const key = screen.getByLabelText("Gateway Key");
+    fireEvent.change(key, { target: { value: "hm_checkout_key" } });
+    expect(screen.queryByLabelText(/^项目/)).not.toBeInTheDocument();
+    openConnectionSettings();
+    expect(screen.getByText("用于筛选模型；计费项目由 Gateway Key 决定。")).toBeVisible();
+    expect(screen.getByText(/仅存本页内存，不写入浏览器存储、URL 或配置/)).toBeVisible();
+    fireEvent.change(screen.getByRole("combobox", { name: /^项目/ }), { target: { value: "project_2" } });
+    closeConnectionSettings();
+    expect(key).toHaveValue("hm_checkout_key");
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    expect(await screen.findByText(/本次计入“Checkout service”/)).toBeVisible();
+    expect(screen.getAllByText(/0\.0025/)).toHaveLength(2);
+    expect(execute).toHaveBeenCalledWith("responses", "hm_checkout_key", expect.objectContaining({ model: "support-chat" }), false, expect.any(AbortSignal));
+    expect(execute.mock.calls[0][2]).not.toHaveProperty("project_id");
   });
 
   it("sends a remote image URL as multimodal content on both chat contracts", async () => {
@@ -133,11 +207,12 @@ describe("DeveloperPage", () => {
     render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
 
-    fireEvent.change(screen.getByLabelText("图片输入"), { target: { value: "ftp://example.com/photo.png" } });
+    fireEvent.click(screen.getByText("图片", { selector: ".disclosure-title" }));
+    fireEvent.change(screen.getByLabelText("图片地址"), { target: { value: "ftp://example.com/photo.png" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
     expect(screen.getByRole("alert")).toHaveTextContent("请输入 http(s) 图片地址");
 
-    fireEvent.change(screen.getByLabelText("图片输入"), { target: { value: "https://example.com/a/photo.png" } });
+    fireEvent.change(screen.getByLabelText("图片地址"), { target: { value: "https://example.com/a/photo.png" } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
     expect(screen.getByRole("list", { name: "已添加的图片" })).toHaveTextContent("photo.png");
     // Nothing remote is fetched to build a preview; the CSP forbids it and reaching the
@@ -145,7 +220,7 @@ describe("DeveloperPage", () => {
     expect(document.querySelector(".developer-image-list img")).toBeNull();
 
     fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
-    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
     await waitFor(() => expect(execute).toHaveBeenCalled());
     expect(execute.mock.calls[0][2]).toEqual({
       model: "support-chat",
@@ -161,7 +236,7 @@ describe("DeveloperPage", () => {
     });
 
     fireEvent.change(screen.getByLabelText("API 协议"), { target: { value: "chat" } });
-    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
     await waitFor(() => expect(execute).toHaveBeenCalledTimes(2));
     expect(execute.mock.calls[1][2]).toEqual({
       model: "support-chat",
@@ -177,8 +252,8 @@ describe("DeveloperPage", () => {
 
     // Embeddings has no multimodal input, so the picture must not follow it there.
     fireEvent.change(screen.getByLabelText("API 协议"), { target: { value: "embeddings" } });
-    expect(screen.queryByLabelText("图片输入")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    expect(screen.queryByLabelText("图片地址")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
     await waitFor(() => expect(execute).toHaveBeenCalledTimes(3));
     expect(execute.mock.calls[2][2]).toEqual({ model: "support-chat", input: "用一句话说明 Halro 如何路由这个请求。" });
   });
@@ -190,19 +265,22 @@ describe("DeveloperPage", () => {
     const view = render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
 
+    expect(screen.getByLabelText("图片地址")).not.toBeVisible();
+    fireEvent.click(screen.getByText("图片", { selector: ".disclosure-title" }));
     const file = screen.getByLabelText("选择本地文件");
     fireEvent.change(file, { target: { files: [new File(["not-a-real-png"], "shot.png", { type: "image/png" })] } });
     expect(await screen.findByText("shot.png")).toBeVisible();
     expect(document.querySelector(".developer-image-list img")).toHaveAttribute("src", expect.stringContaining("data:image/png;base64,"));
 
-    fireEvent.click(screen.getByRole("button", { name: "展开代码" }));
-    const code = view.container.querySelector(".developer-code")?.textContent ?? "";
+    openCode();
+    const code = document.querySelector(".developer-code")?.textContent ?? "";
     expect(code).toContain("data:image/png;base64,<BASE64_OF_shot.png>");
     expect(code).not.toContain(btoa("not-a-real-png"));
+    closeCode();
 
     // Raw JSON is what gets sent, so it holds the real bytes rather than the placeholder.
-    fireEvent.click(screen.getByRole("tab", { name: "原始 JSON" }));
-    const raw = screen.getByRole("textbox", { name: /原始请求 JSON/ }) as HTMLTextAreaElement;
+    fireEvent.click(screen.getByRole("tab", { name: "JSON" }));
+    const raw = screen.getByRole("textbox", { name: /请求 JSON/ }) as HTMLTextAreaElement;
     expect(raw.value).toContain(btoa("not-a-real-png"));
     expect(raw.value).not.toContain("BASE64_OF_");
   });
@@ -215,6 +293,7 @@ describe("DeveloperPage", () => {
     await screen.findByRole("option", { name: "support-chat" });
     fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
 
+    fireEvent.click(screen.getByText("图片", { selector: ".disclosure-title" }));
     fireEvent.change(screen.getByLabelText("选择本地文件"), {
       target: { files: [new File(["report"], "report.pdf", { type: "application/pdf" })] },
     });
@@ -229,9 +308,9 @@ describe("DeveloperPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("超过实例请求体上限 512 B");
 
     // A URL small enough to attach can still push the body past the limit.
-    fireEvent.change(screen.getByLabelText("图片输入"), { target: { value: `https://example.com/${"p".repeat(400)}.png` } });
+    fireEvent.change(screen.getByLabelText("图片地址"), { target: { value: `https://example.com/${"p".repeat(400)}.png` } });
     fireEvent.click(screen.getByRole("button", { name: "添加" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "发送请求" })).toBeDisabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeDisabled());
     expect(screen.getByText(/超过实例上限 512 B/)).toBeVisible();
   });
 
@@ -245,12 +324,12 @@ describe("DeveloperPage", () => {
     render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
 
-    const formTab = screen.getByRole("tab", { name: "表单模式" });
+    const formTab = screen.getByRole("tab", { name: "表单" });
     formTab.focus();
     fireEvent.keyDown(formTab, { key: "ArrowRight" });
-    const jsonTab = screen.getByRole("tab", { name: "原始 JSON" });
+    const jsonTab = screen.getByRole("tab", { name: "JSON" });
     await waitFor(() => expect(jsonTab).toHaveFocus());
-    const raw = screen.getByRole("textbox", { name: /原始请求 JSON/ });
+    const raw = screen.getByRole("textbox", { name: /请求 JSON/ });
     fireEvent.change(raw, { target: { value: '{"model":"custom","input":"hello","stream":true}' } });
     fireEvent.change(screen.getByLabelText("API 协议"), { target: { value: "chat" } });
     expect((raw as HTMLTextAreaElement).value).toContain('"custom"');
@@ -274,8 +353,8 @@ describe("DeveloperPage", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const view = render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
-    fireEvent.click(screen.getByRole("button", { name: "展开代码" }));
-    const sample = () => view.container.querySelector(".developer-code")?.textContent ?? "";
+    openCode();
+    const sample = () => document.querySelector(".developer-code")?.textContent ?? "";
 
     const statusChecks: [string, RegExp][] = [
       ["JavaScript", /if \(!response\.ok\)/],
@@ -284,7 +363,9 @@ describe("DeveloperPage", () => {
       ["Java", /response\.statusCode\(\) < 200/],
     ];
     for (const streaming of [false, true]) {
-      fireEvent.click(screen.getByRole("button", { name: streaming ? "SSE 流式" : "普通响应" }));
+      closeCode();
+      setStreaming(streaming);
+      openCode();
       for (const [language, check] of statusChecks) {
         fireEvent.click(screen.getByRole("tab", { name: language }));
         expect(sample(), `${language} ${streaming ? "streaming" : "standard"}`).toMatch(check);
@@ -305,14 +386,14 @@ describe("DeveloperPage", () => {
     const view = render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
 
-    fireEvent.change(screen.getByLabelText("输入内容"), { target: { value: "What's true?'; touch /tmp/pwned; #" } });
-    fireEvent.click(screen.getByRole("button", { name: "展开代码" }));
-    const curlCode = view.container.querySelector(".developer-code")?.textContent ?? "";
+    fireEvent.change(screen.getByLabelText("输入"), { target: { value: "What's true?'; touch /tmp/pwned; #" } });
+    openCode();
+    const curlCode = document.querySelector(".developer-code")?.textContent ?? "";
     expect(curlCode).toContain("'\"'\"'");
     expect(curlCode).toContain("--data-binary");
 
     fireEvent.click(screen.getByRole("tab", { name: "Python" }));
-    const pythonCode = view.container.querySelector(".developer-code")?.textContent ?? "";
+    const pythonCode = document.querySelector(".developer-code")?.textContent ?? "";
     expect(pythonCode).toContain("json.loads");
     expect(pythonCode).toContain("What's true?");
     expect(pythonCode).not.toContain("What's True?");
@@ -332,7 +413,7 @@ describe("DeveloperPage", () => {
     render(<StrictMode><QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider></StrictMode>);
     await screen.findByRole("option", { name: "support-chat" });
     fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
-    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     expect(await screen.findByText("12 / 34")).toBeVisible();
   });
@@ -349,7 +430,7 @@ describe("DeveloperPage", () => {
     render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
 
-    expect(screen.getByLabelText("公共模型别名")).toHaveValue("text-embedding");
+    expect(screen.getByLabelText("模型")).toHaveValue("text-embedding");
     window.history.replaceState({}, "", "/admin/developer");
   });
 
@@ -362,13 +443,13 @@ describe("DeveloperPage", () => {
     render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
 
-    fireEvent.click(screen.getByRole("tab", { name: "原始 JSON" }));
-    const raw = screen.getByRole("textbox", { name: /原始请求 JSON/ }) as HTMLTextAreaElement;
+    fireEvent.click(screen.getByRole("tab", { name: "JSON" }));
+    const raw = screen.getByRole("textbox", { name: /请求 JSON/ }) as HTMLTextAreaElement;
     fireEvent.change(raw, { target: { value: '{"model":"custom","input":"kept"}' } });
-    fireEvent.click(screen.getByRole("tab", { name: "表单模式" }));
-    fireEvent.click(screen.getByRole("tab", { name: "原始 JSON" }));
+    fireEvent.click(screen.getByRole("tab", { name: "表单" }));
+    fireEvent.click(screen.getByRole("tab", { name: "JSON" }));
 
-    expect((screen.getByRole("textbox", { name: /原始请求 JSON/ }) as HTMLTextAreaElement).value).toContain("kept");
+    expect((screen.getByRole("textbox", { name: /请求 JSON/ }) as HTMLTextAreaElement).value).toContain("kept");
   });
 
   // The gateway names its own refusal, and the status alone cannot tell a
@@ -384,10 +465,10 @@ describe("DeveloperPage", () => {
     render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
     fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
-    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     // The code's own repair, not the generic 403 sentence.
-    expect(await screen.findByText(/这个项目没有被授权调用它/)).toBeVisible();
+    expect(await screen.findByText(/项目未获此别名授权/)).toBeVisible();
   });
 
   // The aggregate answers with the in-flight accumulator for a request it has
@@ -407,7 +488,7 @@ describe("DeveloperPage", () => {
     render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
     fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
-    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
     expect(await screen.findByText("请求已完成")).toBeVisible();
 
     // The unfinalized read is not shown as a settlement of zero…
@@ -431,7 +512,7 @@ describe("DeveloperPage", () => {
     render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
     fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
-    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     expect(await screen.findByText("没有用量记录", {}, { timeout: 5000 })).toBeVisible();
     expect(screen.queryByText("等待结算")).not.toBeInTheDocument();
@@ -455,7 +536,7 @@ describe("DeveloperPage", () => {
     render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
     fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
-    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     expect(await screen.findByText("保守上限")).toBeVisible();
     // The incompleteness is stated in the panel and in the history row, never
@@ -483,13 +564,13 @@ describe("DeveloperPage", () => {
     await screen.findByRole("option", { name: "support-chat" });
 
     fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
-    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     expect(await screen.findByText("请求已完成")).toBeVisible();
     expect(await screen.findByText("12 / 34")).toBeVisible();
     // Once in the response panel, once in this session's history.
     expect(screen.getAllByText(/0\.0025/)).toHaveLength(2);
-    expect(screen.getByText(/本次调用计入项目“Batch jobs”/)).toBeVisible();
+    expect(screen.getByText(/本次计入“Batch jobs”/)).toBeVisible();
   });
 
   // Debugging is comparing this call against the last one, and the page used to
@@ -506,17 +587,17 @@ describe("DeveloperPage", () => {
     render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
 
-    fireEvent.change(screen.getByLabelText("输入内容"), { target: { value: "first call" } });
+    fireEvent.change(screen.getByLabelText("输入"), { target: { value: "first call" } });
     fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
-    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
     expect(await screen.findByText("请求已完成")).toBeVisible();
 
-    fireEvent.change(screen.getByLabelText("输入内容"), { target: { value: "second call" } });
+    fireEvent.change(screen.getByLabelText("输入"), { target: { value: "second call" } });
     fireEvent.click(screen.getByRole("button", { name: "载入这条请求" }));
 
     // It lands in JSON mode because the stored body is what was sent, fields
     // the form cannot express included.
-    const raw = screen.getByRole("textbox", { name: /原始请求 JSON/ }) as HTMLTextAreaElement;
+    const raw = screen.getByRole("textbox", { name: /请求 JSON/ }) as HTMLTextAreaElement;
     expect(raw.value).toContain("first call");
     expect(raw.value).not.toContain("second call");
   });
@@ -538,7 +619,7 @@ describe("DeveloperPage", () => {
     const view = render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
     fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
-    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
     expect(await screen.findByText("请求已完成")).toBeVisible();
 
     view.unmount();
@@ -564,8 +645,8 @@ describe("DeveloperPage", () => {
     await screen.findByRole("option", { name: "support-chat" });
 
     fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
-    fireEvent.click(screen.getByRole("button", { name: "普通响应" }));
-    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    setStreaming(false);
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     expect(await screen.findByText("请求已完成")).toBeVisible();
     expect(screen.getByText("req_debug_1")).toBeVisible();
@@ -593,7 +674,7 @@ describe("DeveloperPage", () => {
     await screen.findByRole("option", { name: "support-chat" });
     fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
 
-    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
     expect(await screen.findByText("等待上游返回")).toBeVisible();
     expect(screen.queryByText("响应体为空")).not.toBeInTheDocument();
 
@@ -626,7 +707,7 @@ describe("DeveloperPage", () => {
     expect(screen.queryByRole("button", { name: "复制响应体" })).toBeNull();
 
     fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
-    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
     expect(await screen.findByText("请求已完成")).toBeVisible();
 
     fireEvent.click(screen.getByRole("button", { name: "复制响应体" }));
@@ -655,13 +736,16 @@ describe("DeveloperPage", () => {
     render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
     fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+    setStreaming(true);
 
-    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
     expect(await screen.findByText("请求已完成")).toBeVisible();
     expect(screen.getByText(/event: response.created/)).toBeVisible();
+    expect(execute.mock.calls[0][2]).toMatchObject({ stream: true });
+    expect(execute.mock.calls[0][3]).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
-    fireEvent.click(await screen.findByRole("button", { name: "取消请求" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    fireEvent.click(await screen.findByRole("button", { name: "取消" }));
     expect(await screen.findByText("请求已取消")).toBeVisible();
     // "The body is empty" is a finding about a response that arrived. A request
     // cancelled before one did has none to report on, and saying it is empty
@@ -685,10 +769,10 @@ describe("DeveloperPage", () => {
     await screen.findByRole("option", { name: "support-chat" });
     fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "wrong-key" } });
 
-    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     expect(await screen.findByText(/网关返回 401，请求未成功/)).toBeVisible();
-    expect(screen.getByText(/Gateway Key 无效、已禁用，或不属于所选项目/)).toBeVisible();
+    expect(screen.getByText(/Gateway Key 无效或已禁用/)).toBeVisible();
     expect(screen.queryByText("请求已完成")).not.toBeInTheDocument();
     expect(usage).not.toHaveBeenCalled();
   });
@@ -701,14 +785,16 @@ describe("DeveloperPage", () => {
     await screen.findByRole("option", { name: "support-chat" });
 
     // Missing key is the real blocker, and the page must say so.
-    expect(screen.getByRole("button", { name: "发送请求" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
     expect(screen.getByText(/还需要填写：.*Gateway Key/)).toBeVisible();
 
+    openCode();
     fireEvent.change(screen.getByRole("textbox", { name: /Gateway 地址/ }), { target: { value: "" } });
     expect(screen.getByRole("textbox", { name: /Gateway 地址/ })).toHaveValue("");
+    closeCode();
 
     fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
-    expect(screen.getByRole("button", { name: "发送请求" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "发送" })).toBeEnabled();
   });
 
   it("locks the model picker in JSON mode so the sent body always matches the screen", async () => {
@@ -718,10 +804,10 @@ describe("DeveloperPage", () => {
     render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
 
-    expect(screen.getByLabelText(/^公共模型/)).toBeEnabled();
-    fireEvent.click(screen.getByRole("tab", { name: "原始 JSON" }));
+    expect(screen.getByLabelText(/^模型/)).toBeEnabled();
+    fireEvent.click(screen.getByRole("tab", { name: "JSON" }));
 
-    expect(screen.getByLabelText(/^公共模型/)).toBeDisabled();
+    expect(screen.getByLabelText(/^模型/)).toBeDisabled();
     expect(screen.getByText("JSON 模式下，模型与参数以下方 JSON 为准。")).toBeVisible();
   });
 
@@ -734,8 +820,45 @@ describe("DeveloperPage", () => {
     fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
 
     // A single toggling button turned a double click into "send, then abort what was billed".
-    expect(screen.queryByRole("button", { name: "取消请求" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "发送请求" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "取消" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "发送" })).toBeEnabled();
+  });
+
+  it("keeps key challenges and failures in the confirmation and clears them on recovery", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    vi.spyOn(api, "createKey")
+      .mockRejectedValueOnce(stepUpRequired())
+      .mockRejectedValueOnce(new Error("mint transport failed"))
+      .mockResolvedValue({ data: { key: "hm_recovered_secret", metadata: { name: "Recovered debug key" } } } as never);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    const keyField = screen.getByLabelText("Gateway Key").closest(".developer-key-field")!;
+
+    fireEvent.click(screen.getByRole("button", { name: "新建 Key" }));
+    let dialog = screen.getByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "新建 Key" }));
+    await within(dialog).findByLabelText(/^当前密码/);
+    expect(within(keyField as HTMLElement).queryByRole("alert")).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "新建 Key" }));
+    dialog = screen.getByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "新建 Key" }));
+    await within(dialog).findByRole("alert");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(within(keyField as HTMLElement).queryByRole("alert")).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "新建 Key" }));
+    dialog = screen.getByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "新建 Key" }));
+    await waitFor(() => expect(screen.getByLabelText("Gateway Key")).toHaveValue("hm_recovered_secret"));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("fills the field from a freshly created debug key without persisting it", async () => {
@@ -755,13 +878,14 @@ describe("DeveloperPage", () => {
     await screen.findByRole("option", { name: "support-chat" });
     expect(screen.getByLabelText("Gateway Key")).toHaveValue("");
 
-    fireEvent.click(screen.getByRole("button", { name: "新建调试 Key" }));
+    fireEvent.click(screen.getByRole("button", { name: "新建 Key" }));
+    expect(screen.getByText(/密钥仅显示一次.*24 小时后过期.*实际用量计费/)).toBeVisible();
     // Minting stays outside the re-authentication window — the key is shown once
     // and outlives this session — so the server asks every time, and the dialog
     // opens its fields as soon as the first attempt comes back asking.
-    fireEvent.click(screen.getAllByRole("button", { name: "新建调试 Key" }).at(-1)!);
+    fireEvent.click(screen.getAllByRole("button", { name: "新建 Key" }).at(-1)!);
     fireEvent.change(await screen.findByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
-    fireEvent.click(screen.getAllByRole("button", { name: "新建调试 Key" }).at(-1)!);
+    fireEvent.click(screen.getAllByRole("button", { name: "新建 Key" }).at(-1)!);
 
     await waitFor(() => expect(screen.getByLabelText("Gateway Key")).toHaveValue("hm_created_secret"));
     // The key expires on its own so a forgotten debug key cannot stay usable.
@@ -782,19 +906,52 @@ describe("DeveloperPage", () => {
     expect(localWrite).not.toHaveBeenCalled();
   });
 
-  it("opens the collapsed code area when a language tab is picked", async () => {
+  it("opens complete integration code immediately and preserves the chosen language", async () => {
     vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
     vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const view = render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
-    expect(view.container.querySelector(".developer-code")).toBeNull();
-
-    // Choosing a language only makes sense if the sample becomes visible.
+    expect(document.querySelector(".developer-code")).toBeNull();
+    openCode();
+    expect(document.querySelector(".developer-code")?.textContent).toContain("curl");
     fireEvent.click(screen.getByRole("tab", { name: "Python" }));
+    expect(document.querySelector(".developer-code")?.textContent).toContain("requests.post");
+    expect(screen.queryByRole("button", { name: "收起代码" })).not.toBeInTheDocument();
+    closeCode();
+    openCode();
+    expect(screen.getByRole("tab", { name: "Python" })).toHaveAttribute("aria-selected", "true");
+    expect(document.querySelector(".developer-code")?.textContent).toContain("requests.post");
+  });
 
-    expect(view.container.querySelector(".developer-code")?.textContent).toContain("requests.post");
-    expect(screen.getByRole("button", { name: "收起代码" })).toBeVisible();
+  it("traps Tab at the selected code language when invalid JSON disables copying", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    fireEvent.click(screen.getByRole("tab", { name: "JSON" }));
+    fireEvent.change(screen.getByRole("textbox", { name: /请求 JSON/ }), { target: { value: "{" } });
+    expect(screen.getByText("请输入有效的 JSON 对象。")).toBeVisible();
+    openCode();
+    const drawer = screen.getByRole("dialog", { name: "接入代码" });
+    const copy = within(drawer).getByRole("button", { name: "复制代码" });
+    expect(copy).toBeDisabled();
+    expect(drawer).toHaveTextContent("修正 Gateway 地址或原始 JSON 后即可生成代码。");
+    const curl = within(drawer).getByRole("tab", { name: "curl" });
+    curl.focus();
+    fireEvent.keyDown(curl, { key: "ArrowRight" });
+    const selected = within(drawer).getByRole("tab", { name: "JavaScript" });
+    await waitFor(() => expect(selected).toHaveFocus());
+    expect(selected).toHaveAttribute("aria-selected", "true");
+    expect(selected).toHaveAttribute("tabindex", "0");
+    expect(curl).toHaveAttribute("tabindex", "-1");
+    expect(copy).toBeDisabled();
+    fireEvent.keyDown(selected, { key: "Tab" });
+    const close = within(drawer).getByRole("button", { name: "关闭" });
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(close, { key: "Tab", shiftKey: true });
+    expect(selected).toHaveFocus();
   });
 
   it("generates a Java example that reads the key from the environment", async () => {
@@ -803,11 +960,11 @@ describe("DeveloperPage", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const view = render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
-    fireEvent.click(screen.getByRole("button", { name: "展开代码" }));
+    openCode();
 
     fireEvent.click(screen.getByRole("tab", { name: "Java" }));
 
-    const javaCode = view.container.querySelector(".developer-code")?.textContent ?? "";
+    const javaCode = document.querySelector(".developer-code")?.textContent ?? "";
     expect(javaCode).toContain("HttpRequest.newBuilder()");
     expect(javaCode).toContain('System.getenv("HALRO_API_KEY")');
     expect(javaCode).toContain("http://127.0.0.1:8080/v1/responses");
@@ -815,8 +972,10 @@ describe("DeveloperPage", () => {
     expect(javaCode).not.toContain("support-chat\\\"");
 
     // Streaming has to be read line by line rather than buffered whole.
-    fireEvent.click(screen.getByRole("button", { name: "SSE 流式" }));
-    const streamingJava = view.container.querySelector(".developer-code")?.textContent ?? "";
+    closeCode();
+    setStreaming(true);
+    openCode();
+    const streamingJava = document.querySelector(".developer-code")?.textContent ?? "";
     expect(streamingJava).toContain("BodyHandlers.ofLines()");
     expect(streamingJava).toContain("HttpResponse<Stream<String>>");
   });
@@ -827,10 +986,10 @@ describe("DeveloperPage", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const view = render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
-    fireEvent.click(screen.getByRole("button", { name: "展开代码" }));
+    openCode();
     fireEvent.click(screen.getByRole("tab", { name: "Go" }));
 
-    const unary = view.container.querySelector(".developer-code")?.textContent ?? "";
+    const unary = document.querySelector(".developer-code")?.textContent ?? "";
     expect(unary).toContain("req, err := http.NewRequest");
     expect(unary).toContain("resp, err := http.DefaultClient.Do(req)");
     expect(unary).toContain("defer resp.Body.Close()");
@@ -838,8 +997,10 @@ describe("DeveloperPage", () => {
     expect(unary).toContain("resp.StatusCode < 200");
     expect(unary).toContain("fmt.Println(string(responseBody))");
 
-    fireEvent.click(screen.getByRole("button", { name: "SSE 流式" }));
-    const streaming = view.container.querySelector(".developer-code")?.textContent ?? "";
+    closeCode();
+    setStreaming(true);
+    openCode();
+    const streaming = document.querySelector(".developer-code")?.textContent ?? "";
     expect(streaming).toContain("scanner.Buffer(make([]byte, 64<<10), 1<<20)");
     expect(streaming).toContain("if err := scanner.Err(); err != nil");
   });
@@ -860,3 +1021,25 @@ describe("DeveloperPage", () => {
     expect(screen.queryByRole("option", { name: "NoRoutes" })).not.toBeInTheDocument();
   });
 });
+
+function openCode() {
+  fireEvent.click(screen.getByRole("button", { name: "接入代码" }));
+}
+
+function closeCode() {
+  const drawer = screen.queryByRole("dialog", { name: "接入代码" });
+  if (drawer) fireEvent.click(within(drawer).getByRole("button", { name: "关闭" }));
+}
+
+function setStreaming(enabled: boolean) {
+  const checkbox = screen.getByRole("checkbox", { name: "流式" }) as HTMLInputElement;
+  if (checkbox.checked !== enabled) fireEvent.click(checkbox);
+}
+
+function openConnectionSettings() {
+  fireEvent.click(screen.getByRole("button", { name: "连接设置" }));
+}
+
+function closeConnectionSettings() {
+  fireEvent.click(within(screen.getByRole("dialog", { name: "连接设置" })).getByRole("button", { name: "关闭" }));
+}

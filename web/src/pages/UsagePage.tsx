@@ -232,9 +232,7 @@ export function UsagePage() {
   return (
     <>
       <PageHeader
-        eyebrow={t("usage.eyebrow")}
         title={t("usage.title")}
-        description={t("usage.description")}
       />
       <div className="provider-tabs-shell">
         <div className="provider-tabs" role="tablist" aria-label={t("usage.views")} onKeyDown={onTabKeys}>
@@ -301,7 +299,10 @@ export function UsagePage() {
           as a broken page rather than as an answer. Every other list here says
           so in words. */}
       {usage.data && attempts.length === 0 && (
-        <EmptyState title={t("usage.emptyTitle")}>{t("usage.emptyDescription")}</EmptyState>
+        <EmptyState
+          title={t(activeFilterCount ? "usage.emptyTitle" : "usage.noCallsTitle")}
+          action={activeFilterCount > 0 ? <button type="button" className="button ghost" onClick={clearFilters}>{t("usage.clearFilters")}</button> : undefined}
+        >{activeFilterCount > 0 ? t("usage.emptyDescription") : undefined}</EmptyState>
       )}
       {usage.data && attempts.length > 0 && (
         <div className="usage-results-panel">

@@ -15,3 +15,9 @@ export function useSession(): Session | undefined {
 export function useIsReadOnly(): boolean {
   return useSession()?.role === "read_only";
 }
+
+// Authenticated surfaces share the account's actual enrollment status with
+// Settings. MFA policy alone does not mean an authenticator has been enrolled.
+export function useMFAStatus(enabled = true) {
+  return useQuery({ queryKey: ["mfa"], queryFn: api.mfaStatus, enabled, retry: false });
+}

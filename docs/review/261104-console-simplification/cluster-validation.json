@@ -1,0 +1,91 @@
+{
+  "date": "2026-11-04",
+  "scope": "ClusterPage only; local Docker deployment",
+  "frontend": {
+    "typecheck": "passed",
+    "test_files": 53,
+    "tests_passed": 825,
+    "production_build": "passed",
+    "initial_gzip_bytes": 246555,
+    "artifact_secret_scan_files_clean": 32,
+    "history": "Full suite 824/825; old App standalone-title expectation corrected, App 7/7 passed. Remaining 52 files preserved. Final CSS-only changes covered by design-system 34/34 and rebuilt."
+  },
+  "browser": {
+    "baseURL": "http://127.0.0.1:5275/admin/",
+    "syntheticOnly": true,
+    "total": 48,
+    "passed": 48,
+    "failed": 0,
+    "coverage": "6 states × zh-CN/en-US × dark/light × 1440/390",
+    "scenarios": [
+      "standalone",
+      "ha-synced",
+      "ha-attention",
+      "empty-peers",
+      "initial-error-recovery",
+      "refetch-error-recovery"
+    ],
+    "timing_cases": 8,
+    "error_recovery_cases": 16,
+    "history": [
+      {
+        "passed": 44,
+        "failed": 4,
+        "total": 48,
+        "report": "/private/tmp/halro-cluster-redesign-20261104/production/report.json",
+        "note": "Four timing checks read disabled before React query-notification rendering settled. Layout and disclosures had already passed. Acceptance now waits for disabled DOM state."
+      },
+      {
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "report": "/private/tmp/halro-cluster-redesign-20261104/followup/report.json",
+        "note": "Only failed names repeated. No product source change."
+      }
+    ]
+  },
+  "layout": {
+    "polling_metadata_font_px": 12,
+    "polling_metadata_font_weight": 400,
+    "polling_metadata_is_badge_or_alert": false,
+    "chinese_refresh_width_px": 80,
+    "narrow_header_width_px": 335,
+    "technical_identifier_case_preserved": true,
+    "no_document_overflow": true
+  },
+  "local_deployment": {
+    "image": "halro-local:console-cluster-layout-20261104",
+    "container": "halro",
+    "backup_container": "halro-before-cluster-layout-20261104-1793786078",
+    "data_volume": "halro-data-cluster-layout-20261104-1793786078",
+    "backup_data_volume": "halro-data-project-ai-20261104-1793784956",
+    "ready": true,
+    "container_health": "healthy",
+    "readiness_http": 200,
+    "admin_http": 200,
+    "embedded_index_sha256": "dd575330884aa7f5cfa98c99778ca0302b41998679bbfb2fae97a6786cdfd0d2",
+    "embedded_index_matches_build": true,
+    "embedded_files_match_build": 32
+  },
+  "login_ui": "Login.tsx unchanged from HEAD; all new stylesheet selectors limited to cluster-*",
+  "limits": [
+    "Synthetic API cases do not validate a real HA deployment.",
+    "Polling verified with Playwright virtual browser time and actual intercepted GETs, plus interval registration; no real ten-second wall-clock measurement claimed.",
+    "Keyboard and ARIA checks are not VoiceOver testing."
+  ],
+  "post_deploy_browser": {
+    "baseURL": "http://127.0.0.1:28081/admin/",
+    "syntheticOnly": true,
+    "total": 2,
+    "passed": 2,
+    "failed": 0
+  },
+  "long_mixed_case_identifiers": {
+    "total": 8,
+    "passed": 8,
+    "computed_text_transform": "none",
+    "document_and_panel_overflow": false,
+    "source": "/private/tmp/halro-cluster-redesign-20261104/report.json",
+    "covered_by": "ha-attention cases already included in effective 48"
+  }
+}

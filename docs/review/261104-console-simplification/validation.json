@@ -1,0 +1,178 @@
+{
+  "date": "2026-11-04",
+  "baseline_commit": "69aa41ad43da5794c1b5ea31b839ef190c05e925",
+  "scope": "Web Console only; local Docker verified, source included in this change; no release published",
+  "frontend": {
+    "typecheck": "passed",
+    "test_files": 53,
+    "tests_passed": 825,
+    "production_build": "passed",
+    "initial_gzip_bytes": 247199,
+    "artifact_secret_scan_files_clean": 32,
+    "history": "Fresh complete Node 22 pre-push gate passed: all 53 files / 825 tests, typecheck, production build and embedded-bundle repeatability.",
+    "node": "22.18.0"
+  },
+  "browser": {
+    "updated_matrix": {
+      "passed": 392,
+      "total": 392
+    },
+    "baseline_effective": {
+      "passed": 272,
+      "total": 272,
+      "recheck_note": "8 old narrow auth heading waits corrected in the harness"
+    },
+    "states_effective": {
+      "passed": 48,
+      "total": 48,
+      "recheck_note": "read-only overflow fixed and rechecked"
+    },
+    "accessibility_effective": {
+      "passed": 40,
+      "total": 40,
+      "recheck_note": "8 StrictMode initial focus cases fixed and rechecked"
+    },
+    "final_developer": {
+      "passed": 48,
+      "total": 48
+    },
+    "stage": "Initial simplification; later rounds have their own reports"
+  },
+  "production": {
+    "page_and_dialog_smoke": {
+      "passed": 36,
+      "total": 36
+    },
+    "workflow_checks": {
+      "passed": 4,
+      "total": 4
+    },
+    "stage": "Initial simplification; see system_polish for the latest round"
+  },
+  "pilot": {
+    "ordinary_visible_helper_characters_before": 250,
+    "ordinary_visible_helper_characters_after": 0,
+    "deleted_helper_items": 7,
+    "disclosed_helper_items": 2,
+    "create_clicks_before": 2,
+    "create_clicks_after": 2,
+    "required_fields_in_first_viewport": true,
+    "excluded_from_helper_metric": [
+      "labels",
+      "actual data/configuration summaries",
+      "risk disclosures"
+    ]
+  },
+  "limits": [
+    "Strict synthetic API interception; no real provider calls",
+    "Zoom-equivalent CSS reflow viewports, not native browser toolbar zoom",
+    "Chromium accessibility tree and real keyboard input, not VoiceOver",
+    "Main matrix preceded final localized fixes; affected views were rechecked"
+  ],
+  "embedded_index_sha256": "dd575330884aa7f5cfa98c99778ca0302b41998679bbfb2fae97a6786cdfd0d2",
+  "login_ui": "Original UI restored at user request; Login.tsx identical to baseline HEAD",
+  "developer_refinement": {
+    "report": "developer-refinement.zh-CN.md",
+    "evidence": "developer-validation.json",
+    "default_helper_characters_before": 285,
+    "default_helper_characters_after": 34,
+    "production": {
+      "page_and_dialog_smoke": {
+        "passed": 108,
+        "total": 108
+      },
+      "workflow_checks": {
+        "passed": 4,
+        "total": 4,
+        "note": "3 final production checks passed; provider measurement rerun 1/1 against original pre-simplification preview5273. First attempt incorrectly selected first-pass preview5276 and compared 0 to0."
+      }
+    }
+  },
+  "local_deployment": {
+    "image": "halro-local:console-cluster-layout-20261104",
+    "ready": true,
+    "container_health": "healthy",
+    "embedded_index_matches_build": true,
+    "embedded_files_match_build": 32,
+    "login_ui": "original",
+    "rollback": "Previous container and data volume retained locally"
+  },
+  "account_reauth_feedback": {
+    "report": "account-reauth-feedback.zh-CN.md",
+    "evidence": "account-reauth-validation.json",
+    "reauth_and_feedback_browser": {
+      "passed": 36,
+      "total": 36
+    },
+    "pages": {
+      "passed": 36,
+      "total": 36
+    },
+    "expanded_projects": {
+      "passed": 12,
+      "total": 12
+    }
+  },
+  "latest_round": "cluster-layout.zh-CN.md",
+  "system_polish": {
+    "report": "system-polish.zh-CN.md",
+    "evidence": "system-polish-validation.json",
+    "rewritten_keys_per_locale": 155,
+    "removed_keys_per_locale": 21,
+    "browser": {
+      "passed": 456,
+      "total": 456
+    },
+    "login_pixel_pairs": {
+      "passed": 8,
+      "total": 8,
+      "different_pixels": 0
+    },
+    "final_css_recheck": {
+      "passed": 24,
+      "total": 24
+    }
+  },
+  "advisor_redesign": {
+    "report": "advisor-redesign.zh-CN.md",
+    "evidence": "advisor-validation.json",
+    "browser": {
+      "passed": 64,
+      "total": 64
+    }
+  },
+  "project_ai_access": {
+    "report": "project-ai-access.zh-CN.md",
+    "evidence": "project-ai-validation.json",
+    "browser": {
+      "passed": 64,
+      "total": 64
+    },
+    "catalog_browser": {
+      "passed": 24,
+      "total": 24
+    }
+  },
+  "cluster_layout": {
+    "report": "cluster-layout.zh-CN.md",
+    "evidence": "cluster-validation.json",
+    "browser": {
+      "passed": 48,
+      "total": 48
+    }
+  },
+  "pre_push": {
+    "report": "pre-push.zh-CN.md",
+    "node": "22.18.0",
+    "frontend_typecheck": "passed",
+    "frontend_test_files": 53,
+    "frontend_tests_passed": 825,
+    "production_build": "passed",
+    "embedded_bundle_repeatability": "passed",
+    "go_test_command": "go test -count=1 ./...",
+    "go_test_packages_passed": 68,
+    "real_provider_smoke": "disabled",
+    "dependency_license_review": "passed",
+    "login_source_unchanged": true
+  }
+}

@@ -110,7 +110,7 @@ describe("App first-run routing", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "复制" }));
     await waitFor(() => expect(copy).toHaveBeenCalledWith("RECOVERY-ONE\nRECOVERY-TWO"));
-    fireEvent.click(screen.getByRole("checkbox", { name: /我已将这些恢复码安全保存/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /我已安全保存/ }));
     fireEvent.click(screen.getByRole("button", { name: "我已保存恢复码" }));
 
     await waitFor(() => expect(screen.queryByRole("heading", { name: "必须设置二次验证" })).not.toBeInTheDocument());
@@ -145,7 +145,7 @@ describe("App first-run routing", () => {
 
     renderApp();
 
-    expect(await screen.findByRole("heading", { name: "当前为单实例模式" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "单实例模式" })).toBeVisible();
     expect(screen.getByRole("link", { name: "集群状态" })).toHaveAttribute("aria-current", "page");
   });
 });

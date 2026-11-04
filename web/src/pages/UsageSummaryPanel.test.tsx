@@ -276,7 +276,7 @@ describe("UsageSummaryPanel", () => {
     const table = within(await screen.findByRole("table"));
     expect(table.getByRole("button", { name: /已知成本/ })).toBeVisible();
     expect(table.getAllByRole("columnheader")).toHaveLength(6);
-    expect(table.getByText(/换一个时间范围/)).toBeVisible();
+    expect(table.getByText(/调整时间范围/)).toBeVisible();
   });
 
   it("asks the server for the selected granularity and dimension", async () => {

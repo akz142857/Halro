@@ -30,13 +30,24 @@ describe("token guard policy workflow", () => {
     window.history.replaceState({}, "", "/admin/policies");
   });
 
+  it("distinguishes filtered-out policies from an unconfigured list and clears all filters", async () => {
+    vi.mocked(api.tokenGuardPoliciesPage).mockResolvedValue({ items: [policy], next_cursor: "" });
+    renderPage();
+    await screen.findByText("Production guard");
+    fireEvent.change(screen.getByPlaceholderText("名称或策略 ID"), { target: { value: "no-match" } });
+    expect(screen.getByText("没有匹配结果")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "创建基线策略" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "清除筛选" }));
+    expect(screen.getByText("Production guard")).toBeVisible();
+  });
+
   it("creates policies disabled and reports domain validation at the fields", async () => {
     const create = vi.spyOn(api, "createTokenGuardPolicy").mockResolvedValue({} as never);
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "＋ 新建词元防护策略" }));
 
     expect(screen.getByLabelText("启用此策略")).not.toBeChecked();
-    expect(screen.getByText("启用此策略 · 已禁用").closest(".sticky-form-actions")).toContainElement(screen.getByLabelText("启用此策略"));
+    expect(screen.getByText("启用此策略").closest(".sticky-form-actions")).toContainElement(screen.getByLabelText("启用此策略"));
     expect(screen.getByLabelText("高级设置")).not.toBeChecked();
     expect(screen.getByText("自适应检测默认开启")).toBeVisible();
     expect(screen.getByLabelText("高级设置").compareDocumentPosition(screen.getByLabelText("启用此策略")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -54,7 +65,7 @@ describe("token guard policy workflow", () => {
     fireEvent.click(await screen.findByRole("button", { name: "＋ 新建词元防护策略" }));
     fireEvent.click(screen.getByRole("radio", { name: /临时封禁/ }));
     expect(screen.getByText("非立即拒绝")).toBeVisible();
-    expect(screen.getByText(/达到样本和违规双门槛前，请求仍会放行/)).toBeVisible();
+    expect(screen.getByText(/达到样本与违规双门槛前，请求仍会放行/)).toBeVisible();
   });
 
   it("preserves legal zero EWMA floors while editing", async () => {
@@ -81,6 +92,7 @@ describe("token guard policy workflow", () => {
   // actually carries what the operator typed rather than sending the same empty
   // request a second time.
   it("asks for the password only when the server does, then sends it", async () => {
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: true, policy: "optional", required: false, authenticators: [] });
     vi.mocked(api.tokenGuardPoliciesPage).mockResolvedValue({ items: [policy], next_cursor: "" });
     const update = vi.spyOn(api, "updateTokenGuardPolicy")
       .mockRejectedValueOnce(stepUpRequired())
@@ -94,7 +106,7 @@ describe("token guard policy workflow", () => {
     // the operator has not typed anything to be refused yet.
     fireEvent.change(await screen.findByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText(/验证码/), { target: { value: "123456" } });
+    fireEvent.change(await screen.findByLabelText(/验证码/), { target: { value: "123456" } });
     fireEvent.click(screen.getByRole("button", { name: "保存并立即应用" }));
 
     await waitFor(() => expect(update).toHaveBeenLastCalledWith("tgp_test", expect.anything(), 1, {

@@ -99,7 +99,7 @@ describe("AccountingTimezoneForm", () => {
     fireEvent.click(screen.getByRole("button", { name: "安排变更" }));
 
     expect(await screen.findByText(/切换后约 8 小时，日预算会再次重置/)).toBeInTheDocument();
-    expect(screen.getByText(/可用额度接近翻倍/)).toBeInTheDocument();
+    expect(screen.getByText(/可用额度可能接近翻倍/)).toBeInTheDocument();
   });
 
   it("surfaces a scheduled change and lets it be cancelled", async () => {
@@ -124,7 +124,7 @@ describe("AccountingTimezoneForm", () => {
       <AccountingTimezoneForm settings={settings({ config_file_timezone: "UTC", config_file_in_effect: false })} />,
     );
     expect(screen.getByText("配置文件已不再生效")).toBeInTheDocument();
-    expect(screen.getByText(/usage.timezone 为 UTC/)).toBeInTheDocument();
+    expect(screen.getByText(/usage.timezone=UTC/)).toBeInTheDocument();
   });
 
   it("cannot schedule the zone already in force", () => {

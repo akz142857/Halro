@@ -2,7 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { ApiError, api } from "../api";
 import {
+  AuthenticatorCodeField,
   ConfirmButton,
+  DisclosureSection,
   EmptyState,
   ErrorState,
   Field,
@@ -75,9 +77,7 @@ export function DeploymentsPage() {
   return (
     <>
       <PageHeader
-        eyebrow={t("deployments.eyebrow")}
         title={t("deployments.title")}
-        description={t("deployments.description")}
         action={<button className="button primary" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => { setReplacement(undefined); setEditing("new"); }}>{t("deployments.create")}</button>}
       />
       <OnboardingContextBanner />
@@ -717,7 +717,7 @@ function RestorePricingConfirm({ deployment, onClose }: { deployment: Deployment
 	return <Modal title={t("deployments.confirmRestoredPricing")} onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}>
 		<p>{t("deployments.restorePricingWarning")}</p>
 		<Field label={t("usage.currentPassword")}><input autoComplete="off" type="password" required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
-		<Field label={t("usage.totpOptional")}><input autoComplete="off" inputMode="numeric" value={totp} onChange={(event) => setTotp(event.target.value)} /></Field>
+		<AuthenticatorCodeField value={totp} onChange={setTotp} />
 		{mutation.isError && <ErrorState error={mutation.error} />}<button className="button primary" disabled={mutation.isPending}>{t("deployments.confirmRestoredPricing")}</button>
 	</form></Modal>;
 }
@@ -971,7 +971,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
             "immediately" also means "only a later version can undo this". */}
         <div className="notice warning"><strong>{t("deployments.priceWillTakeEffect")}</strong><span>{t("deployments.immutablePriceWarning")}</span>{effectiveMode === "now" && <span>{t("deployments.immediateNotCancellable")}</span>}</div>
         <Field label={t("usage.currentPassword")}><input type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
-        <Field label={t("usage.totpOptional")}><input inputMode="numeric" autoComplete="one-time-code" value={totp} onChange={(event) => setTotp(event.target.value)} /></Field>
+        <AuthenticatorCodeField value={totp} onChange={setTotp} />
         {mutation.isError && <div ref={submitError} tabIndex={-1} className="price-submit-error"><ErrorState error={mutation.error} /></div>}
         {ambiguousResult && <p className="field-hint error">{t("deployments.ambiguousPriceRetry")}</p>}
         <div className="form-actions">{!ambiguousResult && <button type="button" className="button ghost" onClick={() => { idempotencyKey.current = crypto.randomUUID(); setStep("details"); }}>{t("deployments.backToPrice")}</button>}<button className="button primary" disabled={mutation.isPending}>{ambiguousResult ? t("deployments.retryExactPrice") : t("deployments.confirmPrice")}</button></div>
@@ -1930,7 +1930,7 @@ function DeploymentForm({
       ) : (
         <form className="deployment-form" onSubmit={submit} autoComplete="off">
           <section className="deployment-form-section" aria-labelledby="deployment-target-heading">
-            <header><h3 id="deployment-target-heading">{t("deployments.targetSection")}</h3><p>{t("deployments.targetSectionDescription")}</p></header>
+            <h3 id="deployment-target-heading" className="sr-only">{t("deployments.targetSection")}</h3>
             <div className="form-grid deployment-target-grid">
           <Field label={t("deployments.name")}><input autoComplete="off" autoFocus required value={name} onChange={(event) => setName(event.target.value)} /></Field>
           <Field label={t("deployments.provider")}>
@@ -2127,7 +2127,6 @@ function DeploymentForm({
             <header className="deployment-capability-section-header">
               <div>
                 <h3 id="deployment-capabilities-heading">{t("deployments.capabilitySection")}</h3>
-                <p>{t("deployments.capabilitySectionDescription")}</p>
               </div>
               {/* Beside the capabilities it re-decides, rather than in a card of
                   its own: the catalogue answers for free and is right most of the
@@ -2498,10 +2497,7 @@ function DeploymentForm({
               </details>
             )}
           </section>
-          <section className="deployment-form-section deployment-limit-section" aria-labelledby="deployment-limits-heading">
-            <header>
-              <div><h3 id="deployment-limits-heading">{t("deployments.limitSection")}</h3><p>{t("deployments.limitSectionDescription")}</p></div>
-            </header>
+          <DisclosureSection title={t("deployments.limitSection")} summary={t("deployments.limitSummary", { contextTokens: capabilities.max_context_tokens || t("deployments.undeclaredLimit"), output: capabilities.max_output_tokens || t("deployments.undeclaredLimit"), concurrency: maxConcurrency || t("common.unlimited") })} invalid={!tokenLimitsValid}>
             <div>
               <div className="deployment-limit-grid">
                 {/* "0 is automatic" said nothing about who then enforces the
@@ -2518,7 +2514,7 @@ function DeploymentForm({
               </div>
               {!tokenLimitsValid && <div className="notice warning"><span>{t("deployments.tokenLimitInvalid")}</span></div>}
             </div>
-          </section>
+          </DisclosureSection>
           {impact && <CapabilityImpactNotice impact={impact} />}
           {mutation.isError && mutation.error instanceof ApiError && mutation.error.code === "resolution_changed"
             ? <div className="notice warning"><strong>{t("deployments.resolutionChangedTitle")}</strong><span>{t("deployments.resolutionChangedDescription")}</span></div>
@@ -2558,7 +2554,7 @@ function DeploymentForm({
                     // The commit is where the declaration is made, so the button
                     // has to name it rather than read as an ordinary save.
                     : widening ? t("deployments.saveWithDeclaration")
-                      : current ? t("deployments.save") : template ? t("deployments.saveReplacement") : t("deployments.saveDisabled")}
+                      : current ? t("deployments.saveApplied") : template ? t("deployments.saveReplacement") : t("deployments.saveDisabled")}
             </button>
           </div>
         </form>

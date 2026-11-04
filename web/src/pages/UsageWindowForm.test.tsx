@@ -76,6 +76,6 @@ describe("UsageWindowForm", () => {
   it("says so when the configuration file is no longer what decides", () => {
     renderWithClient(<UsageWindowForm settings={settings({ console_window_days: 30, config_file_in_effect: false })} />);
     expect(screen.getByText("配置文件已不再生效")).toBeInTheDocument();
-    expect(screen.getByText(/config.yaml 写的是 90 天/)).toBeInTheDocument();
+    expect(screen.getByText(/config.yaml 的 90 天/)).toBeInTheDocument();
   });
 });

@@ -5,7 +5,7 @@ import { ErrorState, Loading, Metric, PageHeader, SegmentedTabs, StatusDot } fro
 import { FirstRunChecklist } from "./FirstRunChecklist";
 import { compactNumber, money, useInstantFormatter } from "../format";
 import { navigate } from "../navigation";
-import { adoptTimeContext } from "../timezone";
+import { adoptTimeContext, useAccountingTimeZone } from "../timezone";
 import { errorClassLabel } from "../failure";
 import type { GovernancePressureItem, UsageAnomaly, UsageBreakdown } from "../types";
 import { hourlyTrendPoints, type TrendMetric } from "../trend";
@@ -26,6 +26,7 @@ interface AttentionItem {
 
 export function DashboardPage() {
   const { t } = useTranslation();
+  const timeZone = useAccountingTimeZone();
   const [trendMetric, setTrendMetric] = useState<TrendMetric>("requests");
   const [dimension, setDimension] = useState<BreakdownDimension>("project");
   const [breakdownMetric, setBreakdownMetric] = useState<BreakdownMetric>("calls");
@@ -86,15 +87,14 @@ export function DashboardPage() {
   return (
     <>
       <PageHeader
-        eyebrow={t(firstValueReached ? "dashboard.eyebrow" : "dashboard.firstRun.pageEyebrow")}
         title={t(firstValueReached ? "dashboard.title" : "dashboard.firstRun.pageTitle")}
-        description={t(firstValueReached ? "dashboard.description" : "dashboard.firstRun.pageDescription")}
         action={<div className={`health-pill ${acceptingTraffic ? "" : "warning"}`}><StatusDot ok={acceptingTraffic} />{acceptingTraffic ? t("dashboard.acceptingTraffic") : t("dashboard.notAcceptingTraffic")}</div>}
       />
 
       {!firstValueReached && <FirstRunChecklist />}
       {firstValueReached && (
         <>
+          <p className="panel-note">{t("dashboard.periodScope", { timezone: timeZone })}</p>
           <section className="metric-grid" aria-label={t("dashboard.todayMetrics")}>
             <Metric label={t("dashboard.completedRequests")} value={compactNumber(today.requests)} detail={t("dashboard.attempts", { count: today.attempts })} />
             <Metric label={t("dashboard.requestSuccessRate")} value={`${(requestSuccessRate * 100).toFixed(1)}%`} detail={t("dashboard.failedRequests", { count: today.request_errors })} alert={today.request_errors > 0} />
@@ -108,7 +108,7 @@ export function DashboardPage() {
           <section className="dashboard-grid governance-main-grid">
             <article className="panel chart-panel">
               <header className="panel-header dashboard-panel-header">
-                <div><p className="eyebrow">{t("dashboard.trendEyebrow")}</p><h2>{t(`dashboard.trendMetrics.${trendMetric}`)}</h2></div>
+                <div><h2>{t(`dashboard.trendMetrics.${trendMetric}`)}</h2></div>
                 <SegmentedTabs
                   id="dashboard-trend"
                   label={t("dashboard.trendMetric")}
@@ -124,7 +124,7 @@ export function DashboardPage() {
             </article>
 
             <article className="panel governance-execution-panel">
-              <header className="panel-header"><div><p className="eyebrow">{t("dashboard.controlPlane")}</p><h2>{t("dashboard.governanceExecution")}</h2></div></header>
+              <header className="panel-header"><div><h2>{t("dashboard.governanceExecution")}</h2></div></header>
               <PressureSection title={t("dashboard.budgetWatermark")} empty={t("dashboard.noLimitedProjects")} item={budgetItems[0]} moneyValues />
               <PressureSection title={t("dashboard.capacityWatermark")} empty={t("dashboard.noLimitedResources")} item={capacityItems[0]} />
               <div className="rejection-summary">
@@ -149,7 +149,7 @@ export function DashboardPage() {
           <section className="governance-lower-grid">
             <article className="panel attribution-panel">
               <header className="panel-header dashboard-panel-header">
-                <div><p className="eyebrow">{t("dashboard.usageAttribution")}</p><h2>{t("dashboard.topConsumers")}</h2></div>
+                <div><h2>{t("dashboard.topConsumers")}</h2></div>
                 <div className="breakdown-controls">
                   <label><span className="sr-only">{t("dashboard.breakdownSort")}</span><select value={breakdownMetric} onChange={(event) => setBreakdownMetric(event.target.value as BreakdownMetric)}><option value="calls">{t("dashboard.calls")}</option><option value="cost">{t("dashboard.cost")}</option><option value="errors">{t("dashboard.errors")}</option></select></label>
                   <SegmentedTabs
@@ -168,13 +168,13 @@ export function DashboardPage() {
             </article>
 
             <article className="panel anomaly-panel">
-              <header className="panel-header"><div><p className="eyebrow">{t("dashboard.anomalyChannel")}</p><h2>{t("dashboard.recentRequestAnomalies")}</h2></div></header>
+              <header className="panel-header"><div><h2>{t("dashboard.recentRequestAnomalies")}</h2></div></header>
               <AnomalyList items={recentAnomalies} labels={resourceLabels} empty={t("dashboard.noAnomaliesToday")} />
             </article>
           </section>
 
           <section className="panel internal-status-panel" aria-label={t("dashboard.internalStatus")}>
-            <div className="internal-status-title"><p className="eyebrow">{t("dashboard.channels")}</p><h2>{t("dashboard.internalStatus")}</h2></div>
+            <div className="internal-status-title"><h2>{t("dashboard.internalStatus")}</h2></div>
             <StatusRow label={t("dashboard.trafficAcceptance")} ok={acceptingTraffic} value={acceptingTraffic ? t("dashboard.accepting") : t("dashboard.notAccepting")} />
             <StatusRow label={t("dashboard.activeRequests")} ok={dashboard.usage.active_requests === 0 ? undefined : true} value={compactNumber(dashboard.usage.active_requests)} />
             <StatusRow label={t("dashboard.alertDelivery")} ok={alertEndpoints === 0 || unknownAlertEndpoints > 0 || dashboard.alerts.Queued > 0 && !alertNeedsAttention ? undefined : !alertNeedsAttention} value={alertStatus} />
@@ -191,7 +191,7 @@ function AttentionPanel({ items }: { items: AttentionItem[] }) {
   const { t } = useTranslation();
   return (
     <section className={`panel attention-panel ${items.length ? "has-issues" : ""}`} aria-label={t("dashboard.attentionTitle")}>
-      <header><div><p className="eyebrow">{t("dashboard.operatorQueue")}</p><h2>{t("dashboard.attentionTitle")}</h2></div><span className="attention-count">{items.length ? t("dashboard.issueCount", { count: items.length }) : t("dashboard.noAttentionNeeded")}</span></header>
+      <header><div><h2>{t("dashboard.attentionTitle")}</h2></div><span className="attention-count">{items.length ? t("dashboard.issueCount", { count: items.length }) : t("dashboard.noAttentionNeeded")}</span></header>
       {items.length > 0 && <div className="attention-list">{items.map((item) => (
         <button type="button" key={item.key} className={item.danger ? "danger" : ""} onClick={() => item.href && navigate(item.href)} disabled={!item.href}>
           <StatusDot ok={false} /><span><strong>{item.title}</strong><small>{item.detail}</small></span>{item.href && <i aria-hidden="true">→</i>}

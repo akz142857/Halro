@@ -97,12 +97,27 @@ describe("operations page", () => {
 
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "＋ 新建告警 Webhook" }));
+    expect(screen.getByLabelText(/^Webhook 密钥/)).not.toBeVisible();
+    expect(screen.getByText("无密钥")).toBeVisible();
     fireEvent.change(screen.getByLabelText("名称"), { target: { value: "Pager" } });
     fireEvent.change(screen.getByLabelText(/HTTPS Webhook 地址/), { target: { value: "https://hooks.example.com/x" } });
     fireEvent.click(screen.getByRole("button", { name: "保存 Webhook" }));
 
     await waitFor(() => expect(createAlert).toHaveBeenCalledTimes(1));
     expect(createAlert.mock.calls[0][0]).not.toHaveProperty("secret");
+  });
+
+  it("keeps the authentication summary accurate when a replacement secret is then removed", async () => {
+    vi.mocked(api.alertsPage).mockResolvedValue({ items: [webhook()], next_cursor: "" } as never);
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    const summary = screen.getByText("认证（可选）").closest("summary")!;
+    expect(summary).toHaveTextContent("使用密钥");
+    fireEvent.click(summary);
+    fireEvent.change(screen.getByLabelText(/新密钥/), { target: { value: "replacement-secret" } });
+    fireEvent.click(screen.getByLabelText("明确移除已配置的密钥"));
+    expect(summary).toHaveTextContent("无密钥");
+    expect(screen.getByLabelText(/新密钥/)).toBeDisabled();
   });
 
   it("refuses a non-https address before the request leaves the browser", async () => {
@@ -127,10 +142,12 @@ describe("operations page", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
     fireEvent.change(screen.getByLabelText(/HTTPS Webhook 地址/), { target: { value: "https://attacker.example.com/collect" } });
+    expect(screen.getByLabelText(/新密钥/)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "保存 Webhook" }));
 
     const problem = await screen.findByRole("alert");
-    expect(problem).toHaveTextContent(/更换地址或请求头时必须重新输入密钥/);
+    expect(problem).toHaveTextContent(/更换地址或请求头需重新输入密钥/);
+    expect(problem).toHaveTextContent(/现有密钥不会转移/);
     expect(updateAlert).not.toHaveBeenCalled();
   });
 

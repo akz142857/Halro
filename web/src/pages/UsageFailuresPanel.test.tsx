@@ -112,7 +112,7 @@ describe("UsageFailuresPanel", () => {
     expect(screen.queryByText("HTTP 401")).not.toBeInTheDocument();
     // And the detail explains why there is nothing upstream to name.
     const dialog = await openFailureDetail();
-    expect(within(dialog).getByText(/从未调用上游/)).toBeVisible();
+    expect(within(dialog).getByText(/请求已受理但未调用上游/)).toBeVisible();
   });
 
   // The two identifiers a support desk asks for, kept in the ledger so they

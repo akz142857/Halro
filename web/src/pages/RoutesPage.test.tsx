@@ -366,10 +366,10 @@ describe("RoutesPage", () => {
 
     // The deployment select defaults to the first enabled one, which is the one
     // the existing route already uses.
-    expect(await screen.findByText(/已有目标指向这个部署/)).toBeVisible();
+    expect(await screen.findByText(/此部署已是该别名的目标/)).toBeVisible();
 
     fireEvent.change(screen.getByLabelText(/模型部署/), { target: { value: "deployment_azure" } });
-    expect(screen.queryByText(/已有目标指向这个部署/)).toBeNull();
+    expect(screen.queryByText(/此部署已是该别名的目标/)).toBeNull();
   });
 
   it("says before the save that a mixed strategy will be refused", async () => {
@@ -387,7 +387,7 @@ describe("RoutesPage", () => {
     fireEvent.change(screen.getByLabelText(/模型部署/), { target: { value: "deployment_azure" } });
 
     // The form defaults to ordered, and the alias is on round robin.
-    expect(await screen.findByText(/用的是另一种策略/)).toBeVisible();
+    expect(await screen.findByText(/当前选择与已有目标不一致/)).toBeVisible();
   });
 
   // The confirmation counted enabled rows, and a withheld row is enabled and
@@ -521,15 +521,18 @@ describe("RoutesPage", () => {
     const toggle = await screen.findByLabelText("启用模型路由");
     const bar = toggle.closest(".sticky-form-actions");
     expect(bar).not.toBeNull();
-    expect(bar).toContainElement(screen.getByRole("button", { name: "保存并热加载" }));
+    expect(bar).toContainElement(screen.getByRole("button", { name: "保存并应用" }));
     expect(bar).toContainElement(screen.getByRole("button", { name: "取消" }));
-    expect(within(bar as HTMLElement).getByText("启用模型路由 · 已启用")).toBeVisible();
-    expect(within(bar as HTMLElement).getByText("应用可以用“chat”请求这个部署")).toBeVisible();
-
-    // Turning it off has to change what the bar says it will do, not just the box.
+    expect(within(bar as HTMLElement).getByText("启用模型路由")).toBeVisible();
+    expect(within(bar as HTMLElement).queryByText("应用可以用“chat”请求这个部署")).not.toBeInTheDocument();
+    expect(toggle).toBeChecked();
     fireEvent.click(toggle);
-    expect(within(bar as HTMLElement).getByText("启用模型路由 · 已禁用")).toBeVisible();
-    expect(within(bar as HTMLElement).getByText("应用请求这个别名会被拒绝")).toBeVisible();
+    expect(within(bar as HTMLElement).getByText("此路由不再参与新请求；别名没有其他可用目标时，调用将被拒绝。")).toBeVisible();
+
+    // Turning it back on removes the exceptional consequence.
+    fireEvent.click(toggle);
+    expect(toggle).toBeChecked();
+    expect(within(bar as HTMLElement).queryByText("此路由不再参与新请求；别名没有其他可用目标时，调用将被拒绝。")).not.toBeInTheDocument();
   });
 
   // The route update is a full replacement. A toggle that sent only `enabled`

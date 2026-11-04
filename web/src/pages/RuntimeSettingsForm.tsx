@@ -27,7 +27,7 @@ export function RuntimeSettingsForm({ settings }: { settings: { health_probe_int
   return (
     <section className="panel settings-card runtime-settings">
       <header className="panel-header">
-        <div><p className="eyebrow">{t("settings.runtimeEyebrow")}</p><h3>{t("settings.runtimeTitle")}</h3></div>
+        <div><h3>{t("settings.runtimeTitle")}</h3></div>
         <span className="badge">{t("settings.hotApplied")}</span>
       </header>
       <form className="settings-form runtime-form" aria-busy={mutation.isPending} onSubmit={submit}>

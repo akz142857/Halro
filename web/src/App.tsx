@@ -177,7 +177,6 @@ function Route({ path }: { path: string }) {
   if (path.startsWith("/admin/master-key")) return <LegacyMasterKeyRedirect />;
   return (
     <section className="not-found">
-      <p className="eyebrow">{t("app.notFoundEyebrow")}</p>
       <h1>{t("app.notFound")}</h1>
       <button className="button primary" onClick={() => navigate("/admin")}>{t("app.backOverview")}</button>
     </section>

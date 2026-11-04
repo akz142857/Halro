@@ -103,9 +103,7 @@ export function PoliciesPage() {
   return (
     <>
       <PageHeader
-        eyebrow={t("policyManagement.eyebrow")}
         title={t("policyManagement.title")}
-        description={t("policyManagement.description")}
       />
       <div className="provider-tabs-shell policy-tabs-shell">
         <div className="provider-tabs policy-tabs" role="tablist" aria-label={t("policyManagement.views")} onKeyDown={onTabKeys}>
@@ -122,7 +120,8 @@ export function PoliciesPage() {
         {policies.isPending && <Loading />}
         {policies.isError && <ErrorState error={policies.error} />}
         {!policies.isPending && tokenItems.length === 0 && <EmptyState title={t("policies.emptyTitle")} action={<button className="button primary" disabled={readOnly} onClick={() => setEditing("new")}>{t("policies.baseline")}</button>}>{t("policies.emptyDescription")}</EmptyState>}
-        {!!tokenItems.length && <div className="table-shell policy-table-shell"><table className="policy-table"><thead><tr><th>{t("policyManagement.policy")}</th><th>{t("policyManagement.status")}</th><th>{t("policies.action")}</th><th>{t("policyManagement.summary")}</th><th>{t("policyManagement.bindings")}</th><th>{t("policyManagement.actions")}</th></tr></thead><tbody>{visible.map((policy) => {
+        {!!tokenItems.length && visible.length === 0 && <EmptyState title={t("common.noMatches")} action={<button className="button ghost" onClick={() => { setSearch(""); setStatus(""); setAction(""); }}>{t("policyManagement.clearFilters")}</button>} />}
+        {!!visible.length && <div className="table-shell policy-table-shell"><table className="policy-table"><thead><tr><th>{t("policyManagement.policy")}</th><th>{t("policyManagement.status")}</th><th>{t("policies.action")}</th><th>{t("policyManagement.summary")}</th><th>{t("policyManagement.bindings")}</th><th>{t("policyManagement.actions")}</th></tr></thead><tbody>{visible.map((policy) => {
           // One row's mutation must not disable every other row's controls, and a
           // failure has to name the row it came from — a notice under the table
           // says only that "something" failed.
@@ -359,7 +358,6 @@ function PolicyForm({
       }}>
         {!!Object.keys(errors).length && <div className="policy-error-summary" role="alert">{t("policies.errorSummary", { count: Object.keys(errors).length })}</div>}
         <section className="policy-form-section policy-basics-section">
-          <header><div><h3>{t("policies.identitySection")}</h3><p>{t("policies.identityDescription")}</p></div></header>
           <div className="policy-basics-name">
             <Field label={t("policies.name")} error={errors.name}><input autoComplete="off" autoFocus data-modal-initial value={name} onChange={(event) => setName(event.target.value)} /></Field>
           </div>
@@ -368,7 +366,6 @@ function PolicyForm({
               together. Same shape the project form's model picker uses. */}
           <div className="policy-action-section" role="group" aria-labelledby="policy-action-heading">
             <h3 id="policy-action-heading">{t("policies.actionSection")}</h3>
-            <p>{t("policies.actionDescription")}</p>
             <div className="policy-action-cards">
               {(["observe", "alert", "temporary_block"] as const).map((value) => <label className={`policy-action-card ${action === value ? "selected" : ""}`} key={value}><input type="radio" name="policy-action" value={value} checked={action === value} onChange={() => setAction(value)} /><span><strong>{policyActionLabel(t, value)}</strong><small>{t(`policies.${value}Description`)}</small></span></label>)}
             </div>
@@ -377,17 +374,17 @@ function PolicyForm({
         <section className="policy-form-section">
           <header><div><h3>{t("policies.fixedLimitsSection")}</h3><p>{t("policies.zeroDisables")}</p></div></header>
           <h4>{t("policies.trafficLimits")}</h4><div className="policy-section-grid">
-            <Field label={t("policies.requestLimit")} hint={t("policies.tokensUnit")} error={errors.requestTokens}><NumberInput value={requestTokens} set={setRequestTokens} /></Field>
-            <Field label={t("policies.minuteLimit")} hint={t("policies.tpmUnit")} error={errors.tokensPerMinute}><NumberInput value={tokensPerMinute} set={setTokensPerMinute} /></Field>
+            <Field label={t("policies.requestLimit")} error={errors.requestTokens}><NumberInput value={requestTokens} set={setRequestTokens} /></Field>
+            <Field label={t("policies.minuteLimit")} error={errors.tokensPerMinute}><NumberInput value={tokensPerMinute} set={setTokensPerMinute} /></Field>
           </div>
           <h4>{t("policies.capacityLimits")}</h4><div className="policy-section-grid">
-            <Field label={t("policies.costLimit")} hint="USD/min" error={errors.costPerMinute}><NumberInput value={costPerMinute} set={setCostPerMinute} step=".01" /></Field>
+            <Field label={t("policies.costLimit")} error={errors.costPerMinute}><NumberInput value={costPerMinute} set={setCostPerMinute} step=".01" /></Field>
             <Field label={t("policies.concurrencyLimit")} error={errors.concurrency}><NumberInput value={concurrency} set={setConcurrency} /></Field>
           </div>
           <h4>{t("policies.qualityLimits")}</h4><div className="policy-section-grid">
-            <Field label={t("policies.errorThreshold")} hint="%" error={errors.errorRate}><NumberInput value={errorRate} set={setErrorRate} step=".1" /></Field>
+            <Field label={t("policies.errorThreshold")} error={errors.errorRate}><NumberInput value={errorRate} set={setErrorRate} step=".1" /></Field>
             <Field label={t("policies.minimumSamples")} hint={t("policies.minimumSamplesHint")} error={errors.minimumSamples}><NumberInput value={minimumSamples} set={setMinimumSamples} /></Field>
-            <Field label={t("policies.uniqueSources")} hint={t("policies.perMinuteUnit")} error={errors.uniqueIPs}><NumberInput value={uniqueIPs} set={setUniqueIPs} /></Field>
+            <Field label={t("policies.uniqueSources")} error={errors.uniqueIPs}><NumberInput value={uniqueIPs} set={setUniqueIPs} /></Field>
           </div>
         </section>
         {action === "temporary_block" && (
@@ -396,7 +393,7 @@ function PolicyForm({
             <div className="notice warning">{t("policies.blockWarning")}</div>
             <div className="policy-section-grid">
               <Field label={t("policies.violations")} error={errors.violations}><NumberInput value={violations} set={setViolations} /></Field>
-              <Field label={t("policies.blockTTL")} hint={t("policies.secondsUnit")} error={errors.blockTTL}><NumberInput value={blockTTL} set={setBlockTTL} /></Field>
+              <Field label={t("policies.blockTTL")} error={errors.blockTTL}><NumberInput value={blockTTL} set={setBlockTTL} /></Field>
               <Field label={t("policies.cooldown")} hint={t("policies.cooldownMeaning")} error={errors.cooldown}><NumberInput value={cooldown} set={setCooldown} /></Field>
             </div>
           </section>
@@ -404,13 +401,13 @@ function PolicyForm({
         <section className="policy-form-section policy-ewma-section">
           {/* Purely a disclosure. Clearing it used to reset ten tuned values with
               no warning and no undo, which reads as folding a panel away. */}
-          <header><div><h3>{t("policies.ewmaSection")}</h3><p>{t("policies.ewmaSectionDescription")}</p></div><label className="policy-switch"><input type="checkbox" aria-label={t("policies.advancedSettings")} aria-expanded={advancedSettings} checked={advancedSettings} onChange={(event) => setAdvancedSettings(event.target.checked)} /><span>{t("policies.advancedSettings")}</span></label></header>
+          <header><div><h3>{t("policies.ewmaSection")}</h3></div><label className="policy-switch"><input type="checkbox" aria-label={t("policies.advancedSettings")} aria-expanded={advancedSettings} checked={advancedSettings} onChange={(event) => setAdvancedSettings(event.target.checked)} /><span>{t("policies.advancedSettings")}</span></label></header>
           <div className="notice"> <strong>{t("policies.detectOnlyBadge")}</strong>{t("policies.ewmaHint")}</div>
         {advancedSettings && (
           <div className="policy-ewma-fields">
             <label className="check-row">
               <input type="checkbox" aria-label={t("policies.ewmaEnable")} checked={ewmaEnabled} onChange={(event) => setEWMAEnabled(event.target.checked)} />
-              <span><strong>{t("policies.ewmaEnable")} · {ewmaEnabled ? t("common.enabled") : t("common.disabled")}</strong><small>{t("policies.ewmaEnableHint")}</small></span>
+              <span><strong>{t("policies.ewmaEnable")}</strong><small>{t("policies.ewmaEnableHint")}</small></span>
             </label>
             <h4>{t("policies.baselineModel")}</h4><div className="policy-section-grid"><Field label={t("policies.ewmaAlpha")} error={errors.ewmaAlpha}><NumberInput value={ewmaAlpha} set={setEWMAAlpha} step=".05" /></Field><Field label={t("policies.multiplier")} error={errors.ewmaMultiplier}><NumberInput value={ewmaMultiplier} set={setEWMAMultiplier} step=".1" /></Field><Field label={t("policies.baselineSamples")} error={errors.ewmaMinimumSamples}><NumberInput value={ewmaMinimumSamples} set={setEWMAMinimumSamples} /></Field></div>
             <h4>{t("policies.timeControls")}</h4><div className="policy-section-grid"><Field label={t("policies.warmup")} error={errors.ewmaWarmup}><NumberInput value={ewmaWarmup} set={setEWMAWarmup} /></Field><Field label={t("policies.window")} error={errors.ewmaWindow}><NumberInput value={ewmaWindow} set={setEWMAWindow} /></Field><Field label={t("policies.alertCooldown")} error={errors.ewmaCooldown}><NumberInput value={ewmaCooldown} set={setEWMACooldown} /></Field></div>
@@ -424,7 +421,7 @@ function PolicyForm({
           <div className="form-footer-state">
             <label className="form-footer-enable">
               <input type="checkbox" aria-label={t("policies.enable")} checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
-              <span><strong>{t("policies.enable")} · {enabled ? t("common.enabled") : t("common.disabled")}</strong><small>{current?.bound_projects ? t("policies.boundImpact", { count: current.bound_projects }) : t("policies.unboundImpact")}</small></span>
+              <span><strong>{t("policies.enable")}</strong>{Boolean(current?.bound_projects) && <small>{t("policies.appliedScope", { count: current?.bound_projects })}</small>}</span>
             </label>
             <div className="form-footer-summary"><strong>{policyActionLabel(t, action)}</strong><small>{!ewmaEnabled
               ? t("policies.ewmaOffSummary")

@@ -92,9 +92,8 @@ export function SettingsPage({
   return (
     <>
       <PageHeader
-        eyebrow={t("settings.eyebrow")}
         title={mfaSetupRequired?t("settings.mfaRequiredTitle"):t("settings.title")}
-        description={mfaSetupRequired?t("settings.mfaRequiredDescription"):t("settings.description")}
+        description={mfaSetupRequired ? t("settings.mfaRequiredDescription") : undefined}
       />
       {mfaSetupRequired ? <div className="settings-pane"><MFASettings onRecoveryCodesPendingChange={onRecoveryCodesPendingChange} /></div> : (
         <div className="settings-shell">
@@ -112,11 +111,11 @@ export function SettingsPage({
           <div className="settings-pane">
             {pending && <Loading />}
             {error && <ErrorState error={error} />}
-            {!pending && !error && pane === "general" && uiSettings.data && preferences.data && <section aria-labelledby="general-title"><SettingsGroupHeader title={t("settings.panes.general")} description={t("settings.generalDescription")} id="general-title" /><AppearanceForm preferences={preferences.data.data} /><PersonalLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} /></section>}
-            {pane === "security" && <section aria-labelledby="security-title"><SettingsGroupHeader title={t("settings.panes.security")} description={t("settings.securityDescription")} id="security-title" /><PasswordChangeForm username={session?.username} /><MFASettings username={session?.username} /></section>}
-            {pane === "accounts" && <section aria-labelledby="accounts-title"><SettingsGroupHeader title={t("settings.panes.accounts")} description={t("settings.accountsDescription")} id="accounts-title" /><AdminUsersSection /></section>}
+            {!pending && !error && pane === "general" && uiSettings.data && preferences.data && <section aria-labelledby="general-title"><SettingsGroupHeader title={t("settings.panes.general")} id="general-title" /><AppearanceForm preferences={preferences.data.data} /><PersonalLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} /></section>}
+            {pane === "security" && <section aria-labelledby="security-title"><SettingsGroupHeader title={t("settings.panes.security")} id="security-title" /><PasswordChangeForm username={session?.username} /><MFASettings username={session?.username} /></section>}
+            {pane === "accounts" && <section aria-labelledby="accounts-title"><SettingsGroupHeader title={t("settings.panes.accounts")} id="accounts-title" /><AdminUsersSection /></section>}
             {!pending && !error && pane === "instance" && uiSettings.data && preferences.data && settings.data && <section aria-labelledby="instance-title"><SettingsGroupHeader title={t("settings.panes.instance")} description={t("settings.instanceDescription")} id="instance-title" /><InstanceLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} />{accounting.data && <AccountingTimezoneForm settings={accounting.data.data} />}{usageSettings.data && <UsageWindowForm settings={usageSettings.data.data} />}<RuntimeSettingsForm settings={settings.data.data} /></section>}
-            {!pending && !error && pane === "config" && config.data && modelCatalog.data && <section aria-labelledby="config-title"><SettingsGroupHeader title={t("settings.panes.config")} description={t("settings.configPreviewDescription")} id="config-title" /><ModelCatalogCard info={modelCatalog.data} onRefresh={() => modelCatalog.refetch()} /><ConfigPreviewCard yaml={config.data.yaml} entries={config.data.entries} /></section>}
+            {!pending && !error && pane === "config" && config.data && modelCatalog.data && <section aria-labelledby="config-title"><SettingsGroupHeader title={t("settings.panes.config")} id="config-title" /><ModelCatalogCard info={modelCatalog.data} onRefresh={() => modelCatalog.refetch()} /><ConfigPreviewCard yaml={config.data.yaml} entries={config.data.entries} /></section>}
             {pane === "custody" && <Suspense fallback={<Loading />}><MasterKeyCustodyPage embedded /></Suspense>}
             {!pending && !error && pane === "diagnostics" && status.data && <DiagnosticsPane status={status.data} findings={advisor.data?.items} findingsUnavailable={advisor.isError} accountingLabels={accountingLabels} metricLabels={metricLabels} />}
           </div>
@@ -138,9 +137,9 @@ function ModelCatalogCard({ info, onRefresh }: { info: ModelCatalogInfo; onRefre
   });
   const status = info.status;
   const degraded = status.state === "degraded" || status.state === "catalog_unavailable";
-  return <section className={`panel system-card model-catalog-card${degraded ? " warning" : ""}`} aria-labelledby="model-catalog-title">
-    <header className="config-overview-header">
-      <div><h3 id="model-catalog-title">{t("settings.modelCatalogTitle")}</h3><p>{t("settings.modelCatalogDescription")}</p></div>
+  return <section className={`panel model-catalog-card${degraded ? " warning" : ""}`} aria-labelledby="model-catalog-title">
+    <header className="model-catalog-header">
+      <div><h3 id="model-catalog-title">{t("settings.modelCatalogTitle")}</h3></div>
       <span className="config-overview-state" role="status" aria-live="polite"><StatusDot ok={!degraded} />{t(`settings.modelCatalogStates.${status.state}`)}</span>
     </header>
     <dl>
@@ -167,7 +166,7 @@ function DiagnosticsPane({ status, findings, findingsUnavailable, accountingLabe
   // which reads the same as "there is no such thing as redaction here".
   const activationDomains = activation?.domains ?? [];
   return <section aria-labelledby="diagnostics-title">
-    <SettingsGroupHeader title={t("settings.panes.diagnostics")} description={t("settings.systemDescription")} id="diagnostics-title" />
+    <SettingsGroupHeader title={t("settings.panes.diagnostics")} id="diagnostics-title" />
     {(status.accounting_status !== 0 || status.draining || activation?.stale) && <SettingsOverview status={status} />}
     {activation?.stale && <div className="notice warning" role="alert">
       <strong>{t("settings.activationStale")}</strong>
@@ -203,7 +202,6 @@ function DiagnosticsPane({ status, findings, findingsUnavailable, accountingLabe
           <WritePathCard summary={status.write_path} batches={Number(status.wal?.batches ?? 0)} />
           {activation && <details id="activation" className="panel system-card diagnostic-details" open>
             <summary><span>{t("settings.activationTitle")}</span><strong><StatusDot ok={!activation.stale} />{t(activation.stale ? "settings.activationStale" : "settings.activationCurrent")}</strong></summary>
-            <p>{t(activation.stale ? "settings.activationStaleDescription" : "settings.activationCurrentDescription")}</p>
             <dl>
               <div><dt>{t("settings.activationGeneration")}</dt><dd>{activation.generation}</dd></div>
               {activation.stale_since && <div><dt>{t("settings.activationSince")}</dt><dd>{formatInstant(activation.stale_since, "full")}</dd></div>}
@@ -405,7 +403,7 @@ function ConfigPreviewCard({ yaml, entries }: { yaml: string; entries: SystemCon
       <span>{t("settings.configResultCount", { visible: visibleEntries.length, total: entries.length })}</span>
     </div>
     <div className="config-list" role="list">
-      {visibleEntries.map((entry) => <ConfigEntryRow key={entry.path} entry={entry} english={english} />)}
+      {visibleEntries.map((entry) => <ConfigEntryRow key={entry.path} entry={entry} english={english} search={query} />)}
       {visibleEntries.length === 0 && <p className="config-list-empty">{t("settings.noConfigMatches")}</p>}
     </div>
     <details
@@ -418,7 +416,6 @@ function ConfigPreviewCard({ yaml, entries }: { yaml: string; entries: SystemCon
       }}
     >
       <summary>{t("settings.effectiveConfigYaml")}</summary>
-      <p className="config-preview-description">{t("settings.effectiveConfigYamlDescription")}</p>
       <pre className="config-preview-body" tabIndex={0} aria-label={t("settings.effectiveConfigYaml")}><code>{yaml}</code></pre>
       <div className="form-actions">
         <button type="button" className="button ghost" onClick={() => void copy()}>{t("settings.copyYaml")}</button>
@@ -428,18 +425,20 @@ function ConfigPreviewCard({ yaml, entries }: { yaml: string; entries: SystemCon
   </section>;
 }
 
-function ConfigEntryRow({ entry, english }: { entry: SystemConfigEntry; english: boolean }) {
+function ConfigEntryRow({ entry, english, search }: { entry: SystemConfigEntry; english: boolean; search: string }) {
   const { t } = useTranslation();
   const title = (english ? entry.title_en : entry.title_zh) || entry.path;
   const description = english ? entry.description_en : entry.description_zh;
+  const needle = search.trim().toLocaleLowerCase();
+  const matchesHelp = Boolean(needle && description?.toLocaleLowerCase().includes(needle));
   return <article className="config-entry" role="listitem">
-    <div className="config-entry-copy">
-      <div>
+    <details className="config-entry-copy" open={matchesHelp || undefined}>
+      <summary>
         <h4>{title}</h4>
         <code>{entry.path}</code>
-      </div>
+      </summary>
       <p>{description || t("settings.configDescriptionMissing")}</p>
-    </div>
+    </details>
     <div className={entry.kind === "boolean" ? `config-entry-value config-value-state ${entry.value === "true" ? "enabled" : "disabled"}` : "config-entry-value"}>
       {formatConfigEntry(entry, t)}
     </div>
@@ -452,8 +451,8 @@ function formatConfigEntry(entry: SystemConfigEntry, t: (key: string, options?: 
   return entry.value;
 }
 
-function SettingsGroupHeader({ title, description, id }: { title: string; description: string; id: string }) {
-  return <header className="settings-group-header"><h2 id={id}>{title}</h2><p>{description}</p></header>;
+function SettingsGroupHeader({ title, description, id }: { title: string; description?: string; id: string }) {
+  return <header className="settings-group-header"><h2 id={id}>{title}</h2>{description && <p>{description}</p>}</header>;
 }
 
 function SettingsOverview({ status }: { status: Awaited<ReturnType<typeof api.systemStatus>> }) {
@@ -462,7 +461,6 @@ function SettingsOverview({ status }: { status: Awaited<ReturnType<typeof api.sy
   return (
     <section className="settings-overview" aria-labelledby="settings-overview-title">
       <div className="settings-overview-copy">
-        <p className="eyebrow">{t("settings.overviewEyebrow")}</p>
         <h2 id="settings-overview-title"><StatusDot ok={healthy} />{healthy ? t("settings.systemReady") : t("settings.systemAttention")}</h2>
         <p>{healthy ? t("settings.systemReadyDescription") : t("settings.systemAttentionDescription")}</p>
       </div>

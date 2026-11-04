@@ -19,7 +19,6 @@ export function MasterKeyCustodyPage({ embedded = false }: { embedded?: boolean 
   const lastUpdated = custody.dataUpdatedAt > 0 ? date(new Date(custody.dataUpdatedAt).toISOString()) : t("common.unknown");
   const runbooksAvailable = data?.mode === "key_slots" && Boolean(data.lifecycle_runbook_url || data.recovery_runbook_url);
 
-  const description = isFile ? t("custody.fileDescription") : t("custody.description");
   const refresh = data && <div className="custody-refresh">
     <span>{t("custody.lastUpdated", { value: lastUpdated })}</span>
     <button className="button ghost" type="button" disabled={custody.isFetching} onClick={retry}>
@@ -29,12 +28,10 @@ export function MasterKeyCustodyPage({ embedded = false }: { embedded?: boolean 
 
   return <div className={`custody-page${embedded ? " embedded" : ""}`}>
     {embedded ? <header className="settings-group-header custody-section-header">
-      <div><h2 id="custody-title">{t("custody.title")}</h2><p>{description}</p></div>
+      <div><h2 id="custody-title">{t("custody.title")}</h2></div>
       {refresh}
     </header> : <PageHeader
-      eyebrow={t("custody.eyebrow")}
       title={t("custody.title")}
-      description={description}
       action={refresh}
     />}
     {custody.isPending && <Loading />}
@@ -51,18 +48,16 @@ export function MasterKeyCustodyPage({ embedded = false }: { embedded?: boolean 
       <section className={`panel custody-summary ${data.custody_state}`} aria-labelledby="custody-posture">
         <div className="custody-summary-primary">
           <div>
-            <p className="eyebrow">{t("custody.posture")}</p>
             <h2 id="custody-posture"><StatusDot ok={data.custody_state === "healthy"} />{isFile
               ? (data.local_custody_ready ? t("custody.fileKeyReady") : t("custody.fileKeyNotReady"))
               : (data.custody_state === "degraded" ? t("custody.kmsReviewRequired") : (data.local_custody_ready ? t("custody.descriptorReady") : t("custody.descriptorNotReady")))}</h2>
-            <p>{data.rotation_incomplete ? t("custody.rotationIncomplete", { pending: data.pending_slots, retiring: data.retiring_slots }) : t("custody.stable")}</p>
+            {data.rotation_incomplete && <p>{t("custody.rotationIncomplete", { pending: data.pending_slots, retiring: data.retiring_slots })}</p>}
           </div>
           <span className="badge custody-mode-badge">{isFile ? t("custody.modeFile") : t("custody.modeKeySlots")}</span>
         </div>
         <dl className={`custody-facts ${isFile ? "file" : ""}`}>
           {!isFile && <div><dt>{t("custody.operation")}</dt><dd>{t(`custody.operations.${data.lifecycle_operation}`)}</dd></div>}
           {!isFile && <div><dt>{t("custody.recoveryExpiry")}</dt><dd>{t(`custody.recoveryStatuses.${data.recovery_verification_status}`)}</dd></div>}
-          <div><dt>{t("custody.updated")}</dt><dd>{lastUpdated}</dd></div>
         </dl>
         <p className="custody-admission">{data.production_admission === "external_evidence_required" ? t("custody.externalAdmission") : t("custody.admissionNotApplicable")}</p>
       </section>

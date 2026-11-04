@@ -161,7 +161,8 @@ export function RedactionPoliciesSection({
           {t("redaction.emptyDescription")}
         </EmptyState>
       )}
-      {!!policies.length && (
+      {!!policies.length && visible.length === 0 && <EmptyState title={t("common.noMatches")} action={<button className="button ghost" onClick={() => { setSearch(""); setStatus(""); setMode(""); }}>{t("policyManagement.clearFilters")}</button>} />}
+      {!!visible.length && (
         <div className="table-shell policy-table-shell">
           <table className="policy-table"><thead><tr><th>{t("policyManagement.policy")}</th><th>{t("policyManagement.status")}</th><th>{t("policyManagement.mode")}</th><th>{t("policyManagement.summary")}</th><th>{t("policyManagement.bindings")}</th><th>{t("policyManagement.actions")}</th></tr></thead>
           <tbody>{visible.map((policy) => {
@@ -550,7 +551,7 @@ function RedactionPolicyForm({
           <div className="redaction-footer-state">
             <label className="redaction-footer-enable">
               <input type="checkbox" aria-label={t("redaction.enable")} checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
-              <span><strong>{t("redaction.enable")} · {enabled ? t("common.enabled") : t("common.disabled")}</strong>{current && <small>{t("redaction.boundProjects", { count: current.bound_projects ?? 0 })}</small>}</span>
+              <span><strong>{t("redaction.enable")}</strong>{current && <small>{t("redaction.boundProjects", { count: current.bound_projects ?? 0 })}</small>}</span>
             </label>
             <div className={`redaction-save-summary ${problemCount || rules.length === 0 || (submitted && !name.trim()) ? "invalid" : ""}`} aria-live="polite">
               {problemCount > 0

@@ -151,7 +151,7 @@ curl "$HALRO_GATEWAY_URL/halro/v1/work-units/wku_xxx/outcomes" \\
 
   return <section className="panel first-run-panel governance-first-run" aria-labelledby="governance-first-run-title">
     <header className="first-run-header">
-      <div><p className="eyebrow">{t("runGovernance.firstRun.eyebrow")}</p><h2 id="governance-first-run-title">{t("runGovernance.firstRun.title")}</h2><p className="first-run-description">{t("runGovernance.firstRun.description")}</p></div>
+      <div><h2 id="governance-first-run-title">{t("runGovernance.firstRun.title")}</h2><p className="first-run-description">{t("runGovernance.firstRun.description")}</p></div>
       <div className="first-run-progress-shell"><strong>{progressText}</strong><div className="first-run-progress-track" role="progressbar" aria-label={t("runGovernance.firstRun.progressLabel")} aria-valuemin={0} aria-valuemax={steps.length} aria-valuenow={completed} aria-valuetext={progressText}><span style={{ width: `${completed / steps.length * 100}%` }} /></div></div>
     </header>
     <ol className="first-run-goals">
@@ -161,7 +161,7 @@ curl "$HALRO_GATEWAY_URL/halro/v1/work-units/wku_xxx/outcomes" \\
         <span className={`first-run-goal-state ${step.state}`}>{t(`runGovernance.firstRun.states.${step.state}`)}</span>
       </li>)}
     </ol>
-    <footer className="first-run-action"><div><span>{t(allComplete ? "runGovernance.firstRun.finished" : "runGovernance.firstRun.next")}</span><strong>{t(allComplete ? "runGovernance.firstRun.finishedTitle" : `runGovernance.firstRun.steps.${current.key}.title`)}</strong><small>{t(allComplete ? "runGovernance.firstRun.finishedDescription" : `runGovernance.firstRun.steps.${current.key}.${current.state === "error" ? "error" : "detail"}`)}</small></div>{action}</footer>
+    <footer className="first-run-action"><div><span>{t(allComplete ? "runGovernance.firstRun.finished" : "runGovernance.firstRun.next")}</span><strong>{t(allComplete ? "runGovernance.firstRun.finishedTitle" : `runGovernance.firstRun.steps.${current.key}.title`)}</strong>{(allComplete || current.state === "error") && <small>{t(allComplete ? "runGovernance.firstRun.finishedDescription" : `runGovernance.firstRun.steps.${current.key}.error`)}</small>}</div>{action}</footer>
     {projectEnabled && <details className="governance-guide-api" id="governance-first-api" open={apiOpen} onToggle={(event) => setAPIOpen(event.currentTarget.open)}>
       <summary><span><strong>{t("runGovernance.firstRun.apiTitle")}</strong><small>{t("runGovernance.firstRun.apiDescription")}</small></span></summary>
       <div className="governance-guide-api-body"><p className="notice warning">{t("runGovernance.firstRun.apiBoundary")}</p><CodeSample title={t("runGovernance.firstRun.samples.workUnit")} code={workUnitCode} /><CodeSample title={t("runGovernance.firstRun.samples.run")} code={runCode} /><CodeSample title={t("runGovernance.firstRun.samples.inference")} code={inferenceCode} /><CodeSample title={t("runGovernance.firstRun.samples.outcome")} code={outcomeCode} /></div>

@@ -19,7 +19,6 @@ export function FirstRunChecklist() {
     return (
       <section className="panel first-run-panel first-run-loading" aria-labelledby="first-run-loading-title" aria-busy="true">
         <div>
-          <p className="eyebrow">{t("dashboard.firstRun.eyebrow")}</p>
           <h2 id="first-run-loading-title">{t("dashboard.firstRun.loading")}</h2>
         </div>
         <span className="first-run-loading-line" aria-hidden="true" />
@@ -32,8 +31,7 @@ export function FirstRunChecklist() {
       <section className="panel first-run-panel first-run-unavailable" aria-labelledby="first-run-unavailable-title">
         <header className="panel-header">
           <div>
-            <p className="eyebrow">{t("dashboard.firstRun.eyebrow")}</p>
-            <h2 id="first-run-unavailable-title">{t("dashboard.firstRun.unavailable")}</h2>
+              <h2 id="first-run-unavailable-title">{t("dashboard.firstRun.unavailable")}</h2>
           </div>
         </header>
         <ErrorState error={readiness.error} className="first-run-error" />
@@ -53,9 +51,7 @@ export function FirstRunChecklist() {
     <section className="panel first-run-panel" aria-labelledby="first-run-title">
       <header className="first-run-header">
         <div>
-          <p className="eyebrow">{t("dashboard.firstRun.eyebrow")}</p>
           <h2 id="first-run-title">{t("dashboard.firstRun.title")}</h2>
-          <p className="first-run-description">{t("dashboard.firstRun.description")}</p>
         </div>
         <div className="first-run-progress-shell">
           <strong>{progressText}</strong>
@@ -96,7 +92,7 @@ export function FirstRunChecklist() {
         <div>
           <span>{t("dashboard.firstRun.next")}</span>
           <strong>{t(`dashboard.firstRun.goals.${current.key}.title`)}</strong>
-          <small>{readOnly ? t("dashboard.firstRun.readOnly") : t(`dashboard.firstRun.details.${current.detail_code}`)}</small>
+          {readOnly && <small>{t("dashboard.firstRun.readOnly")}</small>}
         </div>
         {readOnly
           ? <button className="button primary first-run-action-button" disabled>{t("dashboard.firstRun.adminRequired")}</button>

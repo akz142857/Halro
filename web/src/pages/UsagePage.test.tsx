@@ -134,6 +134,20 @@ describe("UsagePage filter hierarchy", () => {
     expect(within(drawer).getByRole("textbox", { name: "实际模型" })).toBeVisible();
   });
 
+  it("distinguishes an empty history from no filter matches and clears the restrictive filters", async () => {
+    renderUsage();
+    expect(await screen.findByRole("heading", { name: "还没有调用记录" })).toBeVisible();
+    fireEvent.change(screen.getByRole("textbox", { name: "Request ID" }), { target: { value: "req_missing" } });
+    expect(await screen.findByRole("heading", { name: "没有匹配的调用" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "清除" }));
+    expect(await screen.findByRole("heading", { name: "还没有调用记录" })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Request ID" })).toHaveValue("");
+    await waitFor(() => {
+      const latest = vi.mocked(api.usage).mock.calls.at(-1)?.[0] ?? "";
+      expect(new URLSearchParams(latest.slice(1)).get("request_id")).toBeNull();
+    });
+  });
+
   it("turns a relative time preset into one absolute query interval", async () => {
     vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-19T12:00:00Z"));
     renderUsage();

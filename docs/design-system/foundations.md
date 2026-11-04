@@ -13,7 +13,7 @@
 | Label | `--type-label-size` / 13px | 控件标签、事实值 |
 | Caption floor | `--type-caption-size` / 12px | 标签、时间、图表轴；禁止更小 |
 | Metric | `--type-metric-size` / clamp(20px, 2vw, 30px) | 关键聚合值，普通字段不得使用 |
-| Display / Hero | `--type-display-size` 34px、`--type-hero-size` clamp(34px, 4.2vw, 46px) | **仅** Login / Setup 入口屏；控制台页面使用即缺陷 |
+| Display / Hero | `--type-display-size` 34px、`--type-hero-size` clamp(34px, 4.2vw, 46px) | Login 保留原品牌与登录布局；不用于常规控制台任务，Setup 使用紧凑任务标题 |
 
 默认使用系统 Sans；ID、代码与数值轴使用系统 Mono。粗细仅使用 400/500/600/700。中文依赖 PingFang SC、Microsoft YaHei、Noto/Source Han 回退。
 
@@ -38,7 +38,7 @@ Primitive 只定义于 `tokens.css`。组件只消费 `--color-text-*`、`--colo
 - Shell 侧栏：`--layout-sidebar-width: 248px`；内容宽度按页面模式约束。
 - 资源行节奏由 `--resource-row-padding-block` / `-inline` / `--resource-cell-gap` 承担，不另造通用行内边距 Token。
 - 桌面控件可用 `--control-block-size: 36px`；820px 以下交互目标使用 `--control-touch-block-size: 44px`。
-- 页面不新增裸 spacing/radius；现有债务由 `design-system.test.ts` 的精确基线 691 约束，只能在审阅后下降或明确解释变化。
+- 页面不新增裸 spacing/radius；现有债务由 `design-system.test.ts` 的精确基线 669 约束，只能在审阅后下降或明确解释变化。
 
 **Token 升格规则**：一个值只有在**必须跨多个组件同步变化**时才升格为语义 Token。与 `--space-*` 值相同的别名是重复概念，不是角色。任何新增的 `--color-* / --type-* / --layout-* / --control-*` 角色必须同时有调用点——`declares no semantic role the product never reads` 精确断言这一点，声明一个没人读的角色会直接让门禁失败。
 

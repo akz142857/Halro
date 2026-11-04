@@ -1,6 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useMFAStatus } from "../session";
 import { useNotify } from "../notifications";
 import { api } from "../api";
 import { ErrorState, Field, Loading, Modal } from "../components";
@@ -17,7 +18,7 @@ export function MFASettings({
   const { t } = useTranslation();
   const formatInstant = useInstantFormatter();
   const queryClient = useQueryClient();
-  const status = useQuery({ queryKey: ["mfa"], queryFn: api.mfaStatus });
+  const status = useMFAStatus();
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [approvalCode, setApprovalCode] = useState("");
@@ -100,12 +101,12 @@ export function MFASettings({
     actionWasOpen.current = actionOpen;
   }, [actionOpen]);
   return <section className="panel settings-card mfa-settings" aria-labelledby="mfa-title" aria-busy={status.isPending}>
-    <header className="panel-header"><div><p className="eyebrow">{t("settings.currentAccount")}{username ? ` · ${username}` : ""}</p><h3 id="mfa-title" tabIndex={-1}>{t("settings.mfaTitle")}</h3><p>{t("settings.mfaDescription")}</p></div>{status.data ? <span className={`badge ${status.data.enabled ? "good" : ""}`}>{status.data.enabled ? t("settings.mfaEnabled") : t(`settings.mfaPolicy.${status.data.policy}`)}</span> : <span className="badge">{t("common.loading")}</span>}</header>
+    <header className="panel-header"><div><p className="eyebrow">{t("settings.currentAccount")}{username ? ` · ${username}` : ""}</p><h3 id="mfa-title" tabIndex={-1}>{t("settings.mfaTitle")}</h3></div>{status.data ? <span className={`badge ${status.data.enabled ? "good" : ""}`}>{status.data.enabled ? t("settings.mfaEnabled") : t(`settings.mfaPolicy.${status.data.policy}`)}</span> : <span className="badge">{t("common.loading")}</span>}</header>
     {status.isPending && <Loading label={t("settings.loadingMFA")} />}
     {status.isError && <ErrorState error={status.error} />}
     {enrollmentExpired && <div className="notice warning" role="status">{t("settings.enrollmentExpired")}</div>}
-    {status.data && <div className="mfa-summary"><strong>{status.data.enabled ? t("settings.mfaEnabled") : t("settings.mfaNotEnabled")}</strong><span>{t("settings.authenticatorCount", { count: status.data.authenticators.length })}</span>{status.data.recovery_codes_remaining !== undefined && <span>{t("settings.recoveryRemaining", { count: status.data.recovery_codes_remaining })}</span>}</div>}
-    {status.data && <section className="mfa-subsection" aria-labelledby="devices-title"><header><h4 id="devices-title">{t("settings.authenticatorDevices")}</h4><p>{t("settings.authenticatorDevicesDescription")}</p></header>
+    {status.data?.enabled && <div className="mfa-summary"><span>{t("settings.authenticatorCount", { count: status.data.authenticators.length })}</span>{status.data.recovery_codes_remaining !== undefined && <span>{t("settings.recoveryRemaining", { count: status.data.recovery_codes_remaining })}</span>}</div>}
+    {status.data && <section className="mfa-subsection" aria-labelledby="devices-title"><header><h4 id="devices-title">{t("settings.authenticatorDevices")}</h4></header>
       {status.data.authenticators.length === 0 ? <p className="settings-empty">{t("settings.noAuthenticators")}</p> : <div className="authenticator-list">{status.data.authenticators.map((a) => <article key={a.id}><div><strong>{a.name}</strong><span>{t("settings.createdAt")}: {formatDate(a.created_at)} · {t("settings.lastUsed")}: {formatDate(a.last_used_at)}</span></div><div className="form-actions"><button type="button" className="button ghost" disabled={actionOpen} onClick={(event) => { actionTrigger.current = event.currentTarget; setRenameState({ id: a.id, name: a.name, revision: a.revision }); }}>{t("settings.renameAuthenticator")}</button><button type="button" className="button danger" disabled={actionOpen} onClick={(event) => { actionTrigger.current = event.currentTarget; setRevokeState({ id: a.id, password: "", code: "" }); }}>{t("settings.revokeAuthenticator")}</button></div></article>)}</div>}
     </section>}
     {renameState.id && <form className="settings-form credential-form action-panel" aria-label={t("settings.renameAuthenticator")} onSubmit={(e) => { e.preventDefault(); rename.mutate(); }}><Field label={t("settings.deviceName")}><input autoComplete="off" autoFocus required maxLength={64} value={renameState.name} onChange={(e) => setRenameState((v) => ({ ...v, name: e.target.value }))} /></Field>{rename.isError && <ErrorState error={rename.error} />}<div className="form-actions"><button className="button primary" disabled={rename.isPending}>{t("common.save")}</button><button type="button" className="button ghost" onClick={() => setRenameState({ id: "", name: "", revision: 0 })}>{t("common.cancel")}</button></div></form>}

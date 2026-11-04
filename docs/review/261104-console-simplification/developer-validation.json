@@ -1,0 +1,182 @@
+{
+  "browser": "Chromium 149.0.7827.55 (installed headless shell)",
+  "before_url": "http://127.0.0.1:5276/admin/",
+  "after_url": "http://127.0.0.1:5274/admin/",
+  "baseline_bundle": "/private/tmp/halro-developer-refinement-20261104/baseline-dist",
+  "baseline": {
+    "report": "/private/tmp/halro-developer-refinement-20261104/acceptance/before-metrics/report.json",
+    "passed": 20,
+    "total": 20
+  },
+  "default_final": {
+    "report": "/private/tmp/halro-developer-refinement-20261104/acceptance/default-effective-report.json",
+    "passed": 20,
+    "total": 20
+  },
+  "matrix": {
+    "report": "/private/tmp/halro-developer-refinement-20261104/acceptance/matrix-effective-report.json",
+    "passed": 160,
+    "total": 160,
+    "original_passed": 136,
+    "fixed_failure_count": 24
+  },
+  "accessibility": {
+    "report": "/private/tmp/halro-developer-refinement-20261104/acceptance/accessibility-effective-report.json",
+    "passed": 24,
+    "total": 24,
+    "original_passed": 15,
+    "fixed_failure_count": 9
+  },
+  "long_connection_overlay": {
+    "report": "/private/tmp/halro-developer-refinement-20261104/acceptance/connection-long-final/report.json",
+    "passed": 8,
+    "total": 8
+  },
+  "measurement": "Default rendered helper characters sum non-collapsed paragraphs/small hints and code footnotes inside the Developer page. Field labels, original response metadata labels/data, actual code and visually-hidden text are excluded. The viewport measure intersects both the viewport and clipping ancestors. Counts are characters including internal spaces, not words. Comparisons use matching synthetic data, locale, appearance and viewport.",
+  "fixes_confirmed": [
+    "Stream checkbox and connection action labels do not collapse into vertical text.",
+    "Long project/model names no longer expand the narrow grid; long code scroll remains local.",
+    "Code/connection overlay keyboard interaction preserves in-memory input and Key and restores trigger focus.",
+    "Invalid JSON with disabled Copy no longer lets Tab escape the code drawer.",
+    "Code examples use an environment variable; eight captured overlay accessibility trees contain no literal entered synthetic Gateway Key.",
+    "After finite drawer animations settle, 820px viewport has drawer left37/right805 and documentWidth805 with the stable15px gutter."
+  ],
+  "limits": [
+    "All Admin API responses are synthetic, all external origins are blocked, and unknown API routes fail with 501. No live provider call was made.",
+    "Accessibility evidence is Chromium ariaSnapshot, keyboard focus, forced colors and reduced motion; not a VoiceOver session.",
+    "The original 160-case matrix and initial keyboard failures remain intact; effective reports cite the exact successful correction reports. Final default snapshots include the compact header and idle-response spacing refinements."
+  ],
+  "comparisons": [
+    {
+      "locale": "zh-CN",
+      "appearance": "dark",
+      "width": 1440,
+      "height": 900,
+      "helper_chars_before": 285,
+      "helper_chars_after": 34,
+      "helper_reduction_percent": 88.1,
+      "viewport_helper_chars_before": 245,
+      "viewport_helper_chars_after": 34,
+      "send_top_before": 1134,
+      "send_top_after": 756,
+      "primary_controls_first_screen_before": false,
+      "primary_controls_first_screen_after": true,
+      "page_height_before": 1297,
+      "page_height_after": 919,
+      "empty_metadata_before": true,
+      "empty_metadata_after": false,
+      "inline_code_before": true,
+      "inline_code_after": false,
+      "screenshot_before": "/private/tmp/halro-developer-refinement-20261104/acceptance/before-metrics/developer-zh-CN-dark-w1440.png",
+      "screenshot_after": "/private/tmp/halro-developer-refinement-20261104/acceptance/default-final/developer-zh-CN-dark-w1440.png"
+    },
+    {
+      "locale": "zh-CN",
+      "appearance": "dark",
+      "width": 1280,
+      "height": 900,
+      "helper_chars_before": 285,
+      "helper_chars_after": 34,
+      "helper_reduction_percent": 88.1,
+      "viewport_helper_chars_before": 245,
+      "viewport_helper_chars_after": 34,
+      "send_top_before": 1134,
+      "send_top_after": 756,
+      "primary_controls_first_screen_before": false,
+      "primary_controls_first_screen_after": true,
+      "page_height_before": 1297,
+      "page_height_after": 919,
+      "empty_metadata_before": true,
+      "empty_metadata_after": false,
+      "inline_code_before": true,
+      "inline_code_after": false,
+      "screenshot_before": "/private/tmp/halro-developer-refinement-20261104/acceptance/before-metrics/developer-zh-CN-dark-w1280.png",
+      "screenshot_after": "/private/tmp/halro-developer-refinement-20261104/acceptance/default-final/developer-zh-CN-dark-w1280.png"
+    },
+    {
+      "locale": "zh-CN",
+      "appearance": "dark",
+      "width": 820,
+      "height": 844,
+      "helper_chars_before": 285,
+      "helper_chars_after": 34,
+      "helper_reduction_percent": 88.1,
+      "viewport_helper_chars_before": 162,
+      "viewport_helper_chars_after": 17,
+      "send_top_before": 1208,
+      "send_top_after": 829,
+      "primary_controls_first_screen_before": false,
+      "primary_controls_first_screen_after": false,
+      "page_height_before": 2290,
+      "page_height_after": 1302,
+      "empty_metadata_before": true,
+      "empty_metadata_after": false,
+      "inline_code_before": true,
+      "inline_code_after": false,
+      "screenshot_before": "/private/tmp/halro-developer-refinement-20261104/acceptance/before-metrics/developer-zh-CN-dark-w820.png",
+      "screenshot_after": "/private/tmp/halro-developer-refinement-20261104/acceptance/compact-default-final/developer-zh-CN-dark-w820.png"
+    },
+    {
+      "locale": "zh-CN",
+      "appearance": "dark",
+      "width": 390,
+      "height": 844,
+      "helper_chars_before": 285,
+      "helper_chars_after": 34,
+      "helper_reduction_percent": 88.1,
+      "viewport_helper_chars_before": 84,
+      "viewport_helper_chars_after": 4,
+      "send_top_before": 1490,
+      "send_top_after": 983,
+      "primary_controls_first_screen_before": false,
+      "primary_controls_first_screen_after": false,
+      "page_height_before": 2592,
+      "page_height_after": 1462,
+      "empty_metadata_before": true,
+      "empty_metadata_after": false,
+      "inline_code_before": true,
+      "inline_code_after": false,
+      "screenshot_before": "/private/tmp/halro-developer-refinement-20261104/acceptance/before-metrics/developer-zh-CN-dark-w390.png",
+      "screenshot_after": "/private/tmp/halro-developer-refinement-20261104/acceptance/default-final/developer-zh-CN-dark-w390.png"
+    },
+    {
+      "locale": "zh-CN",
+      "appearance": "dark",
+      "width": 320,
+      "height": 844,
+      "helper_chars_before": 285,
+      "helper_chars_after": 34,
+      "helper_reduction_percent": 88.1,
+      "viewport_helper_chars_before": 84,
+      "viewport_helper_chars_after": 4,
+      "send_top_before": 1580,
+      "send_top_after": 983,
+      "primary_controls_first_screen_before": false,
+      "primary_controls_first_screen_after": false,
+      "page_height_before": 2717,
+      "page_height_after": 1462,
+      "empty_metadata_before": true,
+      "empty_metadata_after": false,
+      "inline_code_before": true,
+      "inline_code_after": false,
+      "screenshot_before": "/private/tmp/halro-developer-refinement-20261104/acceptance/before-metrics/developer-zh-CN-dark-w320.png",
+      "screenshot_after": "/private/tmp/halro-developer-refinement-20261104/acceptance/default-final/developer-zh-CN-dark-w320.png"
+    }
+  ],
+  "production": {
+    "page_and_dialog_smoke": {
+      "passed": 108,
+      "total": 108
+    },
+    "workflow_checks": {
+      "passed": 4,
+      "total": 4,
+      "note": "3 final production checks passed; provider measurement rerun 1/1 against original pre-simplification preview5273. First attempt incorrectly selected first-pass preview5276 and compared 0 to0."
+    }
+  },
+  "screenshots": {
+    "before": "developer-before.png",
+    "after": "developer-after.png",
+    "synthetic": true
+  }
+}

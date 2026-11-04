@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { ApiError } from "./api";
+import { api, ApiError } from "./api";
 import { ConfirmButton } from "./components";
 import type { Session } from "./types";
 
@@ -45,6 +45,7 @@ describe("ConfirmButton", () => {
   });
 
   it("keeps the dialog open and states the reason when the action is refused", async () => {
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: true, policy: "optional", required: false, authenticators: [] });
     const onConfirm = vi.fn()
       .mockRejectedValueOnce(asksForStepUp())
       .mockRejectedValue(new Error("re-authentication required"));
@@ -63,7 +64,7 @@ describe("ConfirmButton", () => {
     expect(screen.queryByLabelText(/^当前密码/)).not.toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: "删除" }).at(-1)!);
     fireEvent.change(await screen.findByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
-    fireEvent.change(screen.getByLabelText(/验证码/), { target: { value: "123456" } });
+    fireEvent.change(await screen.findByLabelText(/验证码/), { target: { value: "123456" } });
     fireEvent.click(screen.getAllByRole("button", { name: "删除" }).at(-1)!);
 
     // The wording is ErrorState's business; what matters here is that the

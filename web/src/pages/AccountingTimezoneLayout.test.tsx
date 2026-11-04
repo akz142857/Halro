@@ -69,7 +69,7 @@ describe("accounting panel layout", () => {
     fireEvent.change(screen.getByLabelText(/目标时区/), { target: { value: "Asia/Shanghai" } });
     fireEvent.click(screen.getByRole("button", { name: "安排变更" }));
 
-    const lead = await screen.findByText(/请确认以下三点/);
+    const lead = await screen.findByText("UTC → Asia/Shanghai");
     expect(lead.closest(".confirmation-dialog")).not.toBeNull();
     const actions = document.querySelector(".modal .form-actions");
     expect(actions?.closest(".confirmation-dialog")).not.toBeNull();

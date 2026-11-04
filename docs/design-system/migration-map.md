@@ -1,4 +1,4 @@
-# Visual System v0.1 migration map
+# Visual System v0.2 migration map
 
 | Legacy / local rule | v0.1 target | Status |
 | --- | --- | --- |
@@ -12,8 +12,14 @@
 | page header 54/34px hand values | spacing tokens | Migrated |
 | page-local resource typography | `resource-list.css` / `resource-card.css` | Existing shared contract |
 | page-local colors / theme branches | semantic tokens in both themes | Enforced |
-| raw spacing/radius baseline 699 | exact baseline 693, decrease-only review | In progress debt |
+| raw spacing/radius baseline 699 | exact baseline 669, decrease-only review | In progress debt |
 | mixed content breakpoints | four shell modes + documented component breakpoints | Governed; incremental cleanup |
+| mandatory page eyebrow + description | title and action; necessary context only | Migrated across 12 routes |
+| duplicated capability badges + checkbox list | one capability disclosure with count | Migrated in provider form |
+| always-visible proxy trust warning | conditional summary and full trust disclosure | Migrated; independent upstream networking warning retained |
+| full-height advanced project configuration | grouped disclosures with configured summaries | Migrated; budget/model access retained at first level |
+| two-column initialization | single-column Setup task card | Migrated; Login retains its original UI by user preference |
+| modal focus loop includes collapsed descendants | summaries included, closed descendants excluded | Migrated |
 
 ## Deprecation rules
 
@@ -24,4 +30,4 @@
 
 ## Remaining intentional debt
 
-The 693-value raw spacing/radius ledger is not an endorsement. Each affected component change should convert nearby values and lower the exact baseline. Component-specific 760/720/640 breakpoints remain only where content, not device naming, justifies them.
+The 669-value raw spacing/radius ledger is not an endorsement. Each affected component change should convert nearby values and lower the exact baseline. Component-specific 760/720/640 breakpoints remain only where content, not device naming, justifies them.

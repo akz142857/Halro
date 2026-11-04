@@ -6,6 +6,7 @@ import { z } from "zod";
 import { api } from "../api";
 import {
   ConfirmButton,
+  DisclosureSection,
   EmptyState,
   ErrorState,
   Field,
@@ -29,6 +30,7 @@ import { useIsReadOnly } from "../session";
 import type { TFunction } from "i18next";
 import { Link } from "../navigation";
 import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../OnboardingContext";
+import { ProjectAIIntegration } from "./ProjectAIIntegration";
 
 const PAGE_SIZE = "50";
 
@@ -148,9 +150,7 @@ export function ProjectsPage() {
   return (
     <>
       <PageHeader
-        eyebrow={t("projects.eyebrow")}
         title={t("projects.title")}
-        description={t("projects.description")}
         action={<button className="button primary" disabled={readOnly} onClick={() => setCreating(true)}>{t("projects.create")}</button>}
       />
       <OnboardingContextBanner />
@@ -218,6 +218,7 @@ function ProjectDetail({ project }: { project: Project }) {
   const readOnly = useIsReadOnly();
   const [keyDialog, setKeyDialog] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [aiIntegration, setAIIntegration] = useState(false);
   const keys = useInfiniteQuery({
     queryKey: ["project-keys", project.id, "paged"],
     initialPageParam: "",
@@ -259,6 +260,7 @@ function ProjectDetail({ project }: { project: Project }) {
           <code>{project.id}</code>
         </div>
         <div className="row-actions">
+          <button type="button" className="button secondary" onClick={() => setAIIntegration(true)}>{t("aiIntegration.title")}</button>
           {/* Lifting the block switches off a control that is currently in
               force, so it asks for the same proof a deletion does. */}
           <ConfirmButton
@@ -354,6 +356,7 @@ function ProjectDetail({ project }: { project: Project }) {
       )}
       {keyDialog && <CreateKey project={project} onClose={() => setKeyDialog(false)} />}
       {editing && <ProjectForm current={project} onClose={() => setEditing(false)} />}
+      {aiIntegration && <ProjectAIIntegration project={project} onClose={() => setAIIntegration(false)} />}
     </section>
   );
 }
@@ -531,6 +534,13 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
   const enabled = watch("enabled");
   const deferredResponses = watch("deferredResponses");
   const runGovernance = watch("runGovernance");
+  const capacitySummary = `${watch("rpm")} RPM · ${compactNumber(Number(watch("tpm")))} TPM · ${t("projects.concurrency")} ${watch("concurrency")}${Number(watch("requestKB")) ? ` · ${watch("requestKB")} KiB` : ""}${Number(watch("streamSeconds")) ? ` · ${watch("streamSeconds")} s` : ""}`;
+  const runSummary = runGovernance ? [
+    t("common.enabled"),
+    `${watch("runDefaultBudget")} / ${watch("runMaxBudget")} USD`,
+    `${watch("runDefaultTTLHours")} / ${watch("runMaxTTLHours")} h`,
+    t("projects.runCapacitySummary", { runs: watch("runMaxActive"), units: watch("runMaxOpenWorkUnits") }),
+  ].join(" · ") : t("common.disabled");
   const { notify } = useNotify();
   // One key per open form: a retry after a lost response reaches the same
   // record instead of creating a second one, while a deliberate second create
@@ -596,15 +606,15 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
         })}
       >
         <section className="project-form-section" aria-labelledby="project-basics-title">
-          <header><h3 id="project-basics-title">{t("projects.basicInfo")}</h3><p>{t("projects.basicInfoDescription")}</p></header>
+          <h3 id="project-basics-title" className="sr-only">{t("projects.basicInfo")}</h3>
           <div className="form-grid">
             <Field label={t("projects.name")} error={errors.name?.message}><input autoComplete="off" data-modal-initial maxLength={MAX_PROJECT_NAME} {...register("name")} /></Field>
-            <div className="model-picker" role="group" aria-labelledby="project-model-title" aria-describedby="project-model-help">
+            <Field label={t("projects.dailyBudgetUSD")} error={errors.budget?.message}><input autoComplete="off" type="number" step="0.01" {...register("budget")} /></Field>
+            <div className="model-picker" role="group" aria-labelledby="project-model-title">
               <div className="model-picker-heading">
                 <strong id="project-model-title">{t("projects.aliases")}</strong>
                 <span className="model-picker-selection-count">{t("projects.selectedAliases", { count: selectedRouteAliases.length })}</span>
               </div>
-              <p id="project-model-help">{t("projects.aliasesHint")}</p>
               {availableDeployments.isError && <ErrorState error={availableDeployments.error} />}
               {availableRoutes.isPending || availableDeployments.isPending ? <Loading label={t("projects.loadingModels")} /> : routeOptions.length ? <div className="route-alias-picker">
                 <div className="model-option-grid">
@@ -643,19 +653,17 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
             </div>
           </div>
         </section>
-        <section className="project-form-section" aria-labelledby="project-capacity-title">
-          <header><h3 id="project-capacity-title">{t("projects.capacityControls")}</h3><p>{t("projects.capacityControlsDescription")}</p></header>
+        <DisclosureSection title={t("projects.requestLimits")} summary={capacitySummary} invalid={Boolean(errors.rpm || errors.tpm || errors.concurrency || errors.requestKB || errors.streamSeconds)}>
           <div className="form-grid compact-number-grid">
-            <Field label={t("projects.rpm")}><input autoComplete="off" type="number" {...register("rpm")} /></Field>
-            <Field label={t("projects.tpm")}><input autoComplete="off" type="number" {...register("tpm")} /></Field>
-            <Field label={t("projects.maxConcurrency")}><input autoComplete="off" type="number" {...register("concurrency")} /></Field>
-            <Field label={t("projects.dailyBudgetUSD")}><input autoComplete="off" type="number" step="0.01" {...register("budget")} /></Field>
-            <Field label={t("projects.maxRequestKB")} hint={t("projects.maxRequestKBHint")}><input autoComplete="off" type="number" min={0} step="any" {...register("requestKB")} /></Field>
-            <Field label={t("projects.maxStreamSeconds")} hint={t("projects.maxStreamSecondsHint")}><input autoComplete="off" type="number" min={0} step={1} {...register("streamSeconds")} /></Field>
+            <Field label={t("projects.rpm")} error={errors.rpm?.message}><input autoComplete="off" type="number" {...register("rpm")} /></Field>
+            <Field label={t("projects.tpm")} error={errors.tpm?.message}><input autoComplete="off" type="number" {...register("tpm")} /></Field>
+            <Field label={t("projects.maxConcurrency")} error={errors.concurrency?.message}><input autoComplete="off" type="number" {...register("concurrency")} /></Field>
+            <Field label={t("projects.maxRequestKB")} error={errors.requestKB?.message} hint={t("projects.maxRequestKBHint")}><input autoComplete="off" type="number" min={0} step="any" {...register("requestKB")} /></Field>
+            <Field label={t("projects.maxStreamSeconds")} error={errors.streamSeconds?.message} hint={t("projects.maxStreamSecondsHint")}><input autoComplete="off" type="number" min={0} step={1} {...register("streamSeconds")} /></Field>
           </div>
-        </section>
-        <section className="project-form-section" aria-labelledby="project-deferred-title">
-          <header><h3 id="project-deferred-title">{t("projects.deferredResponses")}</h3><p>{t("projects.deferredResponsesDescription")}</p></header>
+        </DisclosureSection>
+        <DisclosureSection title={t("projects.deferredResponses")} summary={deferredResponses ? `${t("common.enabled")} · ${t("projects.deferredQueueSummary", { count: Number(watch("deferredQueue")) || 100 })}` : t("common.disabled")} invalid={Boolean(errors.deferredQueue)}>
+          <p>{t("projects.deferredResponsesDescription")}</p>
           <div className="form-grid">
             <Field label={t("projects.deferredResponsesEnable")} hint={t("projects.deferredResponsesHint")}>
               <label className="form-inline-check">
@@ -663,43 +671,41 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
                 <span>{deferredResponses ? t("common.enabled") : t("common.disabled")}</span>
               </label>
             </Field>
-            <Field label={t("projects.deferredQueue")} hint={t("projects.deferredQueueHint")}>
+            <Field label={t("projects.deferredQueue")} error={errors.deferredQueue?.message} hint={t("projects.deferredQueueHint")}>
               <input autoComplete="off" type="number" min={0} max={MAX_DEFERRED_QUEUE} disabled={!deferredResponses} {...register("deferredQueue")} />
             </Field>
           </div>
-        </section>
-        <section className="project-form-section" aria-labelledby="project-run-governance-title">
-          <header><h3 id="project-run-governance-title">{t("projects.runGovernance")}</h3><p>{t("projects.runGovernanceDescription")}</p></header>
+        </DisclosureSection>
+        <DisclosureSection title={t("projects.runGovernance")} summary={runSummary} invalid={Boolean(errors.runDefaultBudget || errors.runMaxBudget || errors.runDefaultTTLHours || errors.runMaxTTLHours || errors.runMaxActive || errors.runMaxOpenWorkUnits)}>
           <div className="form-grid">
             <Field label={t("projects.runGovernanceEnable")}>
               <label className="form-inline-check"><input type="checkbox" {...register("runGovernance")} /><span>{runGovernance ? t("common.enabled") : t("common.disabled")}</span></label>
             </Field>
             <Field label={t("projects.runDefaultBudgetUSD")} error={errors.runDefaultBudget?.message}><input type="number" min={0} step="0.01" disabled={!runGovernance} {...register("runDefaultBudget")} /></Field>
-            <Field label={t("projects.runMaxBudgetUSD")}><input type="number" min={0} step="0.01" disabled={!runGovernance} {...register("runMaxBudget")} /></Field>
+            <Field label={t("projects.runMaxBudgetUSD")} error={errors.runMaxBudget?.message}><input type="number" min={0} step="0.01" disabled={!runGovernance} {...register("runMaxBudget")} /></Field>
             <Field label={t("projects.runDefaultTTLHours")} error={errors.runDefaultTTLHours?.message}><input type="number" min={1} max={720} disabled={!runGovernance} {...register("runDefaultTTLHours")} /></Field>
-            <Field label={t("projects.runMaxTTLHours")}><input type="number" min={1} max={720} disabled={!runGovernance} {...register("runMaxTTLHours")} /></Field>
+            <Field label={t("projects.runMaxTTLHours")} error={errors.runMaxTTLHours?.message}><input type="number" min={1} max={720} disabled={!runGovernance} {...register("runMaxTTLHours")} /></Field>
             <Field label={t("projects.runMaxActive")} error={errors.runMaxActive?.message}><input type="number" min={1} max={1000} disabled={!runGovernance} {...register("runMaxActive")} /></Field>
-            <Field label={t("projects.runMaxOpenWorkUnits")}><input type="number" min={1} max={1000} disabled={!runGovernance} {...register("runMaxOpenWorkUnits")} /></Field>
+            <Field label={t("projects.runMaxOpenWorkUnits")} error={errors.runMaxOpenWorkUnits?.message}><input type="number" min={1} max={1000} disabled={!runGovernance} {...register("runMaxOpenWorkUnits")} /></Field>
           </div>
-        </section>
-        <section className="project-form-section" aria-labelledby="project-security-title">
-          <header><h3 id="project-security-title">{t("projects.securityControls")}</h3><p>{t("projects.securityControlsDescription")}</p></header>
+        </DisclosureSection>
+        <DisclosureSection title={t("projects.securityControls")} summary={[watch("tokenGuardPolicyID") ? policies.data?.items.find((policy) => policy.id === watch("tokenGuardPolicyID"))?.name || watch("tokenGuardPolicyID") : "", watch("redactionPolicyID") ? redactionPolicies.data?.items.find((policy) => policy.id === watch("redactionPolicyID"))?.name || watch("redactionPolicyID") : "", watch("cidrs")].filter(Boolean).join(" · ") || t("projects.noBinding")} invalid={Boolean(errors.cidrs)}>
           <div className="form-grid">
             <Field label={t("projects.tokenGuardPolicy")}><select {...register("tokenGuardPolicyID")}><option value="">{t("projects.noBinding")}</option>{policies.data?.items.filter((policy) => policy.enabled).map((policy) => <option value={policy.id} key={policy.id}>{policy.name} · {policy.action === "temporary_block" ? t("policies.temporaryBlock") : policy.action === "alert" ? t("policies.alert") : t("policies.observe")}</option>)}</select></Field>
             <Field label={t("projects.redactionPolicy")}><select {...register("redactionPolicyID")}><option value="">{t("projects.noBinding")}</option>{redactionPolicies.data?.items.filter((policy) => policy.enabled).map((policy) => <option value={policy.id} key={policy.id}>{policy.name} · {policy.mode === "strict" ? t("redaction.strictBadge") : policy.mode === "bounded_stream" ? t("redaction.boundedBadge") : t("redaction.detectStreamBadge")}</option>)}</select></Field>
             <Field label={t("projects.allowedCIDR")} hint={t("projects.cidrHint")} error={errors.cidrs?.message}><textarea autoComplete="off" rows={3} placeholder={t("projects.cidrPlaceholder")} {...register("cidrs")} /></Field>
           </div>
-        </section>
+        </DisclosureSection>
         {mutation.isError && <ErrorState error={mutation.error} />}
         <div className="form-actions sticky-form-actions">
           <div className="form-footer-state">
             <label className="form-footer-enable">
               <input type="checkbox" {...register("enabled")} />
-              <span><strong>{t("projects.enable")} · {enabled ? t("common.enabled") : t("common.disabled")}</strong><small>{t("projects.enableDescription")}</small></span>
+              <span><strong>{t("projects.enable")}</strong>{!enabled && <small>{t("projects.disabledImpact")}</small>}</span>
             </label>
           </div>
           <button type="button" className="button ghost" disabled={mutation.isPending} onClick={onClose}>{t("common.cancel")}</button>
-          <button className="button primary" disabled={mutation.isPending}>{mutation.isPending ? t("common.working") : current ? t("projects.save") : t("projects.createSubmit")}</button>
+          <button className="button primary" disabled={mutation.isPending}>{mutation.isPending ? t("common.working") : current ? t("projects.saveApplied") : t("projects.createSubmit")}</button>
         </div>
       </form>
     </Modal>

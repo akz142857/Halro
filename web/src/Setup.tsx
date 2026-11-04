@@ -69,28 +69,12 @@ export function Setup({
     }
   });
   return (
-    <main className="login-page setup-page">
-      <section className="login-story" aria-label={t("auth.setupIntro")}>
-        <div className="brand login-brand">
-          <span className="brand-mark">H</span>
-          <span><strong>HALRO</strong><small>{t("auth.firstRunSubtitle")}</small></span>
-        </div>
-        <div>
-          <p className="eyebrow">{t("auth.setupEyebrow")}</p>
-          <h1>{t("auth.setupTitle")}</h1>
-          <p>{t("auth.setupDescription")}</p>
-        </div>
-        <ul className="trust-list">
-          <li><span>01</span>{t("auth.setupTrust1")}</li>
-          <li><span>02</span>{t("auth.setupTrust2")}</li>
-          <li><span>03</span>{t("auth.setupTrust3")}</li>
-        </ul>
-      </section>
+    <main className="login-page setup-page auth-focused">
       <section className="login-panel">
         <LanguageSelect compact />
+        <div className="brand login-brand"><span className="brand-mark" aria-hidden="true">H</span><strong>HALRO</strong></div>
         <form onSubmit={submit} autoComplete="off">
-          <p className="eyebrow">{t("auth.setupEyebrow")}</p>
-          <h2>{t("auth.setupHeading")}</h2>
+          <h1>{t("auth.setupHeading")}</h1>
           <p>{t("auth.setupOnlyOnce")}</p>
           {serverError && <div className="notice error" role="alert">{serverError}</div>}
           <Field label={t("auth.username")} error={errors.username?.message}>
@@ -114,7 +98,6 @@ export function Setup({
           <button className="button primary wide" disabled={isSubmitting}>
             {isSubmitting ? t("auth.settingUp") : t("auth.setupSubmit")}
           </button>
-          <small className="login-note">{t("auth.setupSecurity")}</small>
         </form>
       </section>
     </main>

@@ -322,10 +322,13 @@ describe("SettingsPage system configuration pane", () => {
     // The pane heading and the nav entry share a name, so wait on something
     // only the pane can produce rather than on the label.
     expect(await screen.findByText("127.0.0.1:8080")).toBeInTheDocument();
-    expect(document.querySelector("#effective-config-title")).toHaveTextContent("系统配置");
+    expect(document.querySelector("#effective-config-title")).toHaveTextContent("启动配置");
     expect(document.querySelectorAll(".config-entry")).toHaveLength(4);
     expect(screen.queryByText("网络")).not.toBeInTheDocument();
     expect(screen.getByText("Gateway 接收模型请求的监听地址。")).toBeInTheDocument();
+    expect(screen.getByText("Gateway 接收模型请求的监听地址。")).not.toBeVisible();
+    fireEvent.click(screen.getByText("Gateway 监听地址"));
+    expect(screen.getByText("Gateway 接收模型请求的监听地址。")).toBeVisible();
     expect(screen.getByText("server.gateway_listen")).toBeInTheDocument();
     expect(screen.getByText("tls.enabled")).toBeInTheDocument();
     expect(screen.getByText("未启用")).toBeInTheDocument();
@@ -415,7 +418,7 @@ describe("SettingsPage system configuration pane", () => {
     // Both ceilings are on the table, and the card says which one produced the
     // headline — the number alone does not tell an operator what to change.
     expect(screen.getByText("1918.6")).toBeInTheDocument();
-    expect(screen.getByText(/上限由单 Project 锁决定/)).toBeInTheDocument();
+    expect(screen.getByText(/瓶颈在单项目锁/)).toBeInTheDocument();
   });
 
   // The headline is the lower of two independent serialization points. It used
@@ -443,7 +446,7 @@ describe("SettingsPage system configuration pane", () => {
     renderWithClient(<SettingsPage />);
 
     expect(await screen.findByText("≈ 65.1 请求/秒")).toBeInTheDocument();
-    expect(screen.getByText(/上限由落盘决定/)).toBeInTheDocument();
+    expect(screen.getByText(/瓶颈在共享落盘通道/)).toBeInTheDocument();
   });
 
   // The panel exists because the file on disk stopped being the answer to
@@ -504,7 +507,7 @@ describe("SettingsPage system configuration pane", () => {
     expect(screen.getByText("脱敏策略")).toBeInTheDocument();
     expect(screen.getByText("redaction policies: store unavailable")).toBeInTheDocument();
     expect(screen.getByText("7")).toBeInTheDocument();
-    expect(screen.getAllByText(/数据面流量返回 503/)).toHaveLength(2);
+    expect(screen.getByText(/恢复前请求返回 503/)).toBeInTheDocument();
   });
 
   // The healthy reading has to be visible too. "Redaction is current" and
@@ -555,7 +558,7 @@ describe("SettingsPage system configuration pane", () => {
     } as never);
     window.history.replaceState({}, "", "/admin/settings/diagnostics");
     renderWithClient(<SettingsPage />);
-    const warning = await screen.findByText(/合批没起作用/);
+    const warning = await screen.findByText(/当前并发不足/);
     expect(warning).toBeInTheDocument();
     // One flush carries up to 128 records, and 32000 events/s over the
     // five-event request lifecycle is 6400 req/s. Both belong in the sentence:
@@ -584,7 +587,7 @@ describe("SettingsPage system configuration pane", () => {
     window.history.replaceState({}, "", "/admin/settings/diagnostics");
     renderWithClient(<SettingsPage />);
     await screen.findByText("Halro 1.0.0");
-    expect(screen.queryByText(/合批没起作用/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/当前并发不足/)).not.toBeInTheDocument();
   });
 
   // An instance that has served nothing has no means to report. Zero is what the
@@ -663,13 +666,22 @@ describe("SettingsPage root key custody pane", () => {
       items: [{
         rule: "attempt_budget_reaches_fanout", status: "warn",
         comparison: "ceil(3 / 2) = 2 < 3", consequence: "server wording",
-        evidence: [{ name: "gateway.max_total_attempts", value: "3" }],
+        evidence: [
+          { name: "gateway.max_total_attempts", value: "3" },
+          { name: "retry.max_attempts_per_target", value: "2" },
+          { name: "candidates_the_budget_reaches", value: "2" },
+          { name: "widest_fan_out", value: "3" },
+          { name: "widest_fan_out_public_model", value: "chat-fast" },
+        ],
       }],
     });
     window.history.replaceState({}, "", "/admin/settings/diagnostics");
     renderWithClient(<SettingsPage />);
 
-    expect(await screen.findByText("ceil(3 / 2) = 2 < 3")).toBeVisible();
+    expect(await screen.findByText("ceil(3 / 2) = 2 < 3")).not.toBeVisible();
+    expect(document.querySelector(".advisor-consequence")).toBeVisible();
+    fireEvent.click(document.querySelector('.advisor-finding[data-rule="attempt_budget_reaches_fanout"] summary')!);
+    expect(screen.getByText("ceil(3 / 2) = 2 < 3")).toBeVisible();
     expect(screen.getByText("gateway.max_total_attempts")).toBeVisible();
   });
 
@@ -687,5 +699,19 @@ describe("SettingsPage root key custody pane", () => {
 
     expect(await screen.findByText("Halro 1.0.0")).toBeVisible();
     expect(await screen.findByText(i18n.t("advisor.unavailable"))).toBeVisible();
+  });
+
+  it("keeps empty diagnostics distinct from a completed clean check", async () => {
+    vi.spyOn(api, "systemStatus").mockResolvedValue({
+      build: { version: "1.0.0", commit: "abc", date: "2026-08-07" },
+      accounting_status: 0, draining: false, wal: {}, write_path: emptyWritePath(), audit: {}, alerts: {}, usage_watermark: {},
+    } as never);
+    vi.spyOn(api, "advisorFindings").mockResolvedValue({ items: [] });
+    window.history.replaceState({}, "", "/admin/settings/diagnostics");
+    renderWithClient(<SettingsPage />);
+    expect(await screen.findByText("Halro 1.0.0")).toBeVisible();
+    expect(await screen.findByText(i18n.t("advisor.title"))).toBeVisible();
+    expect(screen.queryByText(i18n.t("advisor.summaryClear"))).not.toBeInTheDocument();
+    expect(document.querySelector(".advisor-overall-status")).not.toHaveClass("ok");
   });
 });

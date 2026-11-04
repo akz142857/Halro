@@ -129,7 +129,7 @@ describe("RunGovernancePage", () => {
     await waitFor(() => expect(runs).toHaveBeenCalled());
     fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
     expect(screen.getByRole("heading", { name: "生命周期" })).toBeVisible();
-    expect(screen.getByText(/从创建到关闭的关键节点/)).toBeVisible();
+    expect(screen.getByText("冻结的 Definitions")).toBeVisible();
     expect(screen.getByRole("heading", { name: "业务结果" })).toBeVisible();
     fireEvent.click(await screen.findByRole("button", { name: "查看调用" }));
     await waitFor(() => expect(usage).toHaveBeenCalled());

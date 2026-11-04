@@ -80,7 +80,6 @@ export function Layout({
             <span className="brand-mark">H</span>
             <span>
               <strong>HALRO</strong>
-              <small>{t("navigation.productSubtitle")}</small>
             </span>
           </Link>
           <button type="button" className="mobile-navigation-toggle" aria-controls="primary-navigation" aria-expanded={mobileNavigationOpen} onClick={() => setMobileNavigationOpen((open) => !open)}>
@@ -120,7 +119,7 @@ export function Layout({
           {/* Every figure in the console is measured against this zone, so it
               belongs where it is always visible rather than on the one page
               that happens to report a daily total. */}
-          <span>{t("navigation.localControl")} <span className="topline-separator" aria-hidden="true">|</span> {t("navigation.timeZoneLabel")}<span className="topline-timezone">{timeZone}</span></span>
+          <span>{t("navigation.timeZoneLabel")}<span className="topline-timezone">{timeZone}</span></span>
         </div>
         {/* Stated once, where it is always visible. A read-only admin who is
             not told will read every disabled control as a broken console. */}
