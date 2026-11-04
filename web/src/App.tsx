@@ -1,12 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { api, ApiError } from "./api";
+import { api, ApiError, subscribeSessionExpiry } from "./api";
 import { Layout } from "./Layout";
 import { Login } from "./Login";
 import { Setup } from "./Setup";
-import { ErrorBoundary, Loading } from "./components";
-import { navigate, usePathname } from "./navigation";
+import { ErrorBoundary, ErrorState, Loading } from "./components";
+import { navigate, setNavigationBlocked, usePathname } from "./navigation";
 import { applyLocale, applyPreference, resolveLocale } from "./i18n";
 import { applyAppearance, normalizeAppearance, resetAppearance } from "./theme";
 import { adoptTimeContext, resetAccountingTimeZone } from "./timezone";
@@ -37,6 +37,17 @@ export function App() {
   const { t } = useTranslation();
   const path = usePathname();
   const queryClient = useQueryClient();
+  const [sessionExpired, setSessionExpired] = useState(false);
+  useEffect(() => subscribeSessionExpiry(() => {
+    // A first visit without a cookie is ordinary sign-in, not an expiry alert.
+    if (!queryClient.getQueryData(["session"])) return;
+    setSessionExpired(true);
+    setMFARecoveryCodesPending(false);
+    setNavigationBlocked(false);
+    void queryClient.cancelQueries();
+    queryClient.removeQueries({ predicate: (query) => !["setup", "ui-bootstrap"].includes(String(query.queryKey[0])) });
+    queryClient.getMutationCache().clear();
+  }), [queryClient]);
   // Enabling the first authenticator changes the server-side session gate
   // immediately, but its recovery codes are returned only once. Keep the
   // restricted surface mounted while those codes are pending even if a focus
@@ -58,7 +69,7 @@ export function App() {
     queryFn: api.session,
     retry: (count, error) => !(error instanceof ApiError && error.status === 401) && count < 2,
     staleTime: 60_000,
-    enabled: setup.data?.setup_required === false,
+    enabled: setup.data?.setup_required === false && !sessionExpired,
   });
   useEffect(() => {
     if (uiBootstrap.data) {
@@ -87,7 +98,7 @@ export function App() {
   const accounting = useQuery({
     queryKey: ["system-status"],
     queryFn: api.systemStatus,
-    enabled: Boolean(session.data),
+    enabled: Boolean(session.data) && !sessionExpired,
     staleTime: 60_000,
   });
   useEffect(() => {
@@ -100,6 +111,13 @@ export function App() {
   useEffect(() => {
     if (session.data && path !== "/admin/login") document.getElementById("main-content")?.focus();
   }, [path, session.data]);
+  if (sessionExpired) {
+    return <Login expired onSuccess={(created) => {
+      queryClient.setQueryData(["session"], created);
+      setSessionExpired(false);
+      if (path === "/admin/login") navigate("/admin");
+    }} />;
+  }
   if (setup.isPending) {
     return <div className="boot"><span className="brand-mark">H</span><Loading label={t("app.checkingSetup")} /></div>;
   }
@@ -133,12 +151,16 @@ export function App() {
     return <div className="boot"><span className="brand-mark">H</span><Loading label={t("app.checkingSession")} /></div>;
   }
   if (session.isError) {
+    // A connection/server failure does not establish that the cookie expired.
+    if (!(session.error instanceof ApiError && session.error.status === 401)) {
+      return <div className="boot"><span className="brand-mark">H</span><ErrorState error={session.error} action={<button className="button primary" onClick={() => void session.refetch()}>{t("common.retry")}</button>} /></div>;
+    }
     return (
       <Login
-        onSuccess={() => {
+        onSuccess={(created) => {
           setMFARecoveryCodesPending(false);
-          queryClient.invalidateQueries({ queryKey: ["session"] });
-          navigate("/admin");
+          queryClient.setQueryData(["session"], created);
+          if (path === "/admin/login" || !path.startsWith("/admin")) navigate("/admin");
         }}
       />
     );

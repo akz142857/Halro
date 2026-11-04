@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError } from "./api";
+import { api, ApiError, clearSensitiveClientState } from "./api";
 import { App } from "./App";
 
 describe("App first-run routing", () => {
@@ -10,6 +10,8 @@ describe("App first-run routing", () => {
   });
   afterEach(() => {
     cleanup();
+    clearSensitiveClientState();
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
     document.documentElement.removeAttribute("data-appearance");
     window.history.replaceState({}, "", "/");
@@ -38,6 +40,46 @@ describe("App first-run routing", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "进入控制台" })).toBeVisible());
   });
 
+  it("replaces the entire console once, clears private caches and returns to the exact URL after signing in", async () => {
+    window.history.replaceState({}, "", "/admin/not-a-page?tab=detail#selected");
+    const oldSession = { username: "old-admin", role: "administrator" as const, locale: "system" as const, appearance: "light" as const, csrf_token: "old-csrf", absolute_expires_at: "x", idle_expires_at: "x" };
+    vi.spyOn(api, "setupStatus").mockResolvedValue({ instance_initialized: true, setup_required: false, token_required: false });
+    vi.spyOn(api, "session").mockResolvedValue(oldSession);
+    vi.spyOn(api, "systemStatus").mockResolvedValue({ time_context: { accounting_timezone: "UTC" } } as never);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "admin authentication required" }), { status: 401 })));
+    const { client } = renderApp();
+    await screen.findByRole("link", { name: "设置与状态" });
+    client.setQueryData(["private-account-data"], { secret: "synthetic-old-account" });
+    await act(async () => {
+      await Promise.allSettled([
+        client.fetchQuery({ queryKey: ["expired-alerts"], queryFn: api.alerts }),
+        client.getMutationCache().build(client, { mutationFn: () => api.audit() }).execute(undefined),
+      ]);
+    });
+    expect(await screen.findByRole("heading", { name: "请重新登录" })).toBeVisible();
+    expect(screen.getAllByRole("main")).toHaveLength(1);
+    expect(screen.queryByRole("link", { name: "设置与状态" })).not.toBeInTheDocument();
+    expect(screen.queryByText("无法完成请求")).not.toBeInTheDocument();
+    expect(client.getQueryData(["private-account-data"])).toBeUndefined();
+    expect(document.documentElement).toHaveAttribute("data-appearance", "dark");
+    vi.spyOn(api, "login").mockResolvedValue({ ...oldSession, username: "new-admin", csrf_token: "new-csrf", appearance: "dark" });
+    fireEvent.change(screen.getByRole("textbox", { name: /用户名/ }), { target: { value: "new-admin" } });
+    fireEvent.change(screen.getByLabelText(/密码/), { target: { value: "password" } });
+    fireEvent.click(screen.getByRole("button", { name: "重新登录" }));
+    await screen.findByRole("link", { name: "设置与状态" });
+    expect(client.getQueryData(["session"])).toMatchObject({ username: "new-admin" });
+    expect(window.location.pathname + window.location.search + window.location.hash).toBe("/admin/not-a-page?tab=detail#selected");
+    expect(client.getQueryData(["private-account-data"])).toBeUndefined();
+  });
+
+  it("offers retry instead of asking for credentials when the session service is unavailable", async () => {
+    vi.spyOn(api, "setupStatus").mockResolvedValue({ instance_initialized: true, setup_required: false, token_required: false });
+    vi.spyOn(api, "session").mockRejectedValue(new ApiError(503, "unavailable"));
+    renderApp();
+    expect(await screen.findByRole("button", { name: "重试" })).toBeVisible();
+    expect(screen.queryByLabelText(/管理员密码/)).not.toBeInTheDocument();
+  });
+
   it("applies an authenticated Light preference and resets unauthenticated screens to Dark", async () => {
     vi.spyOn(api, "setupStatus").mockResolvedValue({ instance_initialized: true, setup_required: false, token_required: false });
     vi.spyOn(api, "session").mockResolvedValue({
@@ -48,6 +90,8 @@ describe("App first-run routing", () => {
     await waitFor(() => expect(document.documentElement).toHaveAttribute("data-appearance", "light"));
 
     cleanup();
+    clearSensitiveClientState();
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
     vi.spyOn(api, "uiBootstrap").mockResolvedValue({ default_locale: "zh-CN", supported_locales: ["zh-CN", "en-US"] });
     vi.spyOn(api, "setupStatus").mockResolvedValue({ instance_initialized: true, setup_required: false, token_required: false });
@@ -152,7 +196,7 @@ describe("App first-run routing", () => {
 
 function renderApp() {
   const client = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: { queries: { retry: false, retryDelay: 0 }, mutations: { retry: false } },
   });
   const view = render(
     <QueryClientProvider client={client}>

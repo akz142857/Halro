@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { subscribeSessionExpiry } from "./api";
 import { useTranslation } from "react-i18next";
 
 export type NotificationTone = "success" | "error" | "warning" | "info";
@@ -67,6 +68,7 @@ const defaultTimeouts: Record<NotificationTone, number> = {
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const sequence = useRef(0);
+  useEffect(() => subscribeSessionExpiry(() => setNotifications([])), []);
   const dismiss = useCallback((id: string) => {
     setNotifications((current) => current.filter((notification) => notification.id !== id));
   }, []);
