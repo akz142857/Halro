@@ -17,6 +17,7 @@ import {
   StatusDot,
   useDirty,
   useStepUpPrompt,
+  useReauthReadiness,
   useTestFailureReason,
   type ReauthValues,
 } from "../components";
@@ -558,6 +559,7 @@ function ProviderEgressProxyForm({ current, onClose }: { current?: ProviderEgres
   const queryClient = useQueryClient();
   const { notify } = useNotify();
   const stepUp = useStepUpPrompt();
+  const { ready: reauthReady } = useReauthReadiness(stepUp.values, stepUp.asked);
   const idempotencyKey = useRef(`provider-egress-${crypto.randomUUID()}`);
   const [name, setName] = useState(current?.name ?? "");
   const [endpoint, setEndpoint] = useState(current?.endpoint ?? "https://");
@@ -620,6 +622,7 @@ function ProviderEgressProxyForm({ current, onClose }: { current?: ProviderEgres
     <Modal title={t(current ? "providers.editProxy" : "providers.createProxy")} dirty={dirty} closeDisabled={mutation.isPending} onClose={onClose}>
       <form ref={formElement} className="provider-credential-form provider-egress-proxy-form" onSubmit={(event) => {
         event.preventDefault();
+        if (mutation.isPending || !reauthReady) return;
         const nextErrors: Record<string, string> = {};
         if (!name.trim()) nextErrors.name = t("providers.validationProxyNameRequired");
         if (!validProxyEndpoint(endpoint)) nextErrors.endpoint = t("providers.validationProxyEndpoint");
@@ -628,7 +631,7 @@ function ProviderEgressProxyForm({ current, onClose }: { current?: ProviderEgres
         if (endpoint.trim().startsWith("http://") && authWillExist && !allowCleartextAuth) nextErrors.authentication = t("providers.validationProxyCleartextAuth");
         setErrors(nextErrors);
         if (Object.keys(nextErrors).length) setRefusedSubmits((value) => value + 1);
-        if (!Object.keys(nextErrors).length && (!stepUp.asked || stepUp.values.currentPassword)) mutation.mutate();
+        if (!Object.keys(nextErrors).length) mutation.mutate();
       }} autoComplete="off">
         <div className="provider-credential-form-body provider-egress-proxy-form-body">
           <section className="proxy-form-section" aria-label={t("providers.proxyConnectionTitle")}>
@@ -672,7 +675,7 @@ function ProviderEgressProxyForm({ current, onClose }: { current?: ProviderEgres
         </div>
         <div className="form-actions sticky-form-actions">
           <button type="button" className="button ghost" disabled={mutation.isPending} onClick={onClose}>{t("common.cancel")}</button>
-          <button className="button primary" disabled={mutation.isPending || (stepUp.asked && !stepUp.values.currentPassword)}>{t(current ? "providers.saveProxy" : "providers.createProxyAndLoad")}</button>
+          <button className="button primary" disabled={mutation.isPending || !reauthReady}>{t(current ? "providers.saveProxy" : "providers.createProxyAndLoad")}</button>
         </div>
       </form>
     </Modal>
@@ -980,6 +983,7 @@ function CredentialForm({
   // re-authentication window the server is already satisfied, so the fields
   // appear only if this rotation comes back asking for them.
   const stepUp = useStepUpPrompt();
+  const { ready: reauthReady } = useReauthReadiness(stepUp.values, stepUp.asked);
   const queryClient = useQueryClient();
   const [policyRefreshPending, setPolicyRefreshPending] = useState(false);
   const [policyRefreshFailed, setPolicyRefreshFailed] = useState(false);
@@ -1070,7 +1074,7 @@ function CredentialForm({
   }, [refusedSubmits]);
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (submissionPending.current || mutation.isPending) return;
+    if (submissionPending.current || mutation.isPending || !reauthReady) return;
     const nextErrors: Record<string, string> = {};
     if (!name.trim()) nextErrors.name = t("providers.validationCredentialNameRequired");
     if (identity?.baseURLTemplate?.includes("{region}") && !validProviderRegion(regionFromEndpointTemplate(identity.baseURLTemplate, baseURL) ?? "")) {
@@ -1087,7 +1091,7 @@ function CredentialForm({
     }
     if ((!usageWarningRequired || usageWarningAcknowledged)
       && !policyRefreshPending && !policyRefreshFailed
-      && (!stepUp.asked || stepUp.values.currentPassword)) {
+      && reauthReady) {
       submissionPending.current = true;
       mutation.mutate();
     }
@@ -1238,7 +1242,7 @@ function CredentialForm({
         </div>
         <div className="form-actions sticky-form-actions">
           <button type="button" className="button ghost" disabled={mutation.isPending} onClick={onClose}>{t("common.cancel")}</button>
-          <button className="button primary" disabled={mutation.isPending || policyRefreshPending || policyRefreshFailed || fixedRegionMismatch || (stepUp.asked && !stepUp.values.currentPassword)}>
+          <button className="button primary" disabled={mutation.isPending || policyRefreshPending || policyRefreshFailed || fixedRegionMismatch || !reauthReady}>
             {current ? t("providers.rotateSecurely") : t("providers.saveEncrypted")}
           </button>
         </div>
@@ -1330,6 +1334,7 @@ function ProviderForm({
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
   const stepUp = useStepUpPrompt();
+  const { ready: reauthReady } = useReauthReadiness(stepUp.values, stepUp.asked);
   // A credential is encrypted against the endpoint it was saved for, so editing
   // the base URL afterwards silently invalidates the pairing. The server refuses
   // the save; without this the operator only learns that after a round-trip, and
@@ -1483,7 +1488,7 @@ function ProviderForm({
         <form className="provider-form" ref={formElement}
           onSubmit={(event) => {
             event.preventDefault();
-            if (submissionPending.current || mutation.isPending) return;
+            if (submissionPending.current || mutation.isPending || !reauthReady) return;
             const nextErrors = validateProvider({
               name, credentialID, bedrockProjectID,
               mantle: selectedSurface === "bedrock-mantle",
@@ -1680,7 +1685,7 @@ function ProviderForm({
             <button type="button" className="button ghost" disabled={mutation.isPending} onClick={onClose}>{t("common.cancel")}</button>
             {/* Every refusal reason is reported by the submit path rather than
                 by a disabled button, which states nothing about why. */}
-            <button className="button primary" disabled={mutation.isPending || policyRefreshPending || policyRefreshFailed || fixedRegionMismatch || (stepUp.asked && !stepUp.values.currentPassword)}>{current ? t("providers.save") : t("providers.createAndLoad")}</button>
+            <button className="button primary" disabled={mutation.isPending || policyRefreshPending || policyRefreshFailed || fixedRegionMismatch || !reauthReady}>{current ? t("providers.save") : t("providers.createAndLoad")}</button>
           </div>
         </form>
       )}

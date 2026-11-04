@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNotify } from "../notifications";
 import { api } from "../api";
-import { ErrorState, Field, Loading, Modal, ReauthFields } from "../components";
+import { ErrorState, Field, Loading, Modal, ReauthFields, useReauthReadiness } from "../components";
 import { MIN_PASSWORD_CHARACTERS, passwordCharacterCount } from "../password";
 import { useIsReadOnly, useSession } from "../session";
 import type { AdminRole } from "../types";
@@ -81,6 +81,7 @@ function CreateAdminUserModal({ onClose, onCreated }: { onClose: () => void; onC
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<AdminRole>("read_only");
   const [reauth, setReauth] = useState(emptyReauth);
+  const { ready: reauthReady } = useReauthReadiness(reauth);
   const { notify } = useNotify();
   const create = useMutation({
     mutationFn: () => api.createAdminUser(username.trim(), password, role, reauth.currentPassword, reauth.totpCode),
@@ -91,7 +92,7 @@ function CreateAdminUserModal({ onClose, onCreated }: { onClose: () => void; onC
   });
   const tooShort = passwordCharacterCount(password) < MIN_PASSWORD_CHARACTERS;
   return <Modal title={t("adminUsers.create")} onClose={onClose} dirty={Boolean(username || password || reauth.currentPassword)}>
-    <form className="settings-form credential-form" onSubmit={(event) => { event.preventDefault(); create.mutate(); }}>
+    <form className="settings-form credential-form" onSubmit={(event) => { event.preventDefault(); if (reauthReady && !create.isPending) create.mutate(); }}>
       <Field label={t("adminUsers.username")}>
         <input autoComplete="off" autoFocus required value={username} onChange={(event) => setUsername(event.target.value)} />
       </Field>
@@ -109,7 +110,7 @@ function CreateAdminUserModal({ onClose, onCreated }: { onClose: () => void; onC
       <ReauthFields values={reauth} onChange={setReauth} description={t("adminUsers.stepUpCreate")} />
       {create.isError && <ErrorState error={create.error} />}
       <div className="form-actions">
-        <button className="button primary" disabled={create.isPending || tooShort || !username.trim() || !reauth.currentPassword}>
+        <button className="button primary" disabled={create.isPending || tooShort || !username.trim() || !reauthReady}>
           {create.isPending ? t("common.working") : t("adminUsers.createSubmit")}
         </button>
         <button type="button" className="button ghost" disabled={create.isPending} onClick={onClose}>{t("common.cancel")}</button>
@@ -121,6 +122,7 @@ function CreateAdminUserModal({ onClose, onCreated }: { onClose: () => void; onC
 function DeleteAdminUserModal({ username, onClose, onDeleted }: { username: string; onClose: () => void; onDeleted: () => void }) {
   const { t } = useTranslation();
   const [reauth, setReauth] = useState(emptyReauth);
+  const { ready: reauthReady } = useReauthReadiness(reauth);
   const { notify } = useNotify();
   const remove = useMutation({
     mutationFn: () => api.deleteAdminUser(username, reauth.currentPassword, reauth.totpCode),
@@ -130,12 +132,12 @@ function DeleteAdminUserModal({ username, onClose, onDeleted }: { username: stri
     },
   });
   return <Modal dangerous title={t("adminUsers.deleteTitle", { username })} onClose={onClose} dirty={Boolean(reauth.currentPassword)}>
-    <form className="settings-form credential-form danger-panel" onSubmit={(event) => { event.preventDefault(); remove.mutate(); }}>
+    <form className="settings-form credential-form danger-panel" onSubmit={(event) => { event.preventDefault(); if (reauthReady && !remove.isPending) remove.mutate(); }}>
       <p>{t("adminUsers.deleteWarning", { username })}</p>
       <ReauthFields values={reauth} onChange={setReauth} description={t("adminUsers.stepUpDelete")} />
       {remove.isError && <ErrorState error={remove.error} />}
       <div className="form-actions">
-        <button className="button danger" disabled={remove.isPending || !reauth.currentPassword}>
+        <button className="button danger" disabled={remove.isPending || !reauthReady}>
           {remove.isPending ? t("common.working") : t("common.delete")}
         </button>
         <button type="button" className="button ghost" disabled={remove.isPending} onClick={onClose}>{t("common.cancel")}</button>

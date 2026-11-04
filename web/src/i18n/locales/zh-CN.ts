@@ -843,7 +843,8 @@ mfaTitle: "身份验证器二次验证",  deviceName: "身份验证器名称", a
     max_context_tokens: "最大上下文词元", max_output_tokens: "最大输出词元",
   },
   usage: {
-    noCallsTitle: "还没有调用记录",
+    noCallsTitle: "控制台时间窗口内没有调用记录",
+    noCallsDescription: "如需查看更早的记录，请选择自定义时间范围。",
 
  title: "用量与调用",
     model: "模型", status: "状态", all: "全部", success: "成功", error: "错误", records_one: "{{count}} 条记录", records_other: "{{count}} 条记录", start: "起始时间", end: "结束时间", emptyTitle: "没有匹配的调用", emptyDescription: "扩大时间范围或清除筛选后重试。",

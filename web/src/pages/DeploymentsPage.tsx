@@ -16,6 +16,7 @@ import {
   StatusDot,
   TimeZoneField,
   useDirty,
+  useReauthReadiness,
   useTestFailureReason,
   type ReauthValues,
 } from "../components";
@@ -713,12 +714,13 @@ function RestorePricingConfirm({ deployment, onClose }: { deployment: Deployment
 	const queryClient = useQueryClient();
 	const [password, setPassword] = useState("");
 	const [totp, setTotp] = useState("");
+	const { ready: reauthReady } = useReauthReadiness({ currentPassword: password, totpCode: totp });
 	const mutation = useMutation({ mutationFn: () => api.confirmRestoredDeploymentPricing(deployment.id, { current_password: password, totp_code: totp }), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["deployments"] }); queryClient.invalidateQueries({ queryKey: ["deployment-prices", deployment.id] }); onClose(); } });
-	return <Modal title={t("deployments.confirmRestoredPricing")} onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}>
+	return <Modal title={t("deployments.confirmRestoredPricing")} onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); if (reauthReady && !mutation.isPending) mutation.mutate(); }}>
 		<p>{t("deployments.restorePricingWarning")}</p>
 		<Field label={t("usage.currentPassword")}><input autoComplete="off" type="password" required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
 		<AuthenticatorCodeField value={totp} onChange={setTotp} />
-		{mutation.isError && <ErrorState error={mutation.error} />}<button className="button primary" disabled={mutation.isPending}>{t("deployments.confirmRestoredPricing")}</button>
+		{mutation.isError && <ErrorState error={mutation.error} />}<button className="button primary" disabled={mutation.isPending || !reauthReady}>{t("deployments.confirmRestoredPricing")}</button>
 	</form></Modal>;
 }
 
@@ -808,6 +810,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
   const [sourceNote, setSourceNote] = useState("");
   const [password, setPassword] = useState("");
   const [totp, setTotp] = useState("");
+  const { ready: reauthReady } = useReauthReadiness({ currentPassword: password, totpCode: totp }, step === "confirm");
   const idempotencyKey = useRef(crypto.randomUUID());
   const confirmSummary = useRef<HTMLElement>(null);
   const submitError = useRef<HTMLDivElement>(null);
@@ -870,6 +873,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
   }, [mutation.isError, mutation.error]);
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    if (mutation.isPending || !reauthReady) return;
     if (step === "details") {
       if (validDetails) {
         setConfirmedEffective(effectiveMode === "now" ? "" : new Date(scheduledTimestamp).toISOString());
@@ -974,7 +978,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
         <AuthenticatorCodeField value={totp} onChange={setTotp} />
         {mutation.isError && <div ref={submitError} tabIndex={-1} className="price-submit-error"><ErrorState error={mutation.error} /></div>}
         {ambiguousResult && <p className="field-hint error">{t("deployments.ambiguousPriceRetry")}</p>}
-        <div className="form-actions">{!ambiguousResult && <button type="button" className="button ghost" onClick={() => { idempotencyKey.current = crypto.randomUUID(); setStep("details"); }}>{t("deployments.backToPrice")}</button>}<button className="button primary" disabled={mutation.isPending}>{ambiguousResult ? t("deployments.retryExactPrice") : t("deployments.confirmPrice")}</button></div>
+        <div className="form-actions">{!ambiguousResult && <button type="button" className="button ghost" onClick={() => { idempotencyKey.current = crypto.randomUUID(); setStep("details"); }}>{t("deployments.backToPrice")}</button>}<button className="button primary" disabled={mutation.isPending || !reauthReady}>{ambiguousResult ? t("deployments.retryExactPrice") : t("deployments.confirmPrice")}</button></div>
       </>}
     </form>
   </Modal>;

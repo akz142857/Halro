@@ -836,7 +836,8 @@ mfaTitle: "Authenticator two-factor authentication",  deviceName: "Authenticator
     max_context_tokens: "Maximum context tokens", max_output_tokens: "Maximum output tokens",
   },
   usage: {
-    noCallsTitle: "No call records yet",
+    noCallsTitle: "No calls in the console window",
+    noCallsDescription: "Choose a custom time range to look for earlier calls.",
 
  title: "Usage & Requests",
     model: "Model", status: "Status", all: "All", success: "Success", error: "Error", records_one: "{{count}} record", records_other: "{{count}} records", start: "Start time", end: "End time", emptyTitle: "No matching calls", emptyDescription: "Widen the time range or clear filters and retry.",

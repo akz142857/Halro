@@ -6,6 +6,49 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Upgrading
+
+- No configuration or durable-schema migration is required from v0.11.0.
+  Existing projects, Gateway Keys and model routes keep their settings. The
+  sign-in page retains its existing interface.
+- Project AI integration exports reference `HALRO_API_KEY` in the application's
+  environment. They do not include or create a real key, execute model calls,
+  or grant additional model, API or discovery permissions.
+- High availability remains experimental and is not supported in production.
+
+### Added
+
+- Project-scoped **AI integration** with copyable instructions and downloadable
+  `SKILL.md`. Choose an authorized public model alias, API and reachable gateway
+  address; exports and the developer workbench share the request/code generator.
+  Read-only administrators can export without executing requests.
+
+### Changed
+
+- Streamlined console navigation, page headers, forms and dialogs. Advanced
+  settings use progressive disclosure with live summaries, while applicable
+  risk, billing and access requirements remain visible. Chinese and English
+  copy and narrow-screen layouts follow the same information hierarchy.
+- Reorganized the developer workbench around request entry and response review,
+  with optional connection settings, image input and code previews. Diagnostics
+  and cluster status use compact, expandable results; routine refresh metadata
+  is presented as secondary information.
+
+### Fixed
+
+- Sensitive-operation forms only ask for authenticator codes when the account
+  has enrolled an authenticator. Submission waits for factor status to load and
+  remains blocked if that read fails, rather than sending incomplete identity
+  confirmation requests.
+- Shared dialogs preserve autofocus, return focus to their trigger, and keep
+  collapsed controls out of the focus trap. Invalid advanced fields reveal
+  their containing sections. Error and status feedback has consistent spacing.
+- JavaScript request examples preserve all JSON properties, including
+  `__proto__` in JSON Schema, and Go examples no longer silently truncate large
+  successful responses.
+- Usage empty states describe the selected time range instead of implying that
+  no historical calls exist outside the console window.
+
 ## [0.11.0] - 2026-11-04
 
 ### Upgrading

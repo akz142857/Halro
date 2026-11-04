@@ -18,6 +18,7 @@ import {
   ReauthFields,
   ResourceToolbar,
   StatusDot,
+  useReauthReadiness,
   type ResourceStatusFilter,
   type ReauthValues,
 } from "../components";
@@ -731,6 +732,7 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
   // shown once and the key outlives this session, so a stolen session that
   // could not delete anything could still leave with durable billable access.
   const [reauth, setReauth] = useState<ReauthValues>({ currentPassword: "", totpCode: "" });
+  const { ready: reauthReady } = useReauthReadiness(reauth);
   const setScope = (scope: GatewayScope, checked: boolean) => {
     setScopes((current) => {
       if (scope === "discovery" && checked) {
@@ -813,7 +815,7 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
           event.preventDefault();
           // Without this guard, holding Enter mints extra keys whose plaintext is never
           // shown — live credentials nobody knows exist.
-          if (mutation.isPending) return;
+          if (mutation.isPending || !reauthReady) return;
           if (name.trim()) mutation.mutate();
         }}
       >
@@ -839,7 +841,7 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
         {mutation.isError && <ErrorState error={mutation.error} />}
         <div className="form-actions">
           <button type="button" className="button ghost" disabled={mutation.isPending} onClick={onClose}>{t("common.cancel")}</button>
-          <button className="button primary" disabled={!name.trim() || scopes.length === 0 || !reauth.currentPassword || mutation.isPending}>{mutation.isPending ? t("common.working") : t("projects.generateKey")}</button>
+          <button className="button primary" disabled={!name.trim() || scopes.length === 0 || !reauthReady || mutation.isPending}>{mutation.isPending ? t("common.working") : t("projects.generateKey")}</button>
         </div>
       </form>
     </Modal>
