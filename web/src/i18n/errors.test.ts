@@ -18,6 +18,15 @@ describe("server refusals", () => {
     await applyLocale("zh-CN");
   });
 
+  it("does not describe a wrong password as an expired session", async () => {
+    for (const locale of ["zh-CN", "en-US"] as const) {
+      await applyLocale(locale);
+      expect(localizedError(i18n.t, new ApiError(401, "invalid credentials"))).toBe(i18n.t("errors.invalidCredentials"));
+      expect(localizedError(i18n.t, new ApiError(401, "invalid current password"))).toBe(i18n.t("errors.invalidCurrentPassword"));
+      expect(localizedError(i18n.t, new ApiError(401, "recent re-authentication required", "recent_reauth_required"))).toBe(i18n.t("errors.recentReauthRequired"));
+    }
+  });
+
   it("states a coded refusal in the reader's language, in both languages", async () => {
     const error = refusal("route_disabled", "route is disabled");
 

@@ -78,6 +78,8 @@ function capabilityRefusal(t: TFunction, error: ApiError) {
 
 export function localizedError(t: TFunction, error: unknown) {
   if (!(error instanceof ApiError)) return t("errors.network");
+  if (error.status === 401 && (error.message === "invalid credentials" || error.code === "invalid_credentials")) return t("errors.invalidCredentials");
+  if (error.status === 401 && error.message === "invalid current password") return t("errors.invalidCurrentPassword");
   const mismatch = credentialMismatchValues(error);
   if (mismatch) {
     return t(mismatch.message, { credential: mismatch.credential, provider: mismatch.provider, name: mismatch.name });

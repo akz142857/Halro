@@ -7,11 +7,13 @@ import { api, ApiError } from "./api";
 import { Field } from "./components";
 import { LanguageSelect } from "./LanguageSelect";
 import { localizedError } from "./i18n/errors";
+import type { Session } from "./types";
 
 type LoginValue = { username: string; password: string };
 
-export function Login({ onSuccess }: { onSuccess: () => void }) {
+export function Login({ onSuccess, expired = false }: { onSuccess: (session: Session) => void; expired?: boolean }) {
   const { t } = useTranslation();
+  const Heading = expired ? "h1" : "h2";
   const schema = useMemo(() => z.object({
     username: z.string().min(1, t("auth.usernameRequired")).max(128),
     password: z.string().min(1, t("auth.passwordRequired")).max(1024),
@@ -34,16 +36,16 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
 	  const result = await api.login(value.username, value.password);
 		  if ("mfa_required" in result) { reset(); setChallenge(result.challenge_token); return; }
       reset();
-      onSuccess();
+      onSuccess(result);
     } catch (error) {
       setServerError(error instanceof ApiError ? localizedError(t, error) : t("auth.loginUnavailable"));
     }
   });
-	const submitMFA = async (event: FormEvent) => { event.preventDefault(); if(mfaPending) return; setMFAPending(true); setServerError(""); try { if(useRecovery) await api.completeMFARecovery(challenge,code); else await api.completeMFA(challenge,code); setCode("");setChallenge("");onSuccess(); } catch(error) { setServerError(error instanceof ApiError ? localizedError(t,error) : t("auth.loginUnavailable")); } finally { setMFAPending(false); } };
+	const submitMFA = async (event: FormEvent) => { event.preventDefault(); if(mfaPending) return; setMFAPending(true); setServerError(""); try { const result = useRecovery ? await api.completeMFARecovery(challenge,code) : await api.completeMFA(challenge,code); setCode("");setChallenge("");onSuccess(result); } catch(error) { setServerError(error instanceof ApiError ? localizedError(t,error) : t("auth.loginUnavailable")); } finally { setMFAPending(false); } };
 	const cancelChallenge = async () => { if(cancelPending) return; setCancelPending(true);setServerError("");try { await api.cancelMFAChallenge(challenge);setChallenge("");setCode("");setUseRecovery(false); } catch(error) { setServerError(error instanceof ApiError ? localizedError(t,error) : t("auth.loginUnavailable")); } finally { setCancelPending(false); } };
   return (
-    <main className="login-page">
-      <section className="login-story" aria-label={t("auth.productIntro")}>
+    <main className={`login-page${expired ? " auth-focused session-recovery" : ""}`}>
+      {!expired && <section className="login-story" aria-label={t("auth.productIntro")}>
         <div className="brand login-brand">
           <span className="brand-mark">H</span>
           <span><strong>HALRO</strong><small>{t("navigation.productSubtitle")}</small></span>
@@ -58,9 +60,9 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
           <li><span>02</span>{t("auth.trustKeys")}</li>
           <li><span>03</span>{t("auth.trustLedger")}</li>
         </ul>
-      </section>
+      </section>}
       <section className="login-panel">
-        <LanguageSelect compact />
+        {expired ? <div className="session-recovery-header"><div className="brand login-brand"><span className="brand-mark" aria-hidden="true">H</span><strong>HALRO</strong></div><LanguageSelect compact /></div> : <LanguageSelect compact />}
 		{challenge ? <form className="auth-challenge-form" onSubmit={submitMFA} autoComplete="off">
 		  <p className="eyebrow">{t("auth.mfaEyebrow")}</p><h2>{t("auth.mfaHeading")}</h2><p>{t("auth.mfaPrompt")}</p>
 		  {serverError && <div className="notice error" role="alert">{serverError}</div>}
@@ -70,10 +72,10 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
 		    <button type="button" className="button wide" onClick={()=>{setUseRecovery(!useRecovery);setCode("")}}>{useRecovery?t("auth.useAuthenticator"):t("auth.useRecovery")}</button>
 			  <button type="button" className="button ghost wide back-action" disabled={cancelPending||mfaPending} onClick={()=>void cancelChallenge()}>{t("auth.backToPassword")}</button>
 		  </div>
-		</form> : <form onSubmit={submit} autoComplete="on">
-          <p className="eyebrow">{t("auth.loginEyebrow")}</p>
-          <h2>{t("auth.loginHeading")}</h2>
-          <p>{t("auth.loginPrompt")}</p>
+		</form> : <form onSubmit={submit} autoComplete="on" aria-labelledby={expired ? "session-recovery-title" : undefined} aria-describedby={expired ? "session-recovery-description" : undefined}>
+          {!expired && <p className="eyebrow">{t("auth.loginEyebrow")}</p>}
+          <Heading id={expired ? "session-recovery-title" : undefined}>{t(expired ? "auth.sessionExpiredHeading" : "auth.loginHeading")}</Heading>
+          <p id={expired ? "session-recovery-description" : undefined}>{t(expired ? "auth.sessionExpiredPrompt" : "auth.loginPrompt")}</p>
           {serverError && <div className="notice error" role="alert">{serverError}</div>}
           <Field label={t("auth.username")} error={errors.username?.message}>
             <input autoFocus autoComplete="username" {...register("username")} />
@@ -82,9 +84,9 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
             <input type="password" autoComplete="current-password" {...register("password")} />
           </Field>
           <button className="button primary wide" disabled={isSubmitting}>
-            {isSubmitting ? t("auth.loggingIn") : t("auth.login")}
+            {isSubmitting ? t("auth.loggingIn") : t(expired ? "auth.signInAgain" : "auth.login")}
           </button>
-          <small className="login-note">{t("auth.loginSecurity")}</small>
+          <small className="login-note">{t(expired ? "auth.sessionExpiredNote" : "auth.loginSecurity")}</small>
 		</form>}
       </section>
     </main>

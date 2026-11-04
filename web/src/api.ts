@@ -62,6 +62,43 @@ import type {
 
 const API_ROOT = "/admin/api/v1";
 let csrfToken = "";
+let sessionGeneration = 0;
+let sessionSuspended = false;
+const sessionExpiryListeners = new Set<() => void>();
+
+export function subscribeSessionExpiry(listener: () => void) {
+  sessionExpiryListeners.add(listener);
+  return () => { sessionExpiryListeners.delete(listener); };
+}
+
+// Match the Admin session middleware, not every 401: password verification,
+// MFA, step-up and forwarded Gateway responses have their own recovery paths.
+export function isSessionExpiry(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status === 401 && (
+    error.message === "admin authentication required" ||
+    error.code === "session_required" || error.code === "admin_session_required"
+  );
+}
+
+function observeSessionFailure(error: ApiError, generation: number) {
+  if (!isSessionExpiry(error) || generation !== sessionGeneration || sessionSuspended) return;
+  sessionSuspended = true;
+  csrfToken = "";
+  sessionGeneration += 1;
+  sessionExpiryListeners.forEach((listener) => listener());
+}
+
+function acceptSession(session: Session) {
+  sessionGeneration += 1;
+  sessionSuspended = false;
+  csrfToken = session.csrf_token;
+}
+
+function requireAvailableSession(path: string) {
+  if (sessionSuspended && !["/session", "/session/logout", "/session/login", "/session/mfa/totp", "/session/mfa/recovery-code", "/session/mfa/challenge", "/setup/status", "/setup/admin", "/ui/bootstrap"].includes(path)) {
+    throw new ApiError(401, "admin authentication required", "session_required");
+  }
+}
 
 export class ApiError extends Error {
   constructor(
@@ -142,6 +179,8 @@ async function request<T>(
   init: RequestInit = {},
   etag = "",
 ): Promise<ApiResult<T>> {
+  requireAvailableSession(path);
+  const generation = sessionGeneration;
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
   if (init.body) headers.set("Content-Type", "application/json");
@@ -166,13 +205,15 @@ async function request<T>(
   }
   if (!response.ok) {
     const error = payload as { error?: string; code?: string; response?: string } | undefined;
-    throw new ApiError(
+    const failure = new ApiError(
       response.status,
       error?.error || `request failed (${response.status})`,
       error?.code,
       error?.response,
       payload,
     );
+    if (path !== "/session/logout") observeSessionFailure(failure, generation);
+    throw failure;
   }
   return { data: payload as T, etag: response.headers.get("ETag") || "" };
 }
@@ -212,7 +253,7 @@ export const api = {
         setup_token: setupToken,
       }),
     );
-    csrfToken = result.data.csrf_token;
+    acceptSession(result.data);
     return result.data;
   },
   async login(username: string, password: string) {
@@ -220,14 +261,14 @@ export const api = {
       "/session/login",
       json("POST", { username, password }),
     );
-	if ("csrf_token" in result.data) csrfToken = result.data.csrf_token;
+	if ("csrf_token" in result.data) acceptSession(result.data);
     return result.data;
   },
   async completeMFA(challengeToken: string, code: string) {
-    const result = await request<Session>("/session/mfa/totp", json("POST", { challenge_token: challengeToken, code })); csrfToken = result.data.csrf_token; return result.data;
+    const result = await request<Session>("/session/mfa/totp", json("POST", { challenge_token: challengeToken, code })); acceptSession(result.data); return result.data;
   },
   async completeMFARecovery(challengeToken: string, recoveryCode: string) {
-    const result = await request<Session>("/session/mfa/recovery-code", json("POST", { challenge_token: challengeToken, recovery_code: recoveryCode })); csrfToken = result.data.csrf_token; return result.data;
+    const result = await request<Session>("/session/mfa/recovery-code", json("POST", { challenge_token: challengeToken, recovery_code: recoveryCode })); acceptSession(result.data); return result.data;
   },
   cancelMFAChallenge: (challengeToken:string) => request<{status:string}>("/session/mfa/challenge",json("DELETE",{challenge_token:challengeToken})).then((v)=>v.data),
   mfaStatus: () => request<MFAStatus>("/security/mfa").then((v) => v.data),
@@ -239,8 +280,9 @@ export const api = {
   regenerateMFARecoveryCodes: (currentPassword:string,code:string) => request<{recovery_codes:string[]}>("/security/mfa/recovery-codes/regenerate",json("POST",{current_password:currentPassword,code})).then((v)=>v.data),
   disableMFA: (currentPassword:string,code:string) => request<{status:string}>("/security/mfa",json("DELETE",{current_password:currentPassword,code})).then((v)=>v.data),
   async session() {
+    const generation = sessionGeneration;
     const result = await request<Session>("/session");
-    csrfToken = result.data.csrf_token;
+    if (generation === sessionGeneration) csrfToken = result.data.csrf_token;
     return result.data;
   },
   listAdminUsers: () => request<{ users: AdminUser[] }>("/admin-users").then((v) => v.data.users),
@@ -257,11 +299,12 @@ export const api = {
     csrfToken = "";
   },
   async changePassword(currentPassword: string, newPassword: string) {
+    const generation = sessionGeneration;
     const result = await request<Session>(
       "/session/password",
       json("POST", { current_password: currentPassword, new_password: newPassword }),
     );
-    csrfToken = result.data.csrf_token;
+    if (generation === sessionGeneration) csrfToken = result.data.csrf_token;
     return result.data;
   },
   dashboard: () => request<Dashboard>("/dashboard").then((value) => value.data),
@@ -467,6 +510,8 @@ export const api = {
   developerConfig: () =>
     request<{ gateway_base_url: string; enabled?: boolean; max_request_bytes?: number }>("/developer/config").then((value) => value.data),
   developerExecute: (endpoint: string, gatewayKey: string, value: unknown, streaming: boolean, signal: AbortSignal) => {
+    requireAvailableSession("/developer/execute");
+    const generation = sessionGeneration;
     const headers = new Headers({
       "Accept": streaming ? "text/event-stream" : "application/json",
       "Authorization": `Bearer ${gatewayKey}`,
@@ -480,6 +525,12 @@ export const api = {
       credentials: "same-origin",
       cache: "no-store",
       signal,
+    }).then(async (response) => {
+      if (response.status === 401) {
+        const payload = await response.clone().json().catch(() => undefined);
+        if (typeof payload?.error === "string") observeSessionFailure(new ApiError(401, payload.error, payload.code), generation);
+      }
+      return response;
     });
   },
   createDeployment: (value: unknown, idempotencyKey: string) =>
@@ -643,4 +694,6 @@ export const api = {
 
 export function clearSensitiveClientState() {
   csrfToken = "";
+  sessionGeneration += 1;
+  sessionSuspended = false;
 }
