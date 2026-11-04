@@ -1,0 +1,172 @@
+{
+  "syntheticOnly": true,
+  "results": [
+    {
+      "name": "zh-CN-1440-usage-tab-failures",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "zh-CN-1440-policies",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "zh-CN-1440-run-governance-project_id-project_acceptance",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "zh-CN-1440-operations",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "zh-CN-1440-settings-security",
+      "passed": true,
+      "mfa": true
+    },
+    {
+      "name": "zh-CN-390-usage-tab-failures",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "zh-CN-390-policies",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "zh-CN-390-run-governance-project_id-project_acceptance",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "zh-CN-390-operations",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "zh-CN-390-settings-security",
+      "passed": true,
+      "mfa": true
+    },
+    {
+      "name": "zh-CN-320-usage-tab-failures",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "zh-CN-320-policies",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "zh-CN-320-run-governance-project_id-project_acceptance",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "zh-CN-320-operations",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "zh-CN-320-settings-security",
+      "passed": true,
+      "mfa": true
+    },
+    {
+      "name": "en-US-1440-usage-tab-failures",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "en-US-1440-policies",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "en-US-1440-run-governance-project_id-project_acceptance",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "en-US-1440-operations",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "en-US-1440-settings-security",
+      "passed": true,
+      "mfa": true
+    },
+    {
+      "name": "en-US-390-usage-tab-failures",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "en-US-390-policies",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "en-US-390-run-governance-project_id-project_acceptance",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "en-US-390-operations",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "en-US-390-settings-security",
+      "passed": true,
+      "mfa": true
+    },
+    {
+      "name": "en-US-320-usage-tab-failures",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "en-US-320-policies",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "en-US-320-run-governance-project_id-project_acceptance",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "en-US-320-operations",
+      "passed": true,
+      "mfa": false
+    },
+    {
+      "name": "en-US-320-settings-security",
+      "passed": true,
+      "mfa": true
+    }
+  ],
+  "version": "v0.12.1-candidate",
+  "source_parent": "ba409b8ce6fd3456918f9dca34ac4ec11420ace3",
+  "embedded_index_sha256": "5feea6d9c3b721bc87031f98691e35d50c44be2719ec6105c07bf6f347b43e2f",
+  "real_provider_calls": false,
+  "live_data_used": false,
+  "platforms": {
+    "locales": [
+      "zh-CN",
+      "en-US"
+    ],
+    "widths": [
+      1440,
+      390,
+      320
+    ],
+    "modules": 5
+  }
+}

@@ -6,6 +6,31 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-04
+
+### Upgrading
+
+- No configuration or durable-schema migration is required from v0.12.0.
+  Expired console sessions now require signing in again before continuing.
+  Unsaved form values must be entered again; failed writes are never replayed
+  automatically. The ordinary first-visit sign-in interface is unchanged.
+- High availability remains experimental and is not supported in production.
+
+### Fixed
+
+- Handle confirmed Admin session expiry once across the console instead of
+  showing repeated request errors, empty states or stale counters on each page.
+  Clear protected query and mutation caches, notifications and CSRF state;
+  pause protected requests until password or MFA sign-in succeeds, then return
+  to the original URL.
+- Keep incorrect passwords, MFA and step-up failures, permission errors,
+  network failures and forwarded Gateway authentication failures in their own
+  contexts. Delayed failures and session snapshots from an older sign-in no
+  longer expire a newer session or replace its CSRF token.
+- Provide a compact, bilingual session-recovery screen with focused sign-in
+  controls and narrow-screen layouts, while retaining the existing first-visit
+  sign-in design.
+
 ## [0.12.0] - 2026-11-04
 
 ### Upgrading
@@ -2864,6 +2889,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.12.1]: https://github.com/akz142857/Halro/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/akz142857/Halro/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/akz142857/Halro/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/akz142857/Halro/compare/v0.10.0...v0.10.1
