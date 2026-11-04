@@ -6,6 +6,8 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-04
+
 ### Upgrading
 
 - No configuration or durable-schema migration is required from v0.11.0.
@@ -46,8 +48,8 @@ semantic versioning.
 - JavaScript request examples preserve all JSON properties, including
   `__proto__` in JSON Schema, and Go examples no longer silently truncate large
   successful responses.
-- Usage empty states describe the selected time range instead of implying that
-  no historical calls exist outside the console window.
+- Usage empty states and the default time-range label identify the console
+  window instead of implying that all historical calls have been queried.
 
 ## [0.11.0] - 2026-11-04
 
@@ -2862,6 +2864,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.12.0]: https://github.com/akz142857/Halro/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/akz142857/Halro/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/akz142857/Halro/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/akz142857/Halro/compare/v0.9.2...v0.10.0

@@ -849,7 +849,7 @@ mfaTitle: "身份验证器二次验证",  deviceName: "身份验证器名称", a
  title: "用量与调用",
     model: "模型", status: "状态", all: "全部", success: "成功", error: "错误", records_one: "{{count}} 条记录", records_other: "{{count}} 条记录", start: "起始时间", end: "结束时间", emptyTitle: "没有匹配的调用", emptyDescription: "扩大时间范围或清除筛选后重试。",
     filtersTitle: "筛选", activeFilters: "已启用 {{count}} 项", noActiveFilters: "暂无筛选条件", clearFilters: "清除", appliedFilters: "已应用筛选", done: "完成",
-    timeRange: "时间范围", timeRanges: { all: "全部时间", "1h": "最近 1 小时", "24h": "最近 24 小时", "7d": "最近 7 天", custom: "自定义范围" },
+    timeRange: "时间范围", timeRanges: { all: "控制台窗口", "1h": "最近 1 小时", "24h": "最近 24 小时", "7d": "最近 7 天", custom: "自定义范围" },
     attemptsTitle: "调用记录", attemptsDescription: "每行一次上游尝试；重试与回退单独记录。",
     request: "请求", deployment: "模型部署", route: "调用路径", result: "结果", usageAndCost: "用量与成本", tokens: "词元", cost: "成本", latency: "延迟", time: "完成时间", attempt: "尝试 {{count}}",
     inputOutput: "{{input}} 输入 / {{output}} 输出", conservative: "保守上限", reported: "服务商报告",

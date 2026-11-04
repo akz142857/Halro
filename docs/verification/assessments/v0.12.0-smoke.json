@@ -1,0 +1,47 @@
+{
+  "stages": [
+    {
+      "stage": "previous-release",
+      "http_status": 200
+    },
+    {
+      "stage": "upgrade",
+      "http_status": 200
+    },
+    {
+      "stage": "candidate-restart",
+      "http_status": 200
+    },
+    {
+      "stage": "candidate-restored",
+      "http_status": 200
+    },
+    {
+      "stage": "previous-on-candidate-data",
+      "http_status": 200
+    },
+    {
+      "stage": "previous-backup-restored",
+      "http_status": 200
+    }
+  ],
+  "candidate_sha256": "b08c07440741caad86d3657716863f78127497ad6b50f7d6c86b6a8aecf25e77",
+  "previous_sha256": "5f7589811e20839153628afc29cc42b631c918a32291761accd2200bd49862c7",
+  "provider": "private isolated HTTPS fixture; no paid calls",
+  "checks": [
+    "ledger verify",
+    "usage verify",
+    "audit verify",
+    "doctor",
+    "backup create/verify/restore"
+  ],
+  "version": "v0.12.0-candidate",
+  "source_parent": "bb2ca99b7f90ef8c3bceac17f98e1b2648258566",
+  "source_state": "release preparation working tree; final embedded console assets; not a published release binary",
+  "embedded_index_sha256": "aa909eef596a1c1fa86711d71e0d739d0ac7b9ace51951a0dda870838cfdf872",
+  "previous_version": "v0.11.0",
+  "previous_archive_sha256": "6fc7e45eab8c8349b5e143594789d478b07d21ce4e37382aaf32924c01d8a3ca",
+  "platform": "Linux arm64 in an internal Docker network",
+  "live_data_used": false,
+  "real_provider_calls": false
+}

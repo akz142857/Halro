@@ -14,11 +14,12 @@ them active; restoring those controls requires a reviewed workflow change.
 
 ## 1. What the current workflow enforces
 
-Both a `v*` tag and a manual dispatch enter `prepare`. A manual dispatch may be
-a non-publishing dry run; a publishing dispatch must run from the default
-branch and creates its annotated tag only after the preceding jobs pass.
-`prepare` validates the version syntax and requires a matching CHANGELOG
-section.
+Only a manual `workflow_dispatch` on the default branch enters `prepare`;
+pushing a tag does not start this workflow. Dispatch requires a successful
+ordinary push CI run for the exact main commit. It may be a non-publishing dry
+run; a publishing dispatch creates its annotated tag only after the preceding
+jobs pass. `prepare` validates the version syntax and requires a matching
+CHANGELOG section and a completed assessment record.
 
 The dependency graph then enforces these jobs and steps:
 
