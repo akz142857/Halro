@@ -5,6 +5,7 @@ import { ApiError, api } from "../api";
 import { PoliciesPage } from "./PoliciesPage";
 import { NotificationProvider } from "../notifications";
 import { ProjectsPage } from "./ProjectsPage";
+import type { MFAStatus } from "../types";
 
 const tokenGuardPolicy = {
   id: "tgp_1", name: "Production guard", enabled: true, action: "alert", revision: 1,
@@ -471,6 +472,7 @@ describe("projects page", () => {
     fireEvent.change(nameField, { target: { value: "service-a" } });
     fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     const form = nameField.closest("form")!;
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成密钥" })).toBeEnabled());
     fireEvent.submit(form);
     await waitFor(() => expect(createKey).toHaveBeenCalledTimes(1));
     fireEvent.submit(form);
@@ -478,6 +480,40 @@ describe("projects page", () => {
 
     await waitFor(() => expect(createKey).toHaveBeenCalledTimes(1));
     resolve({ data: { key: "gw_secret", metadata: gatewayKey() }, etag: "" });
+  });
+
+  it.each(["pending", "error"] as const)("does not mint a key while MFA enrollment is %s and resumes only with the enrolled factor", async (state) => {
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [project()], next_cursor: "" } as never);
+    const enabled: MFAStatus = { enabled: true, policy: "optional", required: false, authenticators: [] };
+    let resolveStatus: (value: MFAStatus) => void = () => {};
+    const status = vi.spyOn(api, "mfaStatus");
+    if (state === "pending") status.mockImplementationOnce(() => new Promise<MFAStatus>((resolve) => { resolveStatus = resolve; }));
+    else status.mockRejectedValueOnce(new Error("synthetic MFA lookup failed"));
+    status.mockResolvedValue(enabled);
+    const mint = vi.spyOn(api, "createKey").mockResolvedValue({ data: { key: "gw_secret", metadata: gatewayKey() }, etag: "" } as never);
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
+    const name = screen.getByLabelText(/密钥名称/);
+    fireEvent.change(name, { target: { value: "service-a" } });
+    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
+    const generate = screen.getByRole("button", { name: "生成密钥" });
+    if (state === "error") await screen.findByRole("button", { name: "重试" });
+    expect(generate).toBeDisabled();
+    fireEvent.click(generate);
+    fireEvent.submit(name.closest("form")!);
+    expect(mint).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledOnce();
+    if (state === "pending") resolveStatus(enabled);
+    else fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    const code = await screen.findByLabelText(/^身份验证器验证码/);
+    expect(generate).toBeDisabled();
+    fireEvent.submit(name.closest("form")!);
+    expect(mint).not.toHaveBeenCalled();
+    fireEvent.change(code, { target: { value: "123456" } });
+    expect(generate).toBeEnabled();
+    fireEvent.click(generate);
+    await waitFor(() => expect(mint).toHaveBeenCalledOnce());
+    expect(mint.mock.calls[0][3]).toEqual({ currentPassword: "a passphrase", totpCode: "123456" });
   });
 
   it("cannot configure discovery without inference", async () => {
@@ -508,6 +544,7 @@ describe("projects page", () => {
     // Minting now asks for the operator's password, so the form cannot submit
     // until it is supplied.
     fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成密钥" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "生成密钥" }));
     await screen.findByText("无法完成请求");
     fireEvent.click(screen.getByRole("button", { name: "生成密钥" }));
@@ -685,6 +722,7 @@ describe("projects page", () => {
     fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
     fireEvent.change(screen.getByLabelText(/密钥名称/), { target: { value: "service-a" } });
     fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成密钥" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "生成密钥" }));
 
     expect(await screen.findByText("gw_plaintext")).toBeVisible();

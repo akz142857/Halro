@@ -13,6 +13,7 @@ import {
   ReauthFields,
   StatusDot,
   useDirty,
+  useReauthReadiness,
   useStepUpPrompt,
   type ReauthValues,
 } from "../components";
@@ -327,6 +328,7 @@ function PolicyForm({
   // demand: inside the re-authentication window the server is already
   // satisfied, so the fields appear only if the save comes back asking.
   const stepUp = useStepUpPrompt();
+  const { ready: reauthReady } = useReauthReadiness(stepUp.values, stepUp.asked);
   const { notify } = useNotify();
   const mutation = useMutation({
     mutationFn: () => current
@@ -344,6 +346,7 @@ function PolicyForm({
     <Modal wide title={current ? t("policies.edit") : t("policies.createTitle")} onClose={onClose} closeDisabled={mutation.isPending} dirty={dirty}>
       <form className="policy-form" aria-busy={mutation.isPending} onSubmit={(event) => {
         event.preventDefault();
+        if (mutation.isPending || !reauthReady) return;
         const nextErrors = validatePolicy({
           name, requestTokens, tokensPerMinute, costPerMinute, concurrency, errorRate,
           minimumSamples, uniqueIPs, action, violations, blockTTL, cooldown, ewmaEnabled,
@@ -430,7 +433,7 @@ function PolicyForm({
                 : t("policies.ewmaDefaultSummary")}</small></div>
           </div>
           <button type="button" className="button ghost" disabled={mutation.isPending} data-modal-close>{t("common.cancel")}</button>
-          <button className="button primary" disabled={mutation.isPending || (stepUp.asked && !stepUp.values.currentPassword)}>{mutation.isPending ? t("common.saving") : enabled && current ? t("policies.saveAndApply") : t("policies.save")}</button>
+          <button className="button primary" disabled={mutation.isPending || !reauthReady}>{mutation.isPending ? t("common.saving") : enabled && current ? t("policies.saveAndApply") : t("policies.save")}</button>
         </div>
       </form>
     </Modal>

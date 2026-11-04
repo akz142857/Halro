@@ -995,7 +995,8 @@ describe("DeveloperPage", () => {
     expect(unary).toContain("defer resp.Body.Close()");
     expect(unary).toContain("io.LimitReader(resp.Body, 1<<20)");
     expect(unary).toContain("resp.StatusCode < 200");
-    expect(unary).toContain("fmt.Println(string(responseBody))");
+    expect(unary).toContain("if _, err := io.Copy(os.Stdout, resp.Body); err != nil { log.Fatal(err) }");
+    expect(unary).toContain("fmt.Println()");
 
     closeCode();
     setStreaming(true);

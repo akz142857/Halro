@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { navigate } from "../navigation";
+import i18n from "../i18n";
 import { UsagePage, billedTierLabel } from "./UsagePage";
 
 describe("UsagePage request correlation", () => {
@@ -134,18 +135,45 @@ describe("UsagePage filter hierarchy", () => {
     expect(within(drawer).getByRole("textbox", { name: "实际模型" })).toBeVisible();
   });
 
-  it("distinguishes an empty history from no filter matches and clears the restrictive filters", async () => {
+  it("distinguishes an empty console window from no filter matches and clears the restrictive filters", async () => {
     renderUsage();
-    expect(await screen.findByRole("heading", { name: "还没有调用记录" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "控制台时间窗口内没有调用记录" })).toBeVisible();
     fireEvent.change(screen.getByRole("textbox", { name: "Request ID" }), { target: { value: "req_missing" } });
     expect(await screen.findByRole("heading", { name: "没有匹配的调用" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "清除" }));
-    expect(await screen.findByRole("heading", { name: "还没有调用记录" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "控制台时间窗口内没有调用记录" })).toBeVisible();
     expect(screen.getByRole("textbox", { name: "Request ID" })).toHaveValue("");
     await waitFor(() => {
       const latest = vi.mocked(api.usage).mock.calls.at(-1)?.[0] ?? "";
       expect(new URLSearchParams(latest.slice(1)).get("request_id")).toBeNull();
     });
+  });
+
+  it.each([
+    { locale: "zh-CN", title: "控制台时间窗口内没有调用记录", hint: "如需查看更早的记录，请选择自定义时间范围。", range: "时间范围", start: "起始时间" },
+    { locale: "en-US", title: "No calls in the console window", hint: "Choose a custom time range to look for earlier calls.", range: "Time range", start: "Start time" },
+  ])("scopes an empty default query to the console window ($locale)", async ({ locale, title, hint, range, start }) => {
+    await i18n.changeLanguage(locale);
+    renderUsage();
+    expect(await screen.findByRole("heading", { name: title })).toBeVisible();
+    expect(screen.getByText(hint)).toBeVisible();
+    expect(screen.queryByText(locale === "zh-CN" ? "还没有调用记录" : "No call records yet")).not.toBeInTheDocument();
+    const initial = vi.mocked(api.usage).mock.calls[0][0] ?? "";
+    expect(new URLSearchParams(initial.slice(1)).has("start")).toBe(false);
+    fireEvent.change(screen.getByRole("combobox", { name: range }), { target: { value: "custom" } });
+    fireEvent.change(screen.getByLabelText(start), { target: { value: "2026-01-01T00:00" } });
+    await waitFor(() => expect(new URLSearchParams((vi.mocked(api.usage).mock.calls.at(-1)?.[0] ?? "").slice(1)).has("start")).toBe(true));
+  });
+
+  it("keeps an actual project filter distinct from the default console window", async () => {
+    window.history.replaceState({}, "", "/admin/usage?tab=attempts&project_id=project_a");
+    vi.mocked(api.projects).mockResolvedValue({ items: [{ id: "project_a", name: "Alpha" }] as never, next_cursor: "" });
+    renderUsage();
+    expect(await screen.findByRole("heading", { name: "没有匹配的调用" })).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "项目" })).toHaveValue("project_a");
+    fireEvent.click(screen.getByRole("button", { name: "清除" }));
+    expect(await screen.findByRole("heading", { name: "控制台时间窗口内没有调用记录" })).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "项目" })).toHaveValue("");
   });
 
   it("turns a relative time preset into one absolute query interval", async () => {

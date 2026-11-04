@@ -11,6 +11,7 @@ import {
   Modal,
   ReauthFields,
   StatusDot,
+  useReauthReadiness,
   useStepUpPrompt,
   type ReauthValues,
 } from "../components";
@@ -359,6 +360,7 @@ function RedactionPolicyForm({
   // inside the re-authentication window the server is already satisfied, so the
   // fields appear only if the save comes back asking.
   const stepUp = useStepUpPrompt();
+  const { ready: reauthReady } = useReauthReadiness(stepUp.values, stepUp.asked);
   const { notify } = useNotify();
   const mutation = useMutation({
     mutationFn: () => current
@@ -376,6 +378,7 @@ function RedactionPolicyForm({
     <Modal title={current ? t("redaction.edit") : t("redaction.createTitle")} onClose={onClose} closeDisabled={mutation.isPending} dirty={dirty}>
       <form className="redaction-form" noValidate onSubmit={(event: FormEvent) => {
         event.preventDefault();
+        if (mutation.isPending || !reauthReady) return;
         setSubmitted(true);
         setUntouchedRules([]);
         if (formValid) mutation.mutate();
@@ -562,7 +565,7 @@ function RedactionPolicyForm({
             </div>
           </div>
           <button type="button" className="button ghost" disabled={mutation.isPending} data-modal-close>{t("common.cancel")}</button>
-          <button className="button primary" disabled={mutation.isPending || (stepUp.asked && !stepUp.values.currentPassword)}>{t("redaction.compile")}</button>
+          <button className="button primary" disabled={mutation.isPending || !reauthReady}>{t("redaction.compile")}</button>
         </div>
       </form>
     </Modal>

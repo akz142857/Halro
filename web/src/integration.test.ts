@@ -1,4 +1,7 @@
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -118,6 +121,65 @@ describe("shared integration request contracts", () => {
     const request = fetch.mock.calls[0][1];
     expect(request.headers.Authorization).toBe("Bearer synthetic_environment_key");
     expect(JSON.parse(request.body)).toEqual(body);
+  });
+
+  it.each([false, true])("preserves raw JSON schema properties named __proto__ in JavaScript (stream=%s)", async (stream) => {
+    // JSON Schema property names are user data, including names that have
+    // special behavior when emitted as JavaScript object literal properties.
+    const body = JSON.parse('{"model":"public-chat","messages":[{"role":"user","content":"Return the requested JSON"}],"response_format":{"type":"json_schema","json_schema":{"name":"answer","schema":{"type":"object","properties":{"__proto__":{"type":"string"},"normal":{"type":"string"}},"required":["__proto__","normal"],"additionalProperties":false}}}}');
+    body.stream = stream;
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "synthetic" }),
+      body: { getReader: () => ({ read: async () => ({ done: true }) }) },
+    });
+    const context = { fetch, TextDecoder, process: { env: { HALRO_API_KEY: "synthetic_environment_key" } }, console: { log: vi.fn() } };
+    await runInNewContext(`(async () => {${codeExample("javascript", gateway, integrationPath("chat"), body)}\n})()`, context);
+    expect(fetch).toHaveBeenCalledOnce();
+    const sent = JSON.parse(fetch.mock.calls[0][1].body);
+    expect(Object.hasOwn(sent.response_format.json_schema.schema.properties, "__proto__")).toBe(true);
+    expect(sent).toEqual(body);
+    expect(Object.getPrototypeOf(sent.response_format.json_schema.schema.properties)).toBe(Object.prototype);
+  });
+
+  it.runIf(spawnSync("go", ["version"], { encoding: "utf8", env: { ...process.env, GOTOOLCHAIN: "local", GOPROXY: "off", GOSUMDB: "off" } }).status === 0)("prints a complete Go success response larger than one MiB using an offline transport", { timeout: 60_000 }, () => {
+    const directory = mkdtempSync(join(tmpdir(), "halro-integration-go-"));
+    try {
+      const response = JSON.stringify({ data: [{ index: 0, embedding: Array(180_000).fill(0.1234567) }] });
+      const responsePath = join(directory, "response.json");
+      const sourcePath = join(directory, "main.go");
+      const sample = codeExample("go", gateway, integrationPath("embeddings"), requestBody("embeddings", "public-embedding", "hello", false));
+      writeFileSync(responsePath, response);
+      // Execute the exported snippet unchanged. The injected RoundTripper is
+      // the only transport, so no request can reach the synthetic Gateway URL.
+      writeFileSync(sourcePath, `package main
+import ("bytes"; "fmt"; "io"; "log"; "net/http"; "os")
+type mockTransport struct { body []byte }
+func (transport mockTransport) RoundTrip(_ *http.Request) (*http.Response, error) {
+  return &http.Response{StatusCode: 200, Status: "200 OK", Body: io.NopCloser(bytes.NewReader(transport.body))}, nil
+}
+func main() {
+  mockBody, err := os.ReadFile(os.Args[1])
+  if err != nil { panic(err) }
+  http.DefaultClient = &http.Client{Transport: mockTransport{body: mockBody}}
+  ${sample}
+}
+`);
+      const result = spawnSync("go", ["run", sourcePath, responsePath], {
+        encoding: "utf8", timeout: 55_000, maxBuffer: 4 << 20,
+        env: { ...process.env, HALRO_API_KEY: "synthetic_environment_key", GO111MODULE: "off", GOWORK: "off", GOPROXY: "off", GOSUMDB: "off", GOTOOLCHAIN: "local", GOCACHE: join(tmpdir(), "halro-integration-go-cache") },
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr.slice(0, 1000)).toBe(0);
+      expect(response.length).toBeGreaterThan(1 << 20);
+      // Assert lengths before parsing, keeping any failure output small.
+      expect(result.stdout.length).toBe(response.length + 1);
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed.data[0].embedding.length).toBe(180_000);
+      expect(JSON.stringify(parsed) === response).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it.runIf(process.platform !== "win32")("preserves literal apostrophes and shell substitutions as curl body data", () => {

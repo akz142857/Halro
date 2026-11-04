@@ -207,7 +207,7 @@ describe("admin accounts", () => {
     expect(submit).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "correct horse battery staple" } });
-    expect(submit).toBeEnabled();
+    await waitFor(() => expect(submit).toBeEnabled());
     fireEvent.click(submit);
 
     await waitFor(() => expect(create).toHaveBeenCalledWith(
@@ -360,6 +360,7 @@ describe("destructive step-up", () => {
     fireEvent.click(within(dialog).getByRole("radio", { name: /^免费/ }));
     fireEvent.click(within(dialog).getByRole("button", { name: "下一步：核对" }));
     fireEvent.change(within(dialog).getByLabelText(/^当前密码/), { target: { value: "correct horse battery staple" } });
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "确认并创建价格版本" })).toBeEnabled());
     fireEvent.click(within(dialog).getByRole("button", { name: "确认并创建价格版本" }));
     await waitFor(() => expect(createPrice).toHaveBeenCalledOnce());
     expect(createPrice).toHaveBeenCalledWith(deployment.id, expect.objectContaining({

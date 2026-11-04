@@ -302,7 +302,7 @@ export function UsagePage() {
         <EmptyState
           title={t(activeFilterCount ? "usage.emptyTitle" : "usage.noCallsTitle")}
           action={activeFilterCount > 0 ? <button type="button" className="button ghost" onClick={clearFilters}>{t("usage.clearFilters")}</button> : undefined}
-        >{activeFilterCount > 0 ? t("usage.emptyDescription") : undefined}</EmptyState>
+        >{t(activeFilterCount > 0 ? "usage.emptyDescription" : "usage.noCallsDescription")}</EmptyState>
       )}
       {usage.data && attempts.length > 0 && (
         <div className="usage-results-panel">

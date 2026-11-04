@@ -1,0 +1,79 @@
+{
+  "generatedAt": "2026-11-04T10:36:05.551121+00:00",
+  "baseURL": "http://127.0.0.1:5275/admin/",
+  "effectiveTotal": 53,
+  "effectivePassed": 53,
+  "effectiveFailed": 0,
+  "syntheticOnly": true,
+  "boundaries": {
+    "api": "All Admin API calls intercepted with declared synthetic contracts; external origins and undeclared API routes rejected. Only the local production-preview static bundle reaches its server. No real model, account, pricing or project mutation occurred.",
+    "clipboard": "Copy writes captured inside isolated Playwright pages; the user OS clipboard and real Chrome were not read or changed.",
+    "downloads": "32 actual SKILL.md browser downloads from AI scope-switch; UTF-8 frontmatter parsed and body compared exactly with preview and captured Copy instructions.",
+    "go": "One actual final-production Go tab/copy smoke; source snippet checked, never executed.",
+    "accessibility": "Keyboard and DOM/ARIA observations only; not actual VoiceOver testing."
+  },
+  "groups": [
+    {
+      "name": "normal reauthentication",
+      "total": 24,
+      "passed": 24,
+      "report": "/private/tmp/halro-release-v0.12.0/browser/reauth/report.json",
+      "covers": "Developer step-up and ordinary/restored price confirmations; enrolled/unenrolled; zh/en dark/light; pending blocks confirmation, wrong-password error once, correctable password, code required only after enrollment."
+    },
+    {
+      "name": "AI scoped exports",
+      "total": 8,
+      "passed": 8,
+      "report": "/private/tmp/halro-release-v0.12.0/browser/ai/report.json",
+      "downloads": 32,
+      "covers": "zh/en dark/light1440/390; alpha→beta scope isolation and3 API choices; preview/Copy/SKILL body equality; no secret or cross-project alias; all API reads only."
+    },
+    {
+      "name": "Usage empty window",
+      "total": 8,
+      "passed": 8,
+      "initialReport": "/private/tmp/halro-release-v0.12.0/browser/usage/initial-report.json",
+      "followupReport": "/private/tmp/halro-release-v0.12.0/browser/usage-followup/report.json",
+      "initialPassed": 4,
+      "followupPassed": 4,
+      "harnessCorrection": "390px filters intentionally live inside a drawer. Open and use it before locating comboboxes; close via Done before checking the empty-state action. Desktop successes retained.",
+      "covers": "Console window label with internal all value/no start/end; window-scoped empty title and custom-range next step; actual project filter gives matching-empty state; Clear restores default window; custom earlier start reaches GET query."
+    },
+    {
+      "name": "MFA unknown/error and recovery",
+      "total": 12,
+      "passed": 12,
+      "initialReport": "/private/tmp/halro-release-v0.12.0/browser/mfa-errors/initial-report.json",
+      "followupReport": "/private/tmp/halro-release-v0.12.0/browser/mfa-errors-followup/report.json",
+      "initialPassed": 4,
+      "followupPassed": 8,
+      "harnessCorrection": "A live getByRole(dialog).last() retargeted to the underlying deployment drawer after successful confirmation. Follow-up waits for the original confirmation DOM node to detach; source was not changed.",
+      "covers": "Developer plus ordinary/restored price forms; unknown/error MFA blocks form submit handler, not just button clicks; Retry recovers; enrolled code required; exactly one synthetic mutation after recovery. zh-dark1440/en-light390, both enrollment states."
+    },
+    {
+      "name": "final Developer Go template",
+      "total": 1,
+      "passed": 1,
+      "report": "/private/tmp/halro-release-v0.12.0/browser/developer-go/report.json",
+      "covers": "Nonstream Go selected in final bundle; successful response uses io.Copy(os.Stdout,resp.Body), error remains bounded by1MiB; copied code exact and no entered key; no request executed."
+    }
+  ],
+  "buildProvenance": "Root final Go-only template update does not change the already-passed reauth/Usage/AI curl branches. Those successes are retained as explicitly requested; precise follow-ups and Go1 use the final production bundle (root reported gzip247281).",
+  "reviewFix": {
+    "priority": "P2",
+    "problem": "Unfiltered empty attempts incorrectly claimed no calls yet even though the backend applies its default console window.",
+    "fix": "Both locales scope the empty result to the console window and guide custom earlier queries; actual project filters retain No matching calls and Clear. Root also corrected the pre-existing All time selector label without changing its all value/API behavior.",
+    "testEvidence": {
+      "red": "/private/tmp/halro-review-usage-red.log",
+      "redFailed": 3,
+      "green": "/private/tmp/halro-review-usage-green.log",
+      "greenPassed": 34
+    }
+  },
+  "bestEvidence": {
+    "usageNarrow": "/private/tmp/halro-release-v0.12.0/browser/usage-followup/zh-CN-light-390.png",
+    "mfaFailure": "/private/tmp/halro-release-v0.12.0/browser/mfa-errors-followup/price-enrolled-zh-CN-dark-1440-mfa-error.png",
+    "go": "/private/tmp/halro-release-v0.12.0/browser/developer-go/go-nonstream.png",
+    "aiDefault": "/private/tmp/halro-release-v0.12.0/browser/ai/scope-switch-zh-CN-dark-1440-default.png"
+  }
+}

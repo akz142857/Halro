@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
-import { ConfirmButton, ReauthFields, type ReauthValues } from "./components";
+import { ConfirmButton, ReauthFields, useReauthReadiness, type ReauthValues } from "./components";
 import { stepUpRequired } from "./test/fixtures";
 import type { MFAStatus, Session } from "./types";
 
@@ -22,6 +22,15 @@ function ControlledFields({ initial }: { initial: ReauthValues }) {
   return <form>
     <ReauthFields values={values} onChange={setValues} description="确认本次操作" />
     <output data-testid="submitted-code">{values.totpCode}</output>
+  </form>;
+}
+
+function OrdinaryReauthForm({ onSubmit, required = true }: { onSubmit: (values: ReauthValues) => void; required?: boolean }) {
+  const [values, setValues] = useState({ currentPassword: "synthetic-password", totpCode: "" });
+  const { ready } = useReauthReadiness(values, required);
+  return <form aria-label="ordinary reauthentication" onSubmit={(event) => { event.preventDefault(); if (ready) onSubmit(values); }}>
+    {required && <ReauthFields values={values} onChange={setValues} />}
+    <button disabled={!ready}>普通保存</button>
   </form>;
 }
 
@@ -52,6 +61,53 @@ function renderConfirmation(onConfirm: (values: ReauthValues) => Promise<void>) 
 
 describe("ReauthFields enrollment-aware verification", () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it.each(["pending", "error"] as const)("blocks an ordinary form while enrollment is %s, including a direct submit", async (state) => {
+    const status = vi.spyOn(api, "mfaStatus");
+    if (state === "pending") status.mockImplementation(() => new Promise<MFAStatus>(() => {}));
+    else status.mockRejectedValue(new Error("synthetic status unavailable"));
+    const submit = vi.fn();
+    const client = createClient();
+    render(<QueryClientProvider client={client}><OrdinaryReauthForm onSubmit={submit} /></QueryClientProvider>);
+    if (state === "error") await waitFor(() => expect(client.getQueryState(["mfa"])?.status).toBe("error"));
+    const button = screen.getByRole("button", { name: "普通保存" });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    fireEvent.submit(button.closest("form")!);
+    expect(submit).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an ordinary form blocked after a failed background check, then recovers through the shared retry", async () => {
+    const status = vi.spyOn(api, "mfaStatus").mockResolvedValue(mfaStatus(true));
+    const submit = vi.fn();
+    const client = createClient();
+    render(<QueryClientProvider client={client}><OrdinaryReauthForm onSubmit={submit} /></QueryClientProvider>);
+    const button = screen.getByRole("button", { name: "普通保存" });
+    expect(button).toBeDisabled();
+    fireEvent.change(await screen.findByLabelText(/^身份验证器验证码/), { target: { value: "123456" } });
+    expect(button).toBeEnabled();
+    status.mockRejectedValue(new Error("synthetic background status failure"));
+    await act(async () => { await client.refetchQueries({ queryKey: ["mfa"] }); });
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(client.getQueryData<MFAStatus>(["mfa"])?.enabled).toBe(true);
+    fireEvent.submit(button.closest("form")!);
+    expect(submit).not.toHaveBeenCalled();
+    status.mockResolvedValue(mfaStatus(false));
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+    expect(submit).toHaveBeenCalledWith({ currentPassword: "synthetic-password", totpCode: "" });
+  });
+
+  it("allows the initial step-up probe without querying enrollment", () => {
+    const status = vi.spyOn(api, "mfaStatus");
+    const submit = vi.fn();
+    render(<QueryClientProvider client={createClient()}><OrdinaryReauthForm onSubmit={submit} required={false} /></QueryClientProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "普通保存" }));
+    expect(submit).toHaveBeenCalledOnce();
+    expect(status).not.toHaveBeenCalled();
+  });
 
   it("asks only for the current password after confirming MFA is not enabled", async () => {
     const status = vi.spyOn(api, "mfaStatus").mockResolvedValue(mfaStatus(false));

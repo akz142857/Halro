@@ -836,12 +836,13 @@ mfaTitle: "Authenticator two-factor authentication",  deviceName: "Authenticator
     max_context_tokens: "Maximum context tokens", max_output_tokens: "Maximum output tokens",
   },
   usage: {
-    noCallsTitle: "No call records yet",
+    noCallsTitle: "No calls in the console window",
+    noCallsDescription: "Choose a custom time range to look for earlier calls.",
 
  title: "Usage & Requests",
     model: "Model", status: "Status", all: "All", success: "Success", error: "Error", records_one: "{{count}} record", records_other: "{{count}} records", start: "Start time", end: "End time", emptyTitle: "No matching calls", emptyDescription: "Widen the time range or clear filters and retry.",
     filtersTitle: "Filters", activeFilters: "{{count}} active", noActiveFilters: "No active filters", clearFilters: "Clear", appliedFilters: "Applied filters", done: "Done",
-    timeRange: "Time range", timeRanges: { all: "All time", "1h": "Last hour", "24h": "Last 24 hours", "7d": "Last 7 days", custom: "Custom range" },
+    timeRange: "Time range", timeRanges: { all: "Console window", "1h": "Last hour", "24h": "Last 24 hours", "7d": "Last 7 days", custom: "Custom range" },
     attemptsTitle: "Call records", attemptsDescription: "One upstream attempt per row; retries and fallbacks have separate records.",
     request: "Request", deployment: "Deployment", route: "Call path", result: "Result", usageAndCost: "Usage & cost", tokens: "Tokens", cost: "Cost", latency: "Latency", time: "Completed", attempt: "Attempt {{count}}",
     inputOutput: "{{input}} in / {{output}} out", conservative: "Conservative upper bound", reported: "Provider reported",

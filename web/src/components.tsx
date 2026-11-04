@@ -646,7 +646,7 @@ export function ConfirmButton({
   // that silently dropped the fields would read as the console losing the
   // request.
   const stepUp = useStepUpPrompt();
-  const mfa = useMFAStatus(open && requireStepUp && stepUp.asked);
+  const { ready: reauthReady, status: mfa } = useReauthReadiness(stepUp.values, open && requireStepUp && stepUp.asked);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<unknown>(null);
   const close = () => {
@@ -655,9 +655,8 @@ export function ConfirmButton({
     setPending(false);
     setOpen(false);
   };
-  const missingReauth = requireStepUp && stepUp.asked && (!stepUp.values.currentPassword || !mfa.data || mfa.isError || (mfa.data.enabled && !stepUp.values.totpCode.trim()));
   const submit = async () => {
-    if (pending || missingReauth) return;
+    if (pending || !reauthReady) return;
     setFailure(null);
     setPending(true);
     try {
@@ -703,7 +702,7 @@ export function ConfirmButton({
               <button
                 type="button"
                 className="button danger"
-                disabled={pending || missingReauth}
+                disabled={pending || !reauthReady}
                 onClick={submit}
               >{pending ? t("common.working") : label}</button>
             </div>
@@ -908,6 +907,16 @@ export function useStepUpPrompt() {
 
 // Step-up uses the current account's enrolled factors. The server remains the
 // authority for re-authentication; a mandatory policy is not enrollment.
+// Unknown or failed enrollment checks must also block the form's submit handler:
+// hiding the code field alone would send incomplete credentials to the server.
+// Passing required=false preserves the initial, credential-free step-up probe.
+export function useReauthReadiness(values: ReauthValues, required = true) {
+  const status = useMFAStatus(required);
+  const ready = !required || Boolean(values.currentPassword && status.data && !status.isError
+    && (!status.data.enabled || values.totpCode.trim()));
+  return { ready, status };
+}
+
 export function ReauthFields({
   values,
   onChange,
