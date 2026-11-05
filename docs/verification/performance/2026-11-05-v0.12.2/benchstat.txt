@@ -1,0 +1,204 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+                                          │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                                          │                       sec/op                        │             sec/op               vs base              │
+RequestLifecycle/projects=1/workers=1-4                                            23.41m ±  7%                      22.51m ± 16%       ~ (p=0.394 n=6)
+RequestLifecycle/projects=1/workers=8-4                                            6.289m ± 62%                      5.964m ±  4%  -5.17% (p=0.041 n=6)
+RequestLifecycle/projects=1/workers=64-4                                          1068.4µ ± 14%                      985.7µ ± 14%       ~ (p=0.699 n=6)
+RequestLifecycle/projects=8/workers=1-4                                            22.93m ±  6%                      22.78m ± 15%       ~ (p=0.699 n=6)
+RequestLifecycle/projects=8/workers=8-4                                            6.222m ± 34%                      6.000m ± 77%       ~ (p=0.589 n=6)
+RequestLifecycle/projects=8/workers=64-4                                           950.5µ ± 40%                     1003.5µ ± 14%       ~ (p=0.818 n=6)
+RequestLifecycle/projects=64/workers=1-4                                           23.07m ±  3%                      23.52m ± 23%       ~ (p=0.818 n=6)
+RequestLifecycle/projects=64/workers=8-4                                           5.895m ±  9%                      6.068m ±  3%       ~ (p=0.310 n=6)
+RequestLifecycle/projects=64/workers=64-4                                          1.001m ± 10%                      1.058m ±  9%       ~ (p=0.240 n=6)
+geomean                                                                            5.225m                            5.192m        -0.64%
+
+                                          │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                                          │                        B/op                         │              B/op                vs base              │
+RequestLifecycle/projects=1/workers=1-4                                            318.0Ki ± 0%                      317.9Ki ± 0%       ~ (p=0.784 n=6)
+RequestLifecycle/projects=1/workers=8-4                                            115.9Ki ± 1%                      115.4Ki ± 2%       ~ (p=0.485 n=6)
+RequestLifecycle/projects=1/workers=64-4                                           56.70Ki ± 2%                      56.13Ki ± 3%       ~ (p=0.937 n=6)
+RequestLifecycle/projects=8/workers=1-4                                            318.1Ki ± 0%                      318.1Ki ± 0%       ~ (p=0.699 n=6)
+RequestLifecycle/projects=8/workers=8-4                                            116.4Ki ± 1%                      116.1Ki ± 1%       ~ (p=0.937 n=6)
+RequestLifecycle/projects=8/workers=64-4                                           56.82Ki ± 5%                      56.04Ki ± 3%       ~ (p=0.699 n=6)
+RequestLifecycle/projects=64/workers=1-4                                           318.7Ki ± 0%                      318.7Ki ± 0%       ~ (p=0.818 n=6)
+RequestLifecycle/projects=64/workers=8-4                                           116.8Ki ± 2%                      117.7Ki ± 1%       ~ (p=0.699 n=6)
+RequestLifecycle/projects=64/workers=64-4                                          56.95Ki ± 2%                      56.24Ki ± 3%       ~ (p=0.485 n=6)
+geomean                                                                            128.1Ki                           127.6Ki       -0.40%
+
+                                          │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                                          │                      allocs/op                      │           allocs/op            vs base                │
+RequestLifecycle/projects=1/workers=1-4                                              166.0 ± 0%                      166.0 ± 0%       ~ (p=1.000 n=6) ¹
+RequestLifecycle/projects=1/workers=8-4                                              161.0 ± 1%                      161.0 ± 1%       ~ (p=1.000 n=6)
+RequestLifecycle/projects=1/workers=64-4                                             158.0 ± 0%                      158.0 ± 1%       ~ (p=1.000 n=6)
+RequestLifecycle/projects=8/workers=1-4                                              167.0 ± 1%                      167.0 ± 0%       ~ (p=1.000 n=6)
+RequestLifecycle/projects=8/workers=8-4                                              162.0 ± 1%                      161.0 ± 1%       ~ (p=0.567 n=6)
+RequestLifecycle/projects=8/workers=64-4                                             158.0 ± 0%                      158.0 ± 0%       ~ (p=1.000 n=6) ¹
+RequestLifecycle/projects=64/workers=1-4                                             170.0 ± 1%                      170.5 ± 0%       ~ (p=1.000 n=6)
+RequestLifecycle/projects=64/workers=8-4                                             165.5 ± 1%                      166.0 ± 1%       ~ (p=0.697 n=6)
+RequestLifecycle/projects=64/workers=64-4                                            161.0 ± 1%                      161.0 ± 1%       ~ (p=1.000 n=6)
+geomean                                                                              163.1                           163.1       -0.00%
+¹ all samples are equal
+
+                                          │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                                          │                      events/s                       │            events/s              vs base              │
+RequestLifecycle/projects=1/workers=1-4                                             213.6 ±  7%                       222.1 ± 14%       ~ (p=0.394 n=6)
+RequestLifecycle/projects=1/workers=8-4                                             795.0 ± 38%                       838.5 ±  4%  +5.47% (p=0.041 n=6)
+RequestLifecycle/projects=1/workers=64-4                                           4.681k ± 16%                      5.074k ± 12%       ~ (p=0.699 n=6)
+RequestLifecycle/projects=8/workers=1-4                                             218.1 ±  6%                       219.5 ± 13%       ~ (p=0.699 n=6)
+RequestLifecycle/projects=8/workers=8-4                                             803.6 ± 25%                       833.3 ± 44%       ~ (p=0.589 n=6)
+RequestLifecycle/projects=8/workers=64-4                                           5.261k ± 29%                      4.984k ± 14%       ~ (p=0.818 n=6)
+RequestLifecycle/projects=64/workers=1-4                                            216.8 ±  3%                       212.6 ± 19%       ~ (p=0.734 n=6)
+RequestLifecycle/projects=64/workers=8-4                                            848.2 ±  8%                       824.0 ±  3%       ~ (p=0.310 n=6)
+RequestLifecycle/projects=64/workers=64-4                                          4.993k ± 11%                      4.729k ±  8%       ~ (p=0.240 n=6)
+geomean                                                                             956.9                             963.2        +0.66%
+
+                                          │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                                          │                    lifecycles/s                     │          lifecycles/s            vs base              │
+RequestLifecycle/projects=1/workers=1-4                                             42.72 ±  7%                       44.43 ± 14%       ~ (p=0.394 n=6)
+RequestLifecycle/projects=1/workers=8-4                                             159.0 ± 38%                       167.7 ±  4%  +5.47% (p=0.041 n=6)
+RequestLifecycle/projects=1/workers=64-4                                            936.0 ± 16%                      1015.0 ± 12%       ~ (p=0.667 n=6)
+RequestLifecycle/projects=8/workers=1-4                                             43.61 ±  6%                       43.89 ± 13%       ~ (p=0.699 n=6)
+RequestLifecycle/projects=8/workers=8-4                                             160.8 ± 25%                       166.7 ± 44%       ~ (p=0.589 n=6)
+RequestLifecycle/projects=8/workers=64-4                                           1052.5 ± 29%                       996.6 ± 14%       ~ (p=0.818 n=6)
+RequestLifecycle/projects=64/workers=1-4                                            43.36 ±  3%                       42.51 ± 19%       ~ (p=0.734 n=6)
+RequestLifecycle/projects=64/workers=8-4                                            169.7 ±  8%                       164.8 ±  3%       ~ (p=0.258 n=6)
+RequestLifecycle/projects=64/workers=64-4                                           998.8 ± 11%                       945.9 ±  8%       ~ (p=0.240 n=6)
+geomean                                                                             191.4                             192.6        +0.65%
+
+pkg: github.com/akz142857/Halro/internal/ledger
+                 │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                 │                       sec/op                        │                sec/op                 vs base         │
+ReplayLargeWAL-4                                          562.8m ± 20%                            562.0m ± 2%  ~ (p=1.000 n=6)
+
+                 │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                 │                        B/op                         │                 B/op                  vs base         │
+ReplayLargeWAL-4                                          293.6Mi ± 0%                           293.6Mi ± 0%  ~ (p=1.000 n=6)
+
+                 │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                 │                      allocs/op                      │              allocs/op                vs base         │
+ReplayLargeWAL-4                                           3.000M ± 0%                            3.000M ± 0%  ~ (p=0.472 n=6)
+
+                 │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                 │                         B/s                         │                 B/s                   vs base         │
+ReplayLargeWAL-4                                         52.33Mi ± 17%                           52.39Mi ± 2%  ~ (p=0.974 n=6)
+
+pkg: github.com/akz142857/Halro/internal/limiter
+                             │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                             │                       sec/op                        │             sec/op               vs base              │
+ProjectAdmission/unlimited-4                                          108.1n ±  4%                       108.8n ± 5%       ~ (p=0.589 n=6)
+ProjectAdmission/limited-4                                            144.7n ± 55%                       140.7n ± 3%       ~ (p=0.818 n=6)
+ProjectAdmissionContended-4                                           284.5n ± 11%                       282.5n ± 2%       ~ (p=0.699 n=6)
+geomean                                                               164.5n                             162.9n       -0.94%
+
+                             │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                             │                        B/op                         │             B/op               vs base                │
+ProjectAdmission/unlimited-4                                            200.0 ± 0%                      200.0 ± 0%       ~ (p=1.000 n=6) ¹
+ProjectAdmission/limited-4                                              200.0 ± 0%                      200.0 ± 0%       ~ (p=1.000 n=6) ¹
+ProjectAdmissionContended-4                                             200.0 ± 0%                      200.0 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                                 200.0                           200.0       +0.00%
+¹ all samples are equal
+
+                             │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                             │                      allocs/op                      │           allocs/op            vs base                │
+ProjectAdmission/unlimited-4                                            5.000 ± 0%                      5.000 ± 0%       ~ (p=1.000 n=6) ¹
+ProjectAdmission/limited-4                                              5.000 ± 0%                      5.000 ± 0%       ~ (p=1.000 n=6) ¹
+ProjectAdmissionContended-4                                             5.000 ± 0%                      5.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                                 5.000                           5.000       +0.00%
+¹ all samples are equal
+
+pkg: github.com/akz142857/Halro/internal/provider
+                            │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                            │                       sec/op                        │                sec/op                 vs base         │
+RegistryResolveCandidates-4                                          5.214µ ± 68%                           5.091µ ± 62%  ~ (p=0.699 n=6)
+
+                            │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                            │                        B/op                         │                B/op                 vs base           │
+RegistryResolveCandidates-4                                          16.97Ki ± 0%                         16.97Ki ± 0%  ~ (p=1.000 n=6) ¹
+¹ all samples are equal
+
+                            │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                            │                      allocs/op                      │             allocs/op               vs base           │
+RegistryResolveCandidates-4                                            41.00 ± 0%                           41.00 ± 0%  ~ (p=1.000 n=6) ¹
+¹ all samples are equal
+
+pkg: github.com/akz142857/Halro/internal/redaction
+                    │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                    │                       sec/op                        │             sec/op               vs base              │
+StandardRedaction-4                                          73.10µ ±  5%                      73.08µ ± 44%       ~ (p=0.818 n=6)
+RollingRedaction-4                                           16.88µ ± 22%                      17.10µ ± 35%       ~ (p=0.310 n=6)
+geomean                                                      35.13µ                            35.36µ        +0.65%
+
+                    │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                    │                        B/op                         │              B/op                vs base              │
+StandardRedaction-4                                          13.38Ki ± 1%                      13.38Ki ± 1%       ~ (p=0.937 n=6)
+RollingRedaction-4                                           17.65Ki ± 0%                      17.64Ki ± 0%       ~ (p=1.000 n=6)
+geomean                                                      15.37Ki                           15.36Ki       -0.03%
+
+                    │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                    │                      allocs/op                      │           allocs/op            vs base                │
+StandardRedaction-4                                            32.00 ± 0%                      32.00 ± 0%       ~ (p=1.000 n=6) ¹
+RollingRedaction-4                                             79.00 ± 0%                      79.00 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                        50.28                           50.28       +0.00%
+¹ all samples are equal
+
+                    │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                    │                         B/s                         │               B/s                vs base              │
+StandardRedaction-4                                         12.02Mi ±  5%                     12.02Mi ± 31%       ~ (p=0.937 n=6)
+RollingRedaction-4                                          13.79Mi ± 18%                     13.61Mi ± 26%       ~ (p=0.310 n=6)
+geomean                                                     12.87Mi                           12.79Mi        -0.62%
+
+pkg: github.com/akz142857/Halro/internal/store/bolt
+                                       │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                                       │                       sec/op                        │             sec/op               vs base              │
+DeploymentPricePinCeiling/workers=1-4                                           29.30m ± 18%                      29.23m ±  5%       ~ (p=0.937 n=6)
+DeploymentPricePinCeiling/workers=8-4                                           3.843m ± 77%                      3.917m ±  7%       ~ (p=0.310 n=6)
+DeploymentPricePinCeiling/workers=64-4                                         1009.5µ ± 46%                      991.9µ ± 46%       ~ (p=0.180 n=6)
+geomean                                                                         4.844m                            4.843m        -0.03%
+
+                                       │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                                       │                        B/op                         │              B/op                vs base              │
+DeploymentPricePinCeiling/workers=1-4                                          85.48Ki ±  1%                      85.57Ki ± 3%       ~ (p=0.699 n=6)
+DeploymentPricePinCeiling/workers=8-4                                          31.52Ki ± 24%                      31.59Ki ± 2%       ~ (p=0.699 n=6)
+DeploymentPricePinCeiling/workers=64-4                                         26.98Ki ±  1%                      27.31Ki ± 2%       ~ (p=0.180 n=6)
+geomean                                                                        41.73Ki                            41.95Ki       +0.52%
+
+                                       │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                                       │                      allocs/op                      │            allocs/op             vs base              │
+DeploymentPricePinCeiling/workers=1-4                                             509.0 ± 0%                        509.0 ± 0%       ~ (p=1.000 n=6)
+DeploymentPricePinCeiling/workers=8-4                                             335.5 ± 8%                        336.0 ± 0%       ~ (p=1.000 n=6)
+DeploymentPricePinCeiling/workers=64-4                                            315.0 ± 0%                        315.0 ± 0%       ~ (p=1.000 n=6)
+geomean                                                                           377.5                             377.7       +0.05%
+
+                                       │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                                       │                     attempts/s                      │           attempts/s             vs base              │
+DeploymentPricePinCeiling/workers=1-4                                            34.13 ± 16%                       34.22 ±  4%       ~ (p=0.937 n=6)
+DeploymentPricePinCeiling/workers=8-4                                            260.2 ± 43%                       255.3 ±  7%       ~ (p=0.310 n=6)
+DeploymentPricePinCeiling/workers=64-4                                           990.6 ± 32%                      1008.0 ± 31%       ~ (p=0.180 n=6)
+geomean                                                                          206.4                             206.5        +0.03%
+
+pkg: github.com/akz142857/Halro/internal/tokenguard
+                          │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                          │                       sec/op                        │             sec/op               vs base              │
+Admit/fixed-4                                                      171.6n ±  5%                      171.2n ± 34%       ~ (p=1.000 n=6)
+Admit/ewma-4                                                       182.9n ± 24%                      183.2n ± 13%       ~ (p=0.937 n=6)
+AcquireReleaseContended-4                                          330.2n ± 79%                      339.4n ± 14%       ~ (p=0.394 n=6)
+geomean                                                            218.0n                            220.0n        +0.91%
+
+                          │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                          │                        B/op                         │             B/op               vs base                │
+Admit/fixed-4                                                        64.00 ± 0%                      64.00 ± 0%       ~ (p=1.000 n=6) ¹
+Admit/ewma-4                                                         64.00 ± 0%                      64.00 ± 0%       ~ (p=1.000 n=6) ¹
+AcquireReleaseContended-4                                            160.0 ± 0%                      160.0 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                              86.86                           86.86       +0.00%
+¹ all samples are equal
+
+                          │ /private/tmp/halro-v0122-evidence/v0.12.1-bench.txt │ /private/tmp/halro-v0122-evidence/candidate-bench.txt │
+                          │                      allocs/op                      │           allocs/op            vs base                │
+Admit/fixed-4                                                        2.000 ± 0%                      2.000 ± 0%       ~ (p=1.000 n=6) ¹
+Admit/ewma-4                                                         2.000 ± 0%                      2.000 ± 0%       ~ (p=1.000 n=6) ¹
+AcquireReleaseContended-4                                            3.000 ± 0%                      3.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                              2.289                           2.289       +0.00%
+¹ all samples are equal

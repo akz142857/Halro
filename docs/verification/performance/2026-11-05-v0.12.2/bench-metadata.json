@@ -1,0 +1,16 @@
+{
+  "candidate": "9e4b01278312d86462470bc7154adfb8219d8452",
+  "baseline": "510bbe317e8ac0c207c8e32cc43c8cc8d08c48dd",
+  "toolchain": "go version go1.26.10 darwin/arm64",
+  "samples": 6,
+  "gomaxprocs": 4,
+  "elapsed_seconds": 375.3904480934143,
+  "hashes": {
+    "v0.12.1-bench.txt": "794dafcb468c932b5ed5fa7d80342d1eb24031b87c0485d8e313646eb217623c",
+    "candidate-bench.txt": "c8218d9bfcf4b61e2faedbf55597ea2e523605459e8fc9337281690718131162",
+    "benchstat.txt": "d8453dd13fe079a1b50e3cccb79b30c13c69063013bbfd2851ce48f40577d656"
+  },
+  "baseline_tag_object": "83fdfef47a4b453493e2fced5ef3ed28b5ef9438",
+  "baseline_tag": "v0.12.1",
+  "candidate_note": "Runtime source is 9e4b0127; release-preparation edits change metadata, docs and an unchanged config snapshot only."
+}

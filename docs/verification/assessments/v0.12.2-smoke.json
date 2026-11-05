@@ -1,0 +1,38 @@
+{
+  "stages": [
+    {
+      "stage": "previous-release",
+      "http_status": 200
+    },
+    {
+      "stage": "upgrade",
+      "http_status": 200
+    },
+    {
+      "stage": "candidate-restart",
+      "http_status": 200
+    },
+    {
+      "stage": "candidate-restored",
+      "http_status": 200
+    },
+    {
+      "stage": "previous-on-candidate-data",
+      "http_status": 200
+    },
+    {
+      "stage": "previous-backup-restored",
+      "http_status": 200
+    }
+  ],
+  "candidate_sha256": "595d4ac69cee223ad557c15ceacc74a6bde620cd0dd2f5b21563c5a50aeab11d",
+  "previous_sha256": "9f5c0c020165a69087afed31cf559049b953b5fd3c009f7e1689e0bc7eeb7512",
+  "provider": "private isolated HTTPS fixture; no paid calls",
+  "checks": [
+    "ledger verify",
+    "usage verify",
+    "audit verify",
+    "doctor",
+    "backup create/verify/restore"
+  ]
+}
