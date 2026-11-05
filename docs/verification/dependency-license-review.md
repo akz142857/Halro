@@ -501,8 +501,8 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `194923898968e6a48374d52c35055258fe92a835`
 - `go.sum`: `69591afe7d4f7536ec67aa9a0ffb0a74cac2bd31`
-- `web/package.json`: `d68aa98eb8d69b2a2541cf58d8d203507bc35583`
-- `web/package-lock.json`: `98bf7af69d14a88b75142e75ea4f24d9e321dd7c`
+- `web/package.json`: `01ea02e507ec2b5479f1c5734ca79788816904d9`
+- `web/package-lock.json`: `8b3357e0973edbe288b24ae3285759b64e22aee7`
 - `tests/compatibility/go/go.mod`: `1c4e1c1932a91e12754cd98a7aded4784585788a`
 - `tests/compatibility/go/go.sum`: `f532c4b3299bb9fe375c97da938f50e728a123fc`
 - `tests/compatibility/node/package.json`: `1707407145cdb431c81ca6931a415ad1d24abc0e`
@@ -520,7 +520,7 @@ seven-direct-package Admin UI refresh, and before that for the nine-package
 Admin UI bump,
 and before that only
 for `chore(release): v0.2.0`, again for `v0.3.0`, again for `v0.4.0`, and again
-for `v0.5.0`, `v0.6.0`, `v0.7.0`, `v0.7.1`, `v0.8.0`, `v0.8.3`, `v0.8.4`, `v0.8.5`, `v0.9.0`, `v0.9.1`, `v0.9.2`, `v0.10.0`, `v0.10.1`, `v0.11.0`, `v0.12.0`, and now `v0.12.1`, each of which bumped the
+for `v0.5.0`, `v0.6.0`, `v0.7.0`, `v0.7.1`, `v0.8.0`, `v0.8.3`, `v0.8.4`, `v0.8.5`, `v0.9.0`, `v0.9.1`, `v0.9.2`, `v0.10.0`, `v0.10.1`, `v0.11.0`, `v0.12.0`, `v0.12.1`, and now `v0.12.2`, each of which bumped the
 `version`
 field in both files and changed nothing else.
 The inventory above includes the 2026-10-30 version updates and the

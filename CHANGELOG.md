@@ -6,6 +6,40 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-11-05
+
+### Upgrading
+
+- No configuration or metadata-schema migration is required from v0.12.1.
+  Existing clock quarantines require an explicit review and recovery; restarting
+  does not clear them. Correct host/VM time and retain a consistent backup before
+  recovery. Older binaries may not understand the new recovery audit action;
+  restore the pre-recovery backup when rolling back across that action.
+- High availability remains experimental and is not supported in production.
+
+### Added
+
+- Review and restore clock-quarantined deployment pricing from the console.
+  Confirmation shows server UTC time and the effective immutable price, binds
+  the exact quarantine revision and price, expires after five minutes, and
+  requires administrator access and password/MFA verification. Successful
+  recovery is audited without changing historical prices, pins or bills.
+- Offline `halro pricing recover-clock` inspection and explicit recovery for
+  stopped Standalone instances with exclusive data-directory access and the
+  configured Master Key. See `docs/runbooks/clock-pricing-recovery.md`.
+
+### Fixed
+
+- Prevent host/VM pause observation gaps from repeatedly isolating the exact
+  same valid zero-cost price version. The exception requires `billing_mode=free`,
+  all price components zero and no time-of-day schedule; metered prices,
+  version changes, rollbacks and existing quarantines retain their guards.
+  Accepted gaps are recorded in the attempt's price pin and diagnostic log.
+- Capture wall and monotonic pricing readings from one clock sample, while
+  retaining an independent elapsed-time witness for injected wall-only clocks.
+- Show translated clock-quarantine reasons and the correct recovery action,
+  with read-only restrictions and stale-review refresh in the console.
+
 ## [0.12.1] - 2026-11-04
 
 ### Upgrading
@@ -2889,6 +2923,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.12.2]: https://github.com/akz142857/Halro/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/akz142857/Halro/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/akz142857/Halro/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/akz142857/Halro/compare/v0.10.1...v0.11.0
