@@ -15,6 +15,8 @@ storage, and durable accounting. No external database or cache is required.
 [中文使用指南](docs/guides/user-guide.zh-CN.md) ·
 [Release notes](CHANGELOG.md)
 
+![Halro Admin console showing request metrics, traffic trends and governance status](docs/images/console-overview.png)
+
 ## What Halro does
 
 | Area | Capabilities |
