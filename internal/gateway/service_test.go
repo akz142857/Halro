@@ -48,6 +48,7 @@ type fakePricePinStore struct {
 	mu             sync.Mutex
 	price          domain.DeploymentPriceVersion
 	admissionPrice domain.DeploymentPriceVersion
+	observedAt     time.Time
 	prepared       domain.PricePinIntent
 	committed      domain.PricePinIntent
 	commitErr      error
@@ -68,8 +69,9 @@ func (s *fakePricePinStore) LockDeploymentPricingShared(string) func() {
 	return s.mu.Unlock
 }
 
-func (s *fakePricePinStore) PrepareDeploymentPricePin(_ context.Context, deploymentID, attemptID string, selectedAt, _ time.Time, _, _ time.Duration) (domain.DeploymentPriceVersion, domain.PriceSnapshot, domain.PricePinIntent, error) {
+func (s *fakePricePinStore) PrepareDeploymentPricePin(_ context.Context, deploymentID, attemptID string, selectedAt, observedAt time.Time, _, _ time.Duration) (domain.DeploymentPriceVersion, domain.PriceSnapshot, domain.PricePinIntent, error) {
 	s.prepares.Add(1)
+	s.observedAt = observedAt
 	price, err := staticPriceSelector{price: s.price}.SelectDeploymentPriceVersion(context.Background(), deploymentID, selectedAt)
 	if err != nil {
 		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, err
@@ -156,6 +158,9 @@ func TestGatewayCommitsPricePinBeforeProviderAttempt(t *testing.T) {
 	if f.adapter.calls != 1 || priceStore.committed.State != domain.PricePinCommitted || priceStore.committed.LedgerSequence == 0 ||
 		priceStore.committed.AttemptID != priceStore.prepared.AttemptID {
 		t.Fatalf("provider calls=%d prepared=%#v committed=%#v", f.adapter.calls, priceStore.prepared, priceStore.committed)
+	}
+	if !priceStore.prepared.PricingSelectedAt.Equal(now) || priceStore.observedAt == priceStore.observedAt.Round(0) {
+		t.Fatal("a custom wall clock lost the independent monotonic pricing witness")
 	}
 	// The attempt has settled, so its lease is read from the Ledger.
 	var lease ledger.Event

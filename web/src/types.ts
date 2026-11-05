@@ -1629,3 +1629,6 @@ export interface AdminPreferences {
   appearance: Appearance;
   revision: number;
 }
+
+export interface PricingClockConfirmation { revision: number; reason: string; price_id: string; reviewed_at: string }
+export interface PricingClockReview { deployment_id: string; confirmation: PricingClockConfirmation; previous_selected_at: string; price: DeploymentPriceVersion }

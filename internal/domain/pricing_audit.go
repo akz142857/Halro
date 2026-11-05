@@ -9,6 +9,7 @@ import (
 type PricingAuditIntent struct {
 	EventID              string               `json:"event_id"`
 	OccurredAt           time.Time            `json:"occurred_at"`
+	ActorType            string               `json:"actor_type,omitempty"`
 	ActorID              string               `json:"actor_id"`
 	Action               string               `json:"action"`
 	TargetType           string               `json:"target_type"`
@@ -48,11 +49,14 @@ func (i PricingAuditIntent) Validate() error {
 		!validSHA256Label(i.RequestSHA256) {
 		return errors.New("invalid pricing audit intent")
 	}
+	if i.ActorType != "" && i.ActorType != "admin_user" && i.ActorType != "local_cli" {
+		return errors.New("invalid pricing audit actor type")
+	}
 	if i.TargetType != "deployment_price_version" && i.TargetType != "deployment_price_proposal" && i.TargetType != "deployment_pricing" {
 		return errors.New("pricing audit intent target type is invalid")
 	}
 	switch i.Action {
-	case "deployment_price.create", "deployment_price.cancel", "deployment_price.restore_confirm",
+	case "deployment_price.create", "deployment_price.cancel", "deployment_price.restore_confirm", "deployment_price.clock_confirm",
 		"deployment_price.proposal_create", "deployment_price.proposal_adopt", "deployment_price.proposal_reject", "deployment_price.migrate":
 	default:
 		return errors.New("pricing audit intent action is invalid")

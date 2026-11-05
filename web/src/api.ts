@@ -1,4 +1,6 @@
 import type {
+  PricingClockReview,
+  PricingClockConfirmation,
   AdminUser,
   AdvisorFindingCatalog,
   AuditRecord,
@@ -564,6 +566,8 @@ export const api = {
     request<DeploymentPriceVersion>(`/deployments/${encodeURIComponent(id)}/prices`, { ...json("POST", value), headers: { "Idempotency-Key": idempotencyKey } }).then((result) => result.data),
   cancelDeploymentPrice: (deploymentID: string, priceID: string, revision: number) =>
     request<DeploymentPriceVersion>(`/deployments/${encodeURIComponent(deploymentID)}/prices/${encodeURIComponent(priceID)}/cancel`, json("POST"), `"${revision}"`).then((result) => result.data),
+  reviewClockDeploymentPricing: (id: string) => request<PricingClockReview>(`/deployments/${encodeURIComponent(id)}/prices/clock-confirm`).then((result) => result.data),
+  confirmClockDeploymentPricing: (id: string, confirmation: PricingClockConfirmation, reauth: Reauth) => request<{ deployment_id: string; pricing_quarantine: false }>(`/deployments/${encodeURIComponent(id)}/prices/clock-confirm`, json("POST", { confirmation, ...stepUpBody(reauth) })).then((result) => result.data),
 	confirmRestoredDeploymentPricing: (deploymentID: string, value: unknown) => request<{ deployment_id: string; pricing_quarantine: false }>(`/deployments/${encodeURIComponent(deploymentID)}/prices/restore-confirm`, json("POST", value)).then((result) => result.data),
   deploymentPriceProposals: (id: string) => request<Page<DeploymentPriceProposal>>(`/deployments/${encodeURIComponent(id)}/price-proposals`).then((value) => value.data),
   createDeploymentPriceProposal: (id: string, value: unknown, idempotencyKey: string) =>

@@ -793,6 +793,7 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 	var snapshot domain.PriceSnapshot
 	var intent domain.PricePinIntent
 	var quarantined bool
+	var acceptedFreeClockGap time.Duration
 	// outcome carries the expected non-fault results — quarantined, no effective
 	// price, a conflicting pin — instead of returning them as transaction errors.
 	// Under db.Batch an error aborts the whole shared transaction, evicts this
@@ -809,6 +810,7 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 		// writer committed in between — so it can legitimately take a different
 		// branch than the previous run did.
 		price, snapshot, intent, quarantined, outcome = domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, false, nil
+		acceptedFreeClockGap = 0
 		selectedAt = requestedAt
 		// The clock anchor is read per run for the same reason.
 		//
@@ -823,8 +825,9 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 		// wall-clock rollback, and every request after it failed).
 		previousObservation, hasObservation := state.clockAnchor()
 		forwardJump, rollbackDrift := false, false
+		var drift time.Duration
 		if hasObservation {
-			drift := selectedAt.Sub(previousObservation.SelectedAt) - observedAt.Sub(previousObservation.ObservedAt)
+			drift = selectedAt.Sub(previousObservation.SelectedAt) - observedAt.Sub(previousObservation.ObservedAt)
 			forwardJump = drift > forwardTolerance
 			rollbackDrift = drift < -rollbackTolerance
 		}
@@ -840,6 +843,18 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 			if highWater.Quarantined {
 				outcome = ErrPricingQuarantined
 				return nil
+			}
+			if forwardJump {
+				// Host/VM suspension can pause the elapsed clock while UTC keeps
+				// advancing. A fixed free version has no rate or tier to change.
+				// Accept only the exact previously observed immutable free price;
+				// version switches, metered prices, malformed prices, existing
+				// quarantines and rollback checks retain their original gates.
+				current, err := selectDeploymentPriceVersionTx(tx, deploymentID, selectedAt)
+				if err == nil && current.ID == highWater.LatestObservedPriceVersionID && current.BillingMode == domain.BillingModeFree {
+					acceptedFreeClockGap = drift
+					forwardJump = false
+				}
 			}
 			if forwardJump {
 				highWater.Quarantined = true
@@ -916,7 +931,8 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 		}
 		now := time.Now().UTC()
 		intent = domain.PricePinIntent{
-			AttemptID: attemptID, DeploymentID: deploymentID, PriceVersionID: price.ID, PriceVersion: price.Version,
+			ClockForwardGapNanos: int64(acceptedFreeClockGap),
+			AttemptID:            attemptID, DeploymentID: deploymentID, PriceVersionID: price.ID, PriceVersion: price.Version,
 			SnapshotSHA256: digest, PricingSelectedAt: selectedAt, MetadataRevision: deployment.Revision,
 			State: domain.PricePinPrepared, CreatedAt: now,
 		}

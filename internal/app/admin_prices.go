@@ -801,15 +801,19 @@ func newPricingAuditIntent(action, targetID, actor, correlationID string, reques
 	if strings.Contains(action, ".proposal_") {
 		intent.TargetType = "deployment_price_proposal"
 	}
-	if action == "deployment_price.restore_confirm" {
+	if action == "deployment_price.restore_confirm" || action == "deployment_price.clock_confirm" {
 		intent.TargetType = "deployment_pricing"
 	}
 	return intent, intent.Validate()
 }
 
 func (r *Runtime) deliverPricingAuditIntent(ctx context.Context, intent domain.PricingAuditIntent) error {
+	actorType := intent.ActorType
+	if actorType == "" {
+		actorType = "admin_user"
+	}
 	if _, err := r.audit.Append(ctx, audit.Event{
-		EventID: intent.EventID, OccurredAt: intent.OccurredAt, ActorType: "admin_user", ActorID: intent.ActorID,
+		EventID: intent.EventID, OccurredAt: intent.OccurredAt, ActorType: actorType, ActorID: intent.ActorID,
 		Action: intent.Action, TargetType: intent.TargetType, TargetID: intent.TargetID,
 		Outcome: "success", CorrelationID: intent.CorrelationID,
 		Metadata: map[string]any{"deployment_id": intent.DeploymentID, "price_version": intent.PriceVersion, "effective_from": intent.EffectiveFrom,
