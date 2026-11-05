@@ -26,6 +26,7 @@ import { compactNumber, money, useInstantFormatter } from "../format";
 import { useAccountingTimeZone, zonedInputToISO } from "../timezone";
 import type { CreatedGatewayKey, GatewayKey, GatewayScope, Project } from "../types";
 import { useTranslation } from "react-i18next";
+import { GatewayKeyScopes } from "./GatewayKeyScopes";
 import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
 import type { TFunction } from "i18next";
@@ -815,7 +816,7 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
           event.preventDefault();
           // Without this guard, holding Enter mints extra keys whose plaintext is never
           // shown — live credentials nobody knows exist.
-          if (mutation.isPending || !reauthReady) return;
+          if (mutation.isPending || !reauthReady || scopes.length === 0) return;
           if (name.trim()) mutation.mutate();
         }}
       >
@@ -825,18 +826,7 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
         <Field label={t("projects.keyExpiry")} hint={t("projects.keyExpiryHint")}>
           <input autoComplete="off" type="datetime-local" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} />
         </Field>
-        <fieldset className="gateway-key-scope-checks">
-          <legend>{t("projects.keyScopes")}</legend>
-          <div className="gateway-key-scope-options">
-            {(["inference", "discovery", "work_unit:create", "run:create", "run:attach", "governance:read", "outcome:write"] as GatewayScope[]).map((scope) => (
-              <label className="check-row" key={scope}>
-                <input type="checkbox" checked={scopes.includes(scope)} onChange={(event) => setScope(scope, event.target.checked)} />
-                <span>{scope}</span>
-              </label>
-            ))}
-          </div>
-          <small>{t("projects.keyScopesHint")}</small>
-        </fieldset>
+        <GatewayKeyScopes value={scopes} onChange={setScope} disabled={mutation.isPending} />
         <ReauthFields values={reauth} onChange={setReauth} description={t("auth.stepUpMintKey")} />
         {mutation.isError && <ErrorState error={mutation.error} />}
         <div className="form-actions">
