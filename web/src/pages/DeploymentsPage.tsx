@@ -318,7 +318,7 @@ function DeploymentRow({
     : condition.key === "deployments.probeUnhealthyShort"
       ? probeReason
       : condition.key === "deployments.pricingQuarantinedShort"
-        ? deployment.pricing_quarantine_reason
+        ? pricingQuarantineReason(deployment, t)
         : undefined;
   const conditionText = [t(condition.key, condition.params ?? {}), conditionDetail, conditionAge]
     .filter(Boolean).join(t("common.dotSeparator"));
@@ -479,7 +479,7 @@ function DeploymentRow({
               <h3>{t("deployments.sectionBilling")}</h3>
               <button className="button secondary" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setPricing(true)}>{activePrice ? t("deployments.adjustPrice") : t("deployments.setPrice")}</button>
             </div>
-            {deployment.pricing_quarantined && <div className="notice warning"><strong>{t("deployments.pricingQuarantined")}</strong><span>{deployment.pricing_quarantine_reason}</span><button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setConfirmingRestore(true)}>{t("deployments.confirmRestoredPricing")}</button></div>}
+            {deployment.pricing_quarantined && <div className="notice warning"><strong>{t("deployments.pricingQuarantined")}</strong><span>{pricingQuarantineReason(deployment, t)}</span><button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setConfirmingRestore(true)}>{t(isClockPricing(deployment) ? "deployments.confirmClockPricing" : "deployments.confirmRestoredPricing")}</button></div>}
             {prices.isError && <ErrorState
               error={prices.error}
               action={<button className="button secondary" type="button" disabled={prices.isFetching} onClick={() => prices.refetch()}>{t("common.retry")}</button>}
@@ -626,7 +626,7 @@ function DeploymentRow({
         </div>
       </Modal>}
       {pricing && <PriceVersionForm deployment={deployment} current={activePrice} blocking={blockingPrice} onClose={() => setPricing(false)} />}
-	  {confirmingRestore && <RestorePricingConfirm deployment={deployment} onClose={() => setConfirmingRestore(false)} />}
+	  {confirmingRestore && (isClockPricing(deployment) ? <ClockPricingConfirm deployment={deployment} onClose={() => setConfirmingRestore(false)} /> : <RestorePricingConfirm deployment={deployment} onClose={() => setConfirmingRestore(false)} />)}
     </article>
   );
 }
@@ -707,6 +707,56 @@ function CapabilityReviewNotice({ review, readOnly, onEdit }: { review: Capabili
       </div>}
     </div>
   );
+}
+
+function isClockPricing(deployment: Deployment) {
+  return ["wall_clock_forward_jump", "wall_clock_rollback"].includes(deployment.pricing_quarantine_reason ?? "");
+}
+
+function pricingQuarantineReason(deployment: Deployment, t: TFunction) {
+  if (deployment.pricing_quarantine_reason === "wall_clock_forward_jump") return t("deployments.clockForwardReason");
+  if (deployment.pricing_quarantine_reason === "wall_clock_rollback") return t("deployments.clockRollbackReason");
+  return deployment.pricing_quarantine_reason;
+}
+
+function ClockPricingConfirm({ deployment, onClose }: { deployment: Deployment; onClose: () => void }) {
+  const { t } = useTranslation();
+  const client = useQueryClient();
+  const [password, setPassword] = useState("");
+  const [totp, setTotp] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const review = useQuery({ queryKey: ["clock-pricing-review", deployment.id], queryFn: () => api.reviewClockDeploymentPricing(deployment.id), retry: false, staleTime: 0 });
+  const { ready } = useReauthReadiness({ currentPassword: password, totpCode: totp });
+  useEffect(() => setConfirmed(false), [review.data]);
+  const mutation = useMutation({ mutationFn: () => {
+    if (!review.data || review.isFetching || review.isError || !confirmed || !ready) throw new Error("Review and identity confirmation required");
+    return api.confirmClockDeploymentPricing(deployment.id, review.data.confirmation, { currentPassword: password, totpCode: totp });
+  }, onSuccess: () => {
+    for (const queryKey of [["deployments"], ["deployment-prices", deployment.id], ["system-status"], ["dashboard"]]) void client.invalidateQueries({ queryKey });
+    onClose();
+  }, onError: () => setTotp("") });
+  const blocked = !ready || !confirmed || !review.data || review.isFetching || review.isError || mutation.isPending;
+  return <Modal title={t("deployments.confirmClockPricing")} onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); if (!blocked) mutation.mutate(); }}>
+    <p>{t("deployments.clockPricingWarning")}</p>
+    {review.isPending && <Loading />}
+    {review.isError && <ErrorState error={review.error} />}
+    {review.data && <>
+      <div className="detail-facts">
+        <DetailFact label={t("deployments.clockServerTime")} value={review.data.confirmation.reviewed_at} mono />
+        <DetailFact label={t("deployments.clockPreviousTime")} value={review.data.previous_selected_at} mono />
+        <DetailFact label={t("deployments.priceTimeline")} value={`v${review.data.price.version}`} meta={review.data.price.id} />
+        <DetailFact label={t("deployments.billingMode")} value={t(review.data.price.billing_mode === "free" ? "deployments.freeLabel" : "deployments.meteredLabel")} />
+      </div>
+      <p>{t("deployments.clockPriceRates", { input: money(review.data.price.input_micros_per_million), cached: money(review.data.price.cached_input_micros_per_million), output: money(review.data.price.output_micros_per_million), fixed: money(review.data.price.fixed_request_micros_usd) })}</p>
+      {review.data.price.schedule && <div><p>{review.data.price.schedule.timezone}</p><ul className="price-schedule-summary">{review.data.price.schedule.windows.map((window) => <li key={window.start_minute}>{minuteToClock(window.start_minute)}–{minuteToClock(window.end_minute)} · {t("deployments.clockPriceRates", { input: money(window.input_micros_per_million), cached: money(window.cached_input_micros_per_million), output: money(window.output_micros_per_million), fixed: money(window.fixed_request_micros_usd) })}</li>)}</ul></div>}
+      <label className="check-row"><input type="checkbox" checked={confirmed} disabled={review.isFetching || mutation.isPending} onChange={(event) => setConfirmed(event.target.checked)} /><span>{t("deployments.clockPricingAcknowledgement")}</span></label>
+    </>}
+    <button type="button" className="button ghost" disabled={review.isFetching || mutation.isPending} onClick={() => { setConfirmed(false); void review.refetch(); }}>{t("deployments.clockRefreshReview")}</button>
+    <Field label={t("usage.currentPassword")}><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></Field>
+    <AuthenticatorCodeField value={totp} onChange={setTotp} />
+    {mutation.isError && <ErrorState error={mutation.error} />}
+    <button className="button primary" disabled={blocked}>{t("deployments.confirmClockPricing")}</button>
+  </form></Modal>;
 }
 
 function RestorePricingConfirm({ deployment, onClose }: { deployment: Deployment; onClose: () => void }) {

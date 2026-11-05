@@ -2368,6 +2368,8 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments/{id}/prices", r.createAdminDeploymentPrice)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments/{id}/prices/preview", r.previewAdminDeploymentPrice)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments/{id}/prices/restore-confirm", r.confirmRestoredDeploymentPricing)
+	router.With(r.requireAdmin).Get("/admin/api/v1/deployments/{id}/prices/clock-confirm", r.reviewClockDeploymentPricing)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments/{id}/prices/clock-confirm", r.confirmClockDeploymentPricing)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments/{id}/prices/{priceID}/cancel", r.cancelAdminDeploymentPrice)
 	router.With(r.requireAdmin).Get("/admin/api/v1/deployments/{id}/price-proposals", r.listAdminDeploymentPriceProposals)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments/{id}/price-proposals", r.createAdminDeploymentPriceProposal)

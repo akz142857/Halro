@@ -661,15 +661,24 @@ func (s *Service) startAttempt(
 		pricingUnlock = pinStore.LockDeploymentPricingShared(target.DeploymentID)
 		forcedAttemptID, err = id.New("att")
 		if err == nil {
-			// The monotonic reading beside the wall one is what lets the store
-			// tell a clock jump from this selection waiting its turn; UTC()
-			// strips it, so it is read separately and at the same instant.
-			pricingSelectedAt, pricingObservedAt := s.now().UTC(), time.Now()
+			// Capture one reading: two time.Now calls can straddle suspension
+			// or rescheduling and manufacture a mismatched clock pair. UTC()
+			// strips only the wall copy's monotonic component.
+			pricingObservedAt := s.now()
+			pricingSelectedAt := pricingObservedAt.UTC()
+			if pricingObservedAt == pricingObservedAt.Round(0) {
+				// An injected wall-only clock still needs an independent elapsed
+				// witness; otherwise wall jumps subtract themselves to zero.
+				pricingObservedAt = time.Now()
+			}
 			var price domain.DeploymentPriceVersion
 			var captured domain.PriceSnapshot
 			var intent domain.PricePinIntent
 			price, captured, intent, err = pinStore.PrepareDeploymentPricePin(ctx, target.DeploymentID, forcedAttemptID, pricingSelectedAt, pricingObservedAt, s.pricingClockRollbackTolerance, s.pricingClockForwardTolerance)
 			if err == nil {
+				if intent.ClockForwardGapNanos > 0 {
+					s.logger.Warn("pricing clock observation gap accepted for unchanged free price", "deployment_id", target.DeploymentID, "price_version_id", intent.PriceVersionID, "clock_gap_ms", time.Duration(intent.ClockForwardGapNanos).Milliseconds())
+				}
 				reservation, leaseMode, snapshot, pricedTarget, err = accountingTermsFromSnapshot(price, captured, target, inputTokens, outputTokens)
 				pinIntent = &intent
 			} else if errors.Is(err, domain.ErrPriceUnavailable) {

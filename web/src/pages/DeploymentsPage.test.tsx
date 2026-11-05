@@ -2123,6 +2123,36 @@ describe("deployment price panel", () => {
     expect(screen.getByText("立即生效的价格版本无法取消，只能由之后新建的版本覆盖。")).toBeVisible();
     expect(screen.getByText("立即生效（从现在起按此价计费）")).toBeVisible();
   });
+  it("requires a reviewed clock recovery and identity proof, then submits the exact review", async () => {
+    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment("dep_1", { pricing_quarantined: true, pricing_quarantine_reason: "wall_clock_forward_jump" })], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    const confirmation = { revision: 4, reason: "wall_clock_forward_jump", price_id: "price_1", reviewed_at: "2026-11-04T12:00:00Z" };
+    vi.spyOn(api, "reviewClockDeploymentPricing").mockResolvedValue({ deployment_id: "dep_1", confirmation, previous_selected_at: "2026-11-04T11:59:00Z", price: activePriceVersion() });
+    const restore = vi.spyOn(api, "confirmClockDeploymentPricing").mockResolvedValue({ deployment_id: "dep_1", pricing_quarantine: false });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "复核并恢复计价" }));
+    const dialog = await screen.findByRole("dialog", { name: "复核并恢复计价" });
+    const submit = within(dialog).getByRole("button", { name: "复核并恢复计价" });
+    expect(await within(dialog).findByText(confirmation.reviewed_at)).toBeVisible();
+    expect(submit).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText("当前密码"), { target: { value: "pw" } });
+    await waitFor(() => expect(within(dialog).queryByText("正在加载…")).not.toBeInTheDocument());
+    expect(submit).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole("checkbox"));
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+    await waitFor(() => expect(restore).toHaveBeenCalledWith("dep_1", confirmation, { currentPassword: "pw", totpCode: "" }));
+  });
+
+  it("never offers a clock recovery write to a read-only account", async () => {
+    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment("dep_1", { pricing_quarantined: true, pricing_quarantine_reason: "wall_clock_rollback" })], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
+    renderPage("read_only");
+    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
+    expect(await screen.findByRole("button", { name: "复核并恢复计价" })).toBeDisabled();
+  });
+
 });
 
 function activePriceVersion(): DeploymentPriceVersion {

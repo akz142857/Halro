@@ -38,20 +38,26 @@ func (h DeploymentPricingHighWater) Validate() error {
 }
 
 type PricePinIntent struct {
-	AttemptID         string        `json:"attempt_id"`
-	DeploymentID      string        `json:"deployment_id"`
-	PriceVersionID    string        `json:"price_version_id"`
-	PriceVersion      uint64        `json:"price_version"`
-	SnapshotSHA256    string        `json:"snapshot_sha256"`
-	PricingSelectedAt time.Time     `json:"pricing_selected_at"`
-	MetadataRevision  uint64        `json:"metadata_revision"`
-	State             PricePinState `json:"state"`
-	LedgerSequence    uint64        `json:"ledger_sequence,omitempty"`
-	CreatedAt         time.Time     `json:"created_at"`
-	CommittedAt       *time.Time    `json:"committed_at,omitempty"`
+	// Nonzero only when an observed forward clock gap could not change this
+	// exact immutable free price. Diagnostic evidence, never a billing input.
+	ClockForwardGapNanos int64         `json:"clock_forward_gap_nanos,omitempty"`
+	AttemptID            string        `json:"attempt_id"`
+	DeploymentID         string        `json:"deployment_id"`
+	PriceVersionID       string        `json:"price_version_id"`
+	PriceVersion         uint64        `json:"price_version"`
+	SnapshotSHA256       string        `json:"snapshot_sha256"`
+	PricingSelectedAt    time.Time     `json:"pricing_selected_at"`
+	MetadataRevision     uint64        `json:"metadata_revision"`
+	State                PricePinState `json:"state"`
+	LedgerSequence       uint64        `json:"ledger_sequence,omitempty"`
+	CreatedAt            time.Time     `json:"created_at"`
+	CommittedAt          *time.Time    `json:"committed_at,omitempty"`
 }
 
 func (p PricePinIntent) Validate() error {
+	if p.ClockForwardGapNanos < 0 {
+		return errors.New("invalid pricing clock observation gap")
+	}
 	if strings.TrimSpace(p.AttemptID) == "" || strings.TrimSpace(p.DeploymentID) == "" || strings.TrimSpace(p.PriceVersionID) == "" ||
 		p.PriceVersion == 0 || !validSHA256Label(p.SnapshotSHA256) || p.PricingSelectedAt.IsZero() || p.PricingSelectedAt.Location() != time.UTC ||
 		p.MetadataRevision == 0 || p.CreatedAt.IsZero() || p.CreatedAt.Location() != time.UTC {

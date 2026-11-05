@@ -4,7 +4,7 @@
 - 段/功能：计价隔离（`internal/store/bolt/store_pricing.go` `confirmRestoredPricing`）
 - 分类：【问题】，代码确认
 - 发现方式：处理 V-013 时，为 E05d 解除 E05b 的隔离而查找途径
-- 状态：未修复，需要 owner 设计决定
+- 状态：已补充专用计价时钟复核恢复接口及离线维护命令；恢复协议与验证见 [恢复运行手册](../../../runbooks/clock-pricing-recovery.md)。下文保留原发现记录。
 
 ## 现象
 

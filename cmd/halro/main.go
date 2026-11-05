@@ -221,7 +221,7 @@ var topLevelCommands = []commandDescriptor{
 	{"key", "halro key <create|disable|rotate|rewrap|recover|slot> [flags]", "manage API and Master Key state"},
 	{"backup", "halro backup <create|verify|restore> [flags]", "create, verify, or restore encrypted backups"},
 	{"restore", "halro restore [flags]", "restore an encrypted backup (legacy alias)"},
-	{"pricing", "halro pricing migrate [flags]", "inspect or apply pricing migrations"},
+	{"pricing", "halro pricing <migrate|recover-clock> [flags]", "migrate pricing or recover a reviewed clock quarantine offline"},
 	{"usage", "halro usage <compact|verify|prune|rebuild-summary> [flags]", "maintain durable usage data"},
 	{"ledger", "halro ledger <verify|seal> [flags]", "verify or seal the accounting Ledger"},
 	{"route", "halro route <suspensions|clear-suspension> [flags]", "inspect or clear durable route suspensions"},
@@ -800,6 +800,9 @@ func run(arguments []string, logger *slog.Logger) error {
 			return fmt.Errorf("unknown cluster command %q", arguments[1])
 		}
 	case "pricing":
+		if len(arguments) > 1 && arguments[1] == "recover-clock" {
+			return runPricingClockRecovery(arguments[2:])
+		}
 		if len(arguments) < 2 || arguments[1] != "migrate" {
 			return errors.New("usage: halro pricing migrate --dry-run --report <path> | --resolution-file <path> --apply")
 		}

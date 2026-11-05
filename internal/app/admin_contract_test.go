@@ -68,6 +68,8 @@ func TestFrozenV1AdminRoutesAreRegistered(t *testing.T) {
 		"DELETE /admin/api/v1/route-suspensions/{}",
 		"GET /admin/api/v1/deployments/{}", "PUT /admin/api/v1/deployments/{}", "DELETE /admin/api/v1/deployments/{}", "POST /admin/api/v1/deployments/{}/test",
 		"POST /admin/api/v1/deployments/{}/capabilities/preflight",
+		// Clock-quarantine recovery is distinct from restored-backup confirmation.
+		"GET /admin/api/v1/deployments/{}/prices/clock-confirm", "POST /admin/api/v1/deployments/{}/prices/clock-confirm",
 		"GET /admin/api/v1/deployments/{}/prices", "POST /admin/api/v1/deployments/{}/prices", "POST /admin/api/v1/deployments/{}/prices/preview", "POST /admin/api/v1/deployments/{}/prices/restore-confirm", "POST /admin/api/v1/deployments/{}/prices/{}/cancel",
 		"GET /admin/api/v1/deployments/{}/price-proposals", "POST /admin/api/v1/deployments/{}/price-proposals", "POST /admin/api/v1/deployments/{}/price-proposals/{}/adopt", "POST /admin/api/v1/deployments/{}/price-proposals/{}/reject",
 		"GET /admin/api/v1/routes", "POST /admin/api/v1/routes",
