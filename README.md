@@ -38,7 +38,8 @@ provider access. Model discovery is separate from capability evidence.
 
 See the [provider capability contract](docs/contracts/provider-capabilities.md)
 and [per-profile API coverage](docs/compatibility/endpoint-manifests.json).
-Bedrock Runtime and Agent Runtime profiles are withheld in this build; use the
+Bedrock is offered through Mantle alone. The five Bedrock Runtime and Agent
+Runtime Profiles are withheld in this build; use the
 [AWS access-surface guide](docs/guides/aws-surface-selection.md) when configuring Bedrock.
 
 ## Quick start
