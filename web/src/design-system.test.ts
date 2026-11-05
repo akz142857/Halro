@@ -311,12 +311,13 @@ describe("design system themes", () => {
     expect(ruleBody(read("./styles.css"), ".governance-run-facts dd")).toMatch(/text-align:\s*left/);
   });
 
-  it("keeps gateway key scopes beside their legend instead of stretching the fieldset", () => {
+  it("keeps gateway key permissions grouped with full-row touch targets and visible focus", () => {
     const css = read("./styles.css");
     expect(ruleBody(css, ".gateway-key-scope-checks")).not.toMatch(/display:\s*flex/);
-    expect(ruleBody(css, ".gateway-key-scope-options")).toMatch(/display:\s*grid/);
-    expect(ruleBody(css, ".gateway-key-scope-options")).toMatch(/grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
-    expect(ruleBody(css, ".gateway-key-scope-checks > small")).toMatch(/display:\s*block/);
+    expect(ruleBody(css, ".gateway-key-scope-option")).toMatch(/min-height:\s*var\(--control-touch-block-size\)/);
+    expect(ruleBody(css, ".gateway-key-scope-option:focus-within")).toMatch(/outline:.*var\(--color-focus-ring\)/);
+    expect(ruleBody(css, ".gateway-key-scope-heading")).toMatch(/flex-wrap:\s*wrap/);
+    expect(ruleBody(css, ".gateway-key-scope-description")).toMatch(/overflow-wrap:\s*anywhere/);
   });
 
   // tokens.css states a 12px floor because CJK glyphs lose stroke separation

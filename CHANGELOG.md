@@ -6,6 +6,18 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- Gateway key creation presents permissions as grouped rows with translated
+  names and per-permission descriptions. Model access remains visible, while
+  optional Run governance permissions expand with a selected-count summary.
+
+### Fixed
+
+- Reject keyboard submission when no gateway key permissions are selected.
+  Freeze permission changes while creation is pending and restore editing
+  after a failed request, so displayed permissions match the submitted request.
+
 ## [0.12.2] - 2026-11-05
 
 ### Upgrading

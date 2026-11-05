@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "../api";
 import { PoliciesPage } from "./PoliciesPage";
@@ -467,7 +467,7 @@ describe("projects page", () => {
 
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
-    expect(screen.getByRole("checkbox", { name: "outcome:write" })).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: "调用模型" })).toBeVisible();
     const nameField = screen.getByLabelText(/密钥名称/);
     fireEvent.change(nameField, { target: { value: "service-a" } });
     fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
@@ -521,8 +521,8 @@ describe("projects page", () => {
 
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
-    const inference = screen.getByRole("checkbox", { name: "inference" });
-    const discovery = screen.getByRole("checkbox", { name: "discovery" });
+    const inference = screen.getByRole("checkbox", { name: "调用模型" });
+    const discovery = screen.getByRole("checkbox", { name: "发现模型" });
 
     expect(inference).toBeChecked();
     expect(discovery).not.toBeChecked();
@@ -532,6 +532,89 @@ describe("projects page", () => {
     fireEvent.click(inference);
     expect(inference).not.toBeChecked();
     expect(discovery).not.toBeChecked();
+    fireEvent.click(discovery);
+    expect(inference).toBeChecked();
+    expect(discovery).toBeChecked();
+    fireEvent.click(discovery);
+    expect(inference).toBeChecked();
+    expect(discovery).not.toBeChecked();
+  });
+
+  it("explains permissions individually and keeps collapsed governance selections in the key payload", async () => {
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [project()], next_cursor: "" } as never);
+    const mint = vi.spyOn(api, "createKey").mockResolvedValue({ data: { key: "gw_secret", metadata: gatewayKey() }, etag: "" } as never);
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
+    const scopes = screen.getByRole("group", { name: "权限范围" });
+    expect(within(scopes).getByRole("checkbox", { name: "调用模型" })).toBeChecked();
+    expect(within(scopes).getByRole("checkbox", { name: "发现模型" })).toHaveAccessibleDescription(/同时选中“调用模型”/);
+    const summary = within(scopes).getByText("运行治理");
+    // jsdom does not implement a summary's native toggle action.
+    const disclosure = summary.closest("details")!;
+    expect(disclosure.open).toBe(false);
+    expect(within(scopes).getByRole("checkbox", { name: "上报业务结果" })).not.toBeVisible();
+    disclosure.open = true;
+    fireEvent(disclosure, new Event("toggle"));
+    expect(within(scopes).getAllByRole("checkbox")).toHaveLength(7);
+    fireEvent.click(within(scopes).getByText("上报业务结果"));
+    expect(within(scopes).getByRole("checkbox", { name: "上报业务结果" })).toBeChecked();
+    expect(within(scopes).getByText("已选 1 项")).toBeVisible();
+    disclosure.open = false;
+    fireEvent(disclosure, new Event("toggle"));
+    expect(within(scopes).getByRole("checkbox", { name: "上报业务结果" })).not.toBeVisible();
+
+    fireEvent.change(screen.getByLabelText(/密钥名称/), { target: { value: "outcome-reporter" } });
+    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成密钥" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成密钥" }));
+    await waitFor(() => expect(mint).toHaveBeenCalledOnce());
+    expect(mint.mock.calls[0][5]).toEqual(["inference", "outcome:write"]);
+  });
+
+  it("refuses keyboard submission without scopes and permits an outcome-only key", async () => {
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [project()], next_cursor: "" } as never);
+    const mint = vi.spyOn(api, "createKey").mockResolvedValue({ data: { key: "gw_secret", metadata: gatewayKey() }, etag: "" } as never);
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
+    const name = screen.getByLabelText(/密钥名称/);
+    fireEvent.change(name, { target: { value: "outcomes-only" } });
+    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
+    const generate = screen.getByRole("button", { name: "生成密钥" });
+    await waitFor(() => expect(generate).toBeEnabled());
+    fireEvent.click(screen.getByRole("checkbox", { name: "调用模型" }));
+    expect(generate).toBeDisabled();
+    await act(async () => { fireEvent.submit(name.closest("form")!); });
+    expect(mint).not.toHaveBeenCalled();
+
+    const disclosure = screen.getByText("运行治理", { selector: ".disclosure-title" }).closest("details")!;
+    disclosure.open = true;
+    fireEvent(disclosure, new Event("toggle"));
+    fireEvent.click(screen.getByRole("checkbox", { name: "上报业务结果" }));
+    expect(generate).toBeEnabled();
+    fireEvent.submit(name.closest("form")!);
+    await waitFor(() => expect(mint).toHaveBeenCalledOnce());
+    expect(mint.mock.calls[0][5]).toEqual(["outcome:write"]);
+  });
+
+  it("freezes permissions while key creation is pending and restores them after an error", async () => {
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [project()], next_cursor: "" } as never);
+    let reject = (_error: unknown) => {};
+    const mint = vi.spyOn(api, "createKey").mockReturnValue(new Promise((_resolve, rejectCall) => { reject = rejectCall; }) as never);
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
+    fireEvent.change(screen.getByLabelText(/密钥名称/), { target: { value: "service-a" } });
+    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "生成密钥" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "生成密钥" }));
+    await waitFor(() => expect(mint).toHaveBeenCalledOnce());
+    const permissions = within(screen.getByRole("group", { name: "权限范围" })).getAllByRole("checkbox", { hidden: true });
+    expect(permissions).toHaveLength(7);
+    permissions.forEach((permission) => expect(permission).toBeDisabled());
+    await act(async () => { reject(new ApiError(503, "temporarily unavailable")); });
+    await screen.findByText("无法完成请求");
+    permissions.forEach((permission) => expect(permission).toBeEnabled());
+    expect(screen.getByRole("checkbox", { name: "调用模型" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "发现模型" })).not.toBeChecked();
   });
 
   it("carries one idempotency key so a retried create cannot mint a second credential", async () => {
