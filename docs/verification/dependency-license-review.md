@@ -493,6 +493,15 @@ are covered by the focused suites and the integrated Go validation.
   and container image.
 - Repeat this review whenever any dependency input below changes.
 
+The 2026-11-09 security refresh upgrades the Parquet compression dependencies
+`github.com/andybalholm/brotli` from 1.1.1 to 1.2.7 for
+[GO-2026-6888](https://pkg.go.dev/vuln/GO-2026-6888), and
+`github.com/klauspost/compress` from 1.18.7 to 1.20.2 for
+[GO-2026-6865](https://pkg.go.dev/vuln/GO-2026-6865). The module-path set is
+unchanged. Both root LICENSE files are byte-identical across the upgrades
+(MIT and BSD-3-Clause respectively), so the existing notices remain applicable.
+The project stays on Go 1.26.10, above both dependencies' minimum Go versions.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -504,8 +513,8 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `194923898968e6a48374d52c35055258fe92a835`
-- `go.sum`: `69591afe7d4f7536ec67aa9a0ffb0a74cac2bd31`
+- `go.mod`: `db6abd498fb64974bad246b41f6ad91694f10beb`
+- `go.sum`: `6974373d33f297850d5bd413385b325dd7df0dc9`
 - `web/package.json`: `02ec6b99b10700aeb8f594f17c17d293083be510`
 - `web/package-lock.json`: `8b3357e0973edbe288b24ae3285759b64e22aee7`
 - `tests/compatibility/go/go.mod`: `1c4e1c1932a91e12754cd98a7aded4784585788a`
