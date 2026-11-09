@@ -14,7 +14,12 @@ import { AccountingTimezoneForm } from "./AccountingTimezoneForm";
 // separators because four of them went unanswered.
 beforeAll(() => {
   const style = document.createElement("style");
-  style.textContent = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
+  // Load the real font tokens before their consumers, as main.tsx does.
+  // jsdom 31 resolves custom properties; styles.css alone leaves the font
+  // shorthand invalid and cannot exercise the actual application cascade.
+  style.textContent = ["src/design-system/tokens.css", "src/styles.css"]
+    .map((path) => readFileSync(resolve(process.cwd(), path), "utf8"))
+    .join("\n");
   document.head.appendChild(style);
 });
 
@@ -50,7 +55,9 @@ describe("accounting panel layout", () => {
     expect(value).not.toBeNull();
     const computed = getComputedStyle(value!);
     expect(computed.textAlign).toBe("left");
-    expect(computed.font).not.toMatch(/mono/);
+    expect(computed.fontFamily).toContain("sans-serif");
+    expect(computed.fontFamily).not.toMatch(/mono/);
+    expect(computed.fontSize).toBe("13px");
   });
 
   it("does not draw a separator above the first fact", () => {
