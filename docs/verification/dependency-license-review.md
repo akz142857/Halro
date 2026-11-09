@@ -508,6 +508,11 @@ The checksum updates also track its existing AWS SDK dependency family; no
 module paths are added or removed. These dependencies remain confined to the
 separate SDK contract-test module, outside the distributed Halro binary.
 
+The 2026-11-09 Python OpenAI contract-test update moves 3.39.0 to 3.42.1.
+The wheel's Apache-2.0 root license and vendored httpx-aiohttp BSD license
+are byte-identical to 3.39.0. No transitive dependency version changes.
+This SDK remains test-only, outside the distributed application.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -527,8 +532,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `tests/compatibility/go/go.sum`: `143e853813d133ca51a3072792146408073101e9`
 - `tests/compatibility/node/package.json`: `1707407145cdb431c81ca6931a415ad1d24abc0e`
 - `tests/compatibility/node/package-lock.json`: `e33d541775b7ca490fddcc978ac498427441aa65`
-- `tests/compatibility/python/requirements.in`: `91c3a2e8bf3904f753e071757f29f1822e76dd23`
-- `tests/compatibility/python/requirements.txt`: `940602350781551db8d1333a464f9fe8eb05f7c3`
+- `tests/compatibility/python/requirements.in`: `dde47408207636b179e7e6e7d72022739858a227`
+- `tests/compatibility/python/requirements.txt`: `cc3a07dad37af5125b9d7b2a064679ccd59e5161`
 
 The Python lock hash last moved for the 2026-10-24 `filelock` refresh. All ten
 hashes moved before that for the 2026-10-23 refreshes recorded above, and
