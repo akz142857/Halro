@@ -6,17 +6,44 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-10
+
+### Upgrading
+
+- No configuration or metadata-schema migration is required from v0.12.2.
+  Existing projects, gateway keys, routes and accounting data retain their
+  settings. Keep the usual consistent backup and separately stored Master Key.
+- High availability remains experimental and is not supported in production.
+
 ### Changed
 
-- Gateway key creation presents permissions as grouped rows with translated
-  names and per-permission descriptions. Model access remains visible, while
-  optional Run governance permissions expand with a selected-count summary.
+- Reorganize the console navigation into configuration, activity and system
+  groups, with a compact account menu for settings and sign-out.
+- Make deployment, activity, usage and Run governance lists easier to scan with
+  quick views, visible filter chips and URL-backed filters. Usage adds Today
+  and Last hour shortcuts while retaining accounting-time-zone semantics.
+- Align primary tabs with the existing provider and credential pages, retain
+  secondary status filters, and place Refresh beside list controls without
+  redundant loaded-count and last-updated labels.
+- Present gateway key permissions as grouped rows with translated names and
+  descriptions. Model access remains visible, while optional Run governance
+  permissions expand with a selected-count summary.
+- Update the AWS SDK and console dependencies, and expand official SDK
+  compatibility coverage to the reviewed OpenAI and Anthropic releases.
+- Simplify the README and add an English console preview.
 
 ### Fixed
 
+- Keep the sidebar account controls within the navigation layout, with outside
+  click, focus and Escape dismissal for the account menu.
 - Reject keyboard submission when no gateway key permissions are selected.
   Freeze permission changes while creation is pending and restore editing
   after a failed request, so displayed permissions match the submitted request.
+
+### Security
+
+- Upgrade Brotli to 1.2.7 and klauspost/compress to 1.20.2 to address
+  GO-2026-6888 and GO-2026-6865 in the Parquet compression dependency chain.
 
 ## [0.12.2] - 2026-11-05
 
@@ -2935,6 +2962,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.13.0]: https://github.com/akz142857/Halro/compare/v0.12.2...v0.13.0
 [0.12.2]: https://github.com/akz142857/Halro/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/akz142857/Halro/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/akz142857/Halro/compare/v0.11.0...v0.12.0
