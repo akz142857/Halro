@@ -26,6 +26,8 @@ import type { TFunction } from "i18next";
 import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
 
+import { FilterChips, ListRefresh, ListViews, useListQuery } from "../ListControls";
+
 const PAGE_SIZE = "100";
 
 function pageQuery(cursor: string, limit = PAGE_SIZE) {
@@ -62,6 +64,17 @@ export function OperationsPage() {
     getNextPageParam: (page) => page.next_cursor || undefined,
   });
   const auditRecords = audit.data?.pages.flatMap((page) => page.items) ?? [];
+  const { params, update } = useListQuery();
+  const auditSearch = params.get("q") ?? "";
+  const auditView = ["attention", "success"].includes(params.get("audit_view") ?? "") ? params.get("audit_view")! : "all";
+  const visibleAudit = auditRecords.filter((record) => {
+    if (auditView === "success" && record.outcome !== "success") return false;
+    if (auditView === "attention" && record.outcome === "success") return false;
+    return !auditSearch.trim() || [record.action, record.actor_id, record.target_id, record.target_type, record.reason_code,
+      auditTerm(t, "actions", record.action), auditTerm(t, "outcomes", record.outcome), auditTerm(t, "targets", record.target_type)]
+      .some((value) => value?.toLocaleLowerCase().includes(auditSearch.trim().toLocaleLowerCase()));
+  });
+  const clearAuditFilters = () => update({ q: "", audit_view: "" });
   // The server truncates an unpaged list at 50. A webhook past that point cannot be
   // edited, disabled or deleted from anywhere in the console.
   const alerts = useInfiniteQuery({
@@ -120,14 +133,27 @@ export function OperationsPage() {
             {audit.isSuccess ? t("operations.chainActive") : t("operations.chainUnverified")}
           </span>
         </header>
+        <div className="list-workbench audit-workbench">
+        <ListViews label={t("listControls.views")} value={auditView} items={[
+          { key: "all", label: t("listControls.auditAll"), icon: "all" },
+          { key: "attention", label: t("listControls.auditAttention"), icon: "error" },
+          { key: "success", label: t("listControls.auditSuccess"), icon: "check" },
+        ]} onChange={(value) => update({ audit_view: value === "all" ? "" : value }, false)} trailing={<ListRefresh busy={audit.isFetching} onRefresh={() => void audit.refetch()} />} />
+        <div className="audit-search-toolbar"><label><span>{t("listControls.searchAudit")}</span><input type="search" value={auditSearch} placeholder={t("listControls.auditPlaceholder")} onChange={(event) => update({ q: event.target.value })} /></label><span>{t("listControls.matching", { visible: visibleAudit.length, total: auditRecords.length })}</span></div>
+        {audit.hasNextPage && <p className="list-scope-note">{t("listControls.auditScope")}</p>}
+        <FilterChips items={[
+          ...(auditSearch ? [{ key: "search", label: `${t("common.search")}: ${auditSearch}`, clear: () => update({ q: "" }) }] : []),
+          ...(auditView !== "all" ? [{ key: "view", label: t(auditView === "attention" ? "listControls.auditAttention" : "listControls.auditSuccess"), clear: () => update({ audit_view: "" }) }] : []),
+        ]} onClear={clearAuditFilters} />
         {audit.isPending && <Loading />}
         {audit.isError && <ErrorState error={audit.error} />}
         {audit.isSuccess && auditRecords.length === 0 && (
           <EmptyState title={t("operations.auditEmptyTitle")} />
         )}
-        {auditRecords.length > 0 && (
+        {auditRecords.length > 0 && visibleAudit.length === 0 && <EmptyState title={t("listControls.noMatches")} action={<button type="button" className="button ghost" onClick={clearAuditFilters}>{t("listControls.clear")}</button>}>{t("listControls.noMatchesHint")}</EmptyState>}
+        {visibleAudit.length > 0 && (
           <div className="timeline" role="list" aria-label={t("operations.auditTrail")}>
-            {auditRecords.map((record) => (
+            {visibleAudit.map((record) => (
               <article key={record.sequence} role="listitem">
                 <span className="timeline-sequence">#{record.sequence}</span>
                 <span className={`timeline-mark ${outcomeTone(record.outcome)}`} />
@@ -153,6 +179,7 @@ export function OperationsPage() {
             onLoad={audit.fetchNextPage}
           />
         )}
+        </div>
       </section>
       {editing && (
         <AlertForm
