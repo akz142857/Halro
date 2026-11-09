@@ -1,20 +1,22 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState, type Dispatch, type KeyboardEvent, type SetStateAction } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api } from "../api";
 import { EmptyState, ErrorState, Loading, LoadMore, Modal, PageHeader, StatusDot } from "../components";
 import { compactNumber, money, useInstantFormatter } from "../format";
-import { Link, navigate, useNavigationLocation } from "../navigation";
+import { Link, navigate } from "../navigation";
 import { useTranslation } from "react-i18next";
-import { accountingTimeZone, isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
+import { isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
 import { FailureDetailDrawer, providerAttributionFacts, providerIdentifierFacts } from "./FailureDetailDrawer";
 import { UsageFailuresPanel } from "./UsageFailuresPanel";
 import { UsageSummaryPanel } from "./UsageSummaryPanel";
 import { attemptFailureLabel, errorClassAdvice, upstreamStatus } from "../failure";
 import type { Deployment, PriceScheduleTier, Project, UsageAttempt } from "../types";
 
+import { FilterChips, ListRefresh, ListViews, useListQuery } from "../ListControls";
+
 const usageTabs = ["summary", "failures", "attempts"] as const;
 type UsageTab = (typeof usageTabs)[number];
-type UsageTimeRange = "all" | "1h" | "24h" | "7d" | "custom";
+type UsageTimeRange = "all" | "today" | "1h" | "24h" | "7d" | "custom";
 
 function useDebouncedValue<T>(value: T, delay = 300) {
   const [debounced, setDebounced] = useState(value);
@@ -34,7 +36,7 @@ function hasAbsoluteRange(params: URLSearchParams) {
 // the operator would then have to leave.
 const attemptFilterParams = [
   "request_id", "project_id", "model", "provider_id", "offering_id", "provider_model", "deployment_id",
-  "status", "start", "end",
+  "status", "start", "end", "time_range",
 ];
 
 function usageTabFromURL(): UsageTab {
@@ -49,8 +51,8 @@ const usagePanelID = (tab: UsageTab) => `usage-panel-${tab}`;
 
 export function UsagePage() {
   const { t } = useTranslation();
-  const navigationLocation = useNavigationLocation();
-  const [tab, setTab] = useState<UsageTab>(usageTabFromURL);
+  const { params, update } = useListQuery();
+  const tab = usageTabFromURL();
   const dateTime = useInstantFormatter();
   // Every project ever billed can show up in Usage history, including a
   // disabled or since-deleted one, so this list is unfiltered — narrowing it
@@ -74,36 +76,31 @@ export function UsagePage() {
     () => Object.fromEntries((deployments.data?.items ?? []).map((item) => [item.id, item.name])),
     [deployments.data?.items],
   );
-  const [status, setStatus] = useState(() => new URLSearchParams(window.location.search).get("status") ?? "");
-  const [model, setModel] = useState(() => new URLSearchParams(window.location.search).get("model") ?? "");
-  const [providerModel, setProviderModel] = useState(() => new URLSearchParams(window.location.search).get("provider_model") ?? "");
-  // No control of its own. It was a free-text box wanting an opaque
-  // `provider_...` ID, which nobody has to hand — the deployment select beside
-  // it answers the same question by name and identifies the target more
-  // precisely, since one provider serves several. The filter still applies when
-  // the summary's provider row links here, and then it is shown as something
-  // that can be cleared: a filter with no visible control is how a table comes
-  // to look empty for no reason.
-  const [providerID, setProviderID] = useState(() => new URLSearchParams(window.location.search).get("provider_id") ?? "");
-  const [offeringID, setOfferingID] = useState(() => new URLSearchParams(window.location.search).get("offering_id") ?? "");
-  const [requestID, setRequestID] = useState(() => new URLSearchParams(window.location.search).get("request_id") ?? "");
-  const [projectID, setProjectID] = useState(() => new URLSearchParams(window.location.search).get("project_id") ?? "");
-  const [deploymentID, setDeploymentID] = useState(() => new URLSearchParams(window.location.search).get("deployment_id") ?? "");
+  const field = (key: string): [string, (value: string) => void] => [params.get(key) ?? "", (value) => update({ [key]: value })];
+  const [status, setStatus] = field("status");
+  const [model, setModel] = field("model");
+  const [providerModel, setProviderModel] = field("provider_model");
+  const [providerID, setProviderID] = field("provider_id");
+  const [offeringID, setOfferingID] = field("offering_id");
+  const [requestID, setRequestID] = field("request_id");
+  const [projectID, setProjectID] = field("project_id");
+  const [deploymentID, setDeploymentID] = field("deployment_id");
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
-  const [timeRange, setTimeRange] = useState<UsageTimeRange>(() => hasAbsoluteRange(new URLSearchParams(window.location.search)) ? "custom" : "all");
   const timeZone = useAccountingTimeZone();
-  // A summary row links here with the absolute interval it covered. The inputs
-  // are wall-clock in the accounting zone, so the instants are converted once
-  // on arrival rather than being reconstructed from a date label — the same
-  // label under two generations of the zone is two different windows.
-  const [start, setStart] = useState(() => isoToZonedInput(
-    new URLSearchParams(window.location.search).get("start") ?? undefined, accountingTimeZone()));
-  const [end, setEnd] = useState(() => isoToZonedInput(
-    new URLSearchParams(window.location.search).get("end") ?? undefined, accountingTimeZone()));
+  const requestedRange = params.get("time_range") as UsageTimeRange;
+  const timeRange: UsageTimeRange = ["today", "1h", "24h", "7d"].includes(requestedRange) && hasAbsoluteRange(params) ? requestedRange : hasAbsoluteRange(params) || requestedRange === "custom" ? "custom" : "all";
+  const start = isoToZonedInput(params.get("start") ?? undefined, timeZone);
+  const end = isoToZonedInput(params.get("end") ?? undefined, timeZone);
+  const setStart = (value: string) => update({ start: value ? zonedInputToISO(value, timeZone) : "", time_range: "custom" });
+  const setEnd = (value: string) => update({ end: value ? zonedInputToISO(value, timeZone) : "", time_range: "custom" });
+  // Keep exact instants from deep links and shortcuts. datetime-local fields
+  // display minutes, but must not truncate the query until the operator edits.
+  const startInstant = start ? new Date(params.get("start")!).toISOString() : "";
+  const endInstant = end ? new Date(params.get("end")!).toISOString() : "";
   const debouncedRequestID = useDebouncedValue(requestID);
   const debouncedProviderModel = useDebouncedValue(providerModel);
   const usage = useInfiniteQuery({
-    queryKey: ["usage", status, model, debouncedProviderModel, providerID, offeringID, deploymentID, debouncedRequestID, projectID, start, end, timeZone],
+    queryKey: ["usage", status, model, debouncedProviderModel, providerID, offeringID, deploymentID, debouncedRequestID, projectID, startInstant, endInstant],
     initialPageParam: "",
     queryFn: ({ pageParam }) => api.usage(`?${new URLSearchParams({
       limit: "100", ...(status ? { status } : {}), ...(model ? { model } : {}), ...(debouncedRequestID ? { request_id: debouncedRequestID } : {}),
@@ -112,8 +109,8 @@ export function UsagePage() {
       ...(offeringID ? { offering_id: offeringID } : {}),
       ...(deploymentID ? { deployment_id: deploymentID } : {}),
       ...(debouncedProviderModel ? { provider_model: debouncedProviderModel } : {}),
-      ...(start ? { start: zonedInputToISO(start, timeZone) } : {}),
-      ...(end ? { end: zonedInputToISO(end, timeZone) } : {}),
+      ...(startInstant ? { start: startInstant } : {}),
+      ...(endInstant ? { end: endInstant } : {}),
       ...(pageParam ? { cursor: pageParam } : {}),
     })}`),
     getNextPageParam: (page) => page.next_cursor || undefined,
@@ -121,31 +118,16 @@ export function UsagePage() {
   const attempts = usage.data?.pages.flatMap((page) => page.items) ?? [];
   const activeFilterCount = [requestID, projectID, model, deploymentID, providerModel, status, providerID, offeringID]
     .filter(Boolean).length + (start || end ? 1 : 0);
-  const clearFilters = () => {
-    setRequestID("");
-    setProjectID("");
-    setModel("");
-    setDeploymentID("");
-    setProviderModel("");
-    setStatus("");
-    setStart("");
-    setEnd("");
-    setTimeRange("all");
-    setProviderID("");
-    setOfferingID("");
-  };
+  const clearFilters = () => update(Object.fromEntries(attemptFilterParams.map((key) => [key, ""])));
   const selectTimeRange = (next: UsageTimeRange) => {
-    setTimeRange(next);
-    if (next === "custom") return;
-    if (next === "all") {
-      setStart("");
-      setEnd("");
-      return;
-    }
-    const duration = next === "1h" ? 60 * 60 * 1000 : next === "24h" ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
-    const now = Date.now();
-    setStart(isoToZonedInput(new Date(now - duration).toISOString(), timeZone));
-    setEnd(isoToZonedInput(new Date(now).toISOString(), timeZone));
+    if (next === "custom") { update({ time_range: "custom" }); return; }
+    if (next === "all") { update({ start: "", end: "", time_range: "" }); return; }
+    const now = new Date();
+    const duration = next === "1h" ? 3600000 : next === "24h" ? 86400000 : 7 * 86400000;
+    const from = next === "today"
+      ? zonedInputToISO(`${isoToZonedInput(now.toISOString(), timeZone).slice(0, 10)}T00:00`, timeZone)
+      : new Date(now.getTime() - duration).toISOString();
+    update({ start: from, end: now.toISOString(), time_range: next }, false);
   };
   // A route that has since been deleted still has history, and its alias would
   // otherwise be unreachable from here — the same reason the project list above
@@ -161,21 +143,6 @@ export function UsagePage() {
     if (model) aliases.add(model);
     return [...aliases].sort((left, right) => left.localeCompare(right));
   }, [routes.data?.items, usage.data?.pages, model]);
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    setTab(usageTabFromURL());
-    setStatus(params.get("status") ?? "");
-    setModel(params.get("model") ?? "");
-    setProviderModel(params.get("provider_model") ?? "");
-    setProviderID(params.get("provider_id") ?? "");
-    setOfferingID(params.get("offering_id") ?? "");
-    setRequestID(params.get("request_id") ?? "");
-    setProjectID(params.get("project_id") ?? "");
-    setDeploymentID(params.get("deployment_id") ?? "");
-    setStart(isoToZonedInput(params.get("start") ?? undefined, accountingTimeZone()));
-    setEnd(isoToZonedInput(params.get("end") ?? undefined, accountingTimeZone()));
-    setTimeRange(hasAbsoluteRange(params) ? "custom" : "all");
-  }, [navigationLocation]);
   const selectTab = (next: UsageTab) => {
     if (next === tab) return;
     const url = new URL(window.location.href);
@@ -219,7 +186,7 @@ export function UsagePage() {
     status ? { key: "status", label: `${t("usage.status")}: ${status === "success" ? t("usage.success") : t("usage.error")}`, clear: () => setStatus("") } : null,
     start || end ? {
       key: "time", label: `${t("usage.timeRange")}: ${timeRange === "custom" ? `${start || "…"} – ${end || "…"}` : t(`usage.timeRanges.${timeRange}`)}`,
-      clear: () => { setStart(""); setEnd(""); setTimeRange("all"); },
+      clear: () => selectTimeRange("all"),
     } : null,
     deploymentID ? { key: "deployment", label: `${t("usage.deployment")}: ${deploymentNames[deploymentID] || deploymentID}`, clear: () => setDeploymentID("") } : null,
     providerModel ? { key: "provider-model", label: `${t("usage.actualModel")}: ${providerModel}`, clear: () => setProviderModel("") } : null,
@@ -234,7 +201,7 @@ export function UsagePage() {
       <PageHeader
         title={t("usage.title")}
       />
-      <div className="provider-tabs-shell">
+      <div className="provider-tabs-shell usage-tabs-shell">
         <div className="provider-tabs" role="tablist" aria-label={t("usage.views")} onKeyDown={onTabKeys}>
           {usageTabs.map((key) => (
             <button
@@ -261,6 +228,14 @@ export function UsagePage() {
       )}
       {tab === "attempts" && (
       <section className="usage-attempts-panel" role="tabpanel" id={usagePanelID("attempts")} aria-labelledby={usageTabID("attempts")}>
+      <div className="list-workbench">
+      <ListViews label={t("listControls.views")} value={status || "all"} items={[
+        { key: "all", label: t("listControls.all"), icon: "all" },
+        { key: "error", label: t("listControls.failures"), icon: "error" },
+        { key: "success", label: t("usage.success"), icon: "check" },
+      ]} onChange={(value) => update({ status: value === "all" ? "" : value }, false)} trailing={<><div className="list-time-views">
+        {(["today", "1h"] as const).map((range) => <button type="button" className="list-view" key={range} aria-pressed={timeRange === range} onClick={() => selectTimeRange(range)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v4l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>{t(`usage.timeRanges.${range}`)}</button>)}
+      </div><ListRefresh busy={usage.isFetching} onRefresh={() => { if (["today", "1h", "24h", "7d"].includes(timeRange)) selectTimeRange(timeRange); else void usage.refetch(); }} /></>} />
       <div className="usage-filter-panel">
         <div className="usage-filter-content" id="usage-attempt-filters">
           <div className="usage-filter-toolbar">
@@ -269,11 +244,7 @@ export function UsagePage() {
               {t("usage.filtersTitle")}{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
             </button>
           </div>
-          {appliedFilters.length > 0 && (
-            <div className="usage-applied-filters" aria-label={t("usage.appliedFilters")}>
-              {appliedFilters.map((filter) => <button type="button" className="filter-chip" key={filter.key} onClick={filter.clear}>{filter.label}<span aria-hidden="true"> ×</span></button>)}
-            </div>
-          )}
+          <FilterChips items={appliedFilters} onClear={clearFilters} />
         </div>
         {mobileFiltersOpen && (
           <Modal drawer title={t("usage.filtersTitle")} onClose={() => setMobileFiltersOpen(false)}>
@@ -382,6 +353,7 @@ export function UsagePage() {
           </div>
         </div>
       )}
+      </div>
       </section>
       )}
     </>
@@ -398,15 +370,15 @@ function UsageAttemptFilterFields({
   projects: Project[];
   deployments: Deployment[];
   models: string[];
-  requestID: string; setRequestID: Dispatch<SetStateAction<string>>;
-  projectID: string; setProjectID: Dispatch<SetStateAction<string>>;
-  model: string; setModel: Dispatch<SetStateAction<string>>;
-  status: string; setStatus: Dispatch<SetStateAction<string>>;
+  requestID: string; setRequestID: (value: string) => void;
+  projectID: string; setProjectID: (value: string) => void;
+  model: string; setModel: (value: string) => void;
+  status: string; setStatus: (value: string) => void;
   timeRange: UsageTimeRange; setTimeRange: (range: UsageTimeRange) => void;
-  start: string; setStart: Dispatch<SetStateAction<string>>;
-  end: string; setEnd: Dispatch<SetStateAction<string>>;
-  deploymentID: string; setDeploymentID: Dispatch<SetStateAction<string>>;
-  providerModel: string; setProviderModel: Dispatch<SetStateAction<string>>;
+  start: string; setStart: (value: string) => void;
+  end: string; setEnd: (value: string) => void;
+  deploymentID: string; setDeploymentID: (value: string) => void;
+  providerModel: string; setProviderModel: (value: string) => void;
   deploymentNames: Record<string, string>;
   showAdvanced: boolean;
 }) {
@@ -441,6 +413,7 @@ function UsageAttemptFilterFields({
           <span>{t("usage.timeRange")}</span>
           <select value={timeRange} onChange={(event) => setTimeRange(event.target.value as UsageTimeRange)}>
             <option value="all">{t("usage.timeRanges.all")}</option>
+            <option value="today">{t("usage.timeRanges.today")}</option>
             <option value="1h">{t("usage.timeRanges.1h")}</option>
             <option value="24h">{t("usage.timeRanges.24h")}</option>
             <option value="7d">{t("usage.timeRanges.7d")}</option>

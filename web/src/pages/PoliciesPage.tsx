@@ -359,6 +359,7 @@ function PolicyForm({
         if (Object.keys(nextErrors).some((key) => key.startsWith("ewma"))) setAdvancedSettings(true);
         if (!Object.keys(nextErrors).length) mutation.mutate();
       }}>
+        <div className="configuration-layout"><div className="configuration-fields">
         {!!Object.keys(errors).length && <div className="policy-error-summary" role="alert">{t("policies.errorSummary", { count: Object.keys(errors).length })}</div>}
         <section className="policy-form-section policy-basics-section">
           <div className="policy-basics-name">
@@ -420,6 +421,17 @@ function PolicyForm({
         </section>
         {mutation.isError && !stepUp.probing && <ErrorState error={mutation.error} />}
         {stepUp.asked && <ReauthFields values={stepUp.values} onChange={stepUp.setValues} description={t("auth.stepUpSecurityControl")} />}
+        </div><aside className="configuration-summary" aria-label={t("listControls.summary")}>
+          <h3>{t("listControls.summary")}</h3><p>{t("listControls.summaryHint")}</p>
+          <dl>
+            <div><dt>{t("policies.name")}</dt><dd>{name.trim() || t("listControls.unnamed")}</dd></div>
+            <div><dt>{t("policies.action")}</dt><dd>{policyActionLabel(t, action)}</dd></div>
+            <div><dt>{t("policies.requestLimit")}</dt><dd>{requestTokens > 0 ? compactNumber(requestTokens) : t("common.disabled")}</dd></div>
+            <div><dt>{t("policies.minuteLimit")}</dt><dd>{tokensPerMinute > 0 ? compactNumber(tokensPerMinute) : t("common.disabled")}</dd></div>
+            <div><dt>{t("policies.costLimit")}</dt><dd>{costPerMinute > 0 ? money(Math.round(costPerMinute * 1000000)) : t("common.disabled")}</dd></div>
+            <div><dt>{t("common.status")}</dt><dd>{t(enabled ? "common.enabled" : "common.disabled")}</dd></div>
+          </dl>
+        </aside></div>
         <div className="form-actions sticky-form-actions">
           <div className="form-footer-state">
             <label className="form-footer-enable">

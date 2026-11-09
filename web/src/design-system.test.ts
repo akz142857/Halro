@@ -100,7 +100,6 @@ describe("design system themes", () => {
       "--color-action-primary",
       "--color-accent",
       "--color-action-primary-hover",
-      "--color-action-secondary",
       "--color-focus-ring",
       "--color-status-success-text",
       "--color-status-warning-text",
@@ -132,13 +131,12 @@ describe("design system themes", () => {
   // these means deleting its line here, so the list can only shrink.
   //
   // Everything on it is a role the specification requires (`--color-text-inverse`,
-  // `--color-surface-overlay`, `--color-status-*-icon`, `--color-action-secondary`)
+  // `--color-surface-overlay`, `--color-status-*-icon`)
   // or a shell constant a page has not needed yet. The status *-icon entries are
   // the tail of the four-part status pattern: success, warning and danger draw an
   // icon, info, neutral and unknown do not yet. None of them is licence to add
   // another.
   const reviewedUnconsumedRoles = [
-    "--color-action-secondary",
     "--color-chart-tooltip",
     "--color-status-info-icon",
     "--color-status-neutral-icon",
@@ -277,7 +275,8 @@ describe("design system themes", () => {
   // --layout-page-inline / --layout-page-block-end.
   // 691 → 679 as concise page headers, forms and the workbench adopt spacing tokens.
   // 679 → 669 as the task-focused developer workbench adopts shared spacing.
-  const bareSizeValueBaseline = 669;
+  // 669 → 663 as the account disclosure adopts shared spacing.
+  const bareSizeValueBaseline = 663;
 
   it("does not add bare spacing or radius values beyond the current baseline", () => {
     const styles = read("./styles.css") + read("./pages/ProjectAIIntegration.css") + read("./design-system/resource-list.css") + read("./design-system/resource-card.css");

@@ -72,30 +72,59 @@ func TestPeerSessionHeartbeatKeepsIdleAuthenticatedPeersConnected(t *testing.T) 
 }
 
 func TestPeerSessionDoesNotSendHeartbeatToVersionOnePeer(t *testing.T) {
-	client, server := heartbeatTestSessions(t, false)
-	if client.heartbeats || server.heartbeats {
-		t.Fatal("heartbeat was enabled for a peer advertising protocol maximum 1")
+	for _, direction := range []string{"primary-to-replica", "replica-to-primary"} {
+		t.Run(direction, func(t *testing.T) {
+			client, server := heartbeatTestSessions(t, false)
+			// net.Pipe has no socket buffer. Once its reader exits, TLS Close
+			// can spend five seconds trying to write close_notify. That is
+			// independent of the read deadline this test is asserting.
+			t.Cleanup(func() {
+				_ = client.conn.NetConn().Close()
+				_ = server.conn.NetConn().Close()
+			})
+			if client.heartbeats || server.heartbeats {
+				t.Fatal("heartbeat was enabled for a peer advertising protocol maximum 1")
+			}
+			reader, writer := server, client
+			if direction == "replica-to-primary" {
+				reader, writer = client, server
+			}
+			if err := writer.Send(encodeHeartbeat()); err == nil || !strings.Contains(err.Error(), "owned by the session writer") {
+				t.Fatalf("application-supplied heartbeat error=%v", err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			reads := make(chan error, 1)
+			writes := make(chan error, 1)
+			// Exercise the real reader and writer without Run's subsequent TLS
+			// shutdown. An unsolicited heartbeat would fail this read with a
+			// negotiation error instead of the required idle read timeout.
+			go func() {
+				reads <- reader.readLoop(ctx, func(context.Context, Hello, StreamRecord) error {
+					return errors.New("unexpected application record from idle legacy peer")
+				})
+			}()
+			go func() { writes <- writer.writeLoop(ctx) }()
+			select {
+			case err := <-reads:
+				var timeout net.Error
+				if !errors.As(err, &timeout) || !timeout.Timeout() {
+					t.Fatalf("legacy idle peer ended for a reason other than its original read timeout: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("legacy peer did not retain its bounded read timeout")
+			}
+			cancel()
+			select {
+			case err := <-writes:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("legacy writer stopped before cancellation: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("legacy writer did not stop after cancellation")
+			}
+		})
 	}
-	if err := client.Send(encodeHeartbeat()); err == nil || !strings.Contains(err.Error(), "owned by the session writer") {
-		t.Fatalf("application-supplied heartbeat error=%v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	runs := make(chan error, 2)
-	handler := func(context.Context, Hello, StreamRecord) error { return nil }
-	go func() { runs <- client.Run(ctx, handler) }()
-	go func() { runs <- server.Run(ctx, handler) }()
-	select {
-	case err := <-runs:
-		var timeout net.Error
-		if !errors.As(err, &timeout) || !timeout.Timeout() {
-			t.Fatalf("legacy idle peer ended for a reason other than its original read timeout: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("legacy peer did not retain its bounded read timeout")
-	}
-	cancel()
-	<-runs
 }
 
 func TestPeerSessionRejectsUnnegotiatedHeartbeat(t *testing.T) {

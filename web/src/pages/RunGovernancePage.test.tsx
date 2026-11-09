@@ -356,3 +356,33 @@ describe("RunGovernancePage", () => {
     expect(summary).not.toHaveBeenCalled();
   });
 });
+
+describe("governance list view restoration", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    rememberGovernanceProject("");
+    window.history.replaceState({}, "", "/admin/run-governance?project_id=p&view=work-units&filter=active");
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [{ id: "p", name: "Project", run_governance: { enabled: true } }] as never, next_cursor: "" });
+    vi.spyOn(api, "keys").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "outcomeDefinitions").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "outcomes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "runs").mockResolvedValue({ items: [{ id: "r", work_unit_id: "active-unit", status: "active", budget_state: "available" }] as never, next_cursor: "" });
+    vi.spyOn(api, "workUnits").mockResolvedValue({ items: [
+      { id: "active-unit", status: "open", created_at: "2026-11-09T10:00:00Z", outcome_definitions: [] },
+      { id: "closed-unit", status: "closed", created_at: "2026-11-09T09:00:00Z", outcome_definitions: [{ id: "required", version: 1 }] },
+    ] as never, next_cursor: "" });
+  });
+  it("restores a linked view and clears its constraint without reopening the page", async () => {
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><RunGovernancePage /></QueryClientProvider>);
+    expect(await screen.findByText("active-unit")).toBeVisible();
+    expect(screen.queryByText("closed-unit")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "缺少结果" }));
+    expect(await screen.findByText("closed-unit")).toBeVisible();
+    expect(screen.queryByText("active-unit")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "清除筛选" }));
+    expect(screen.getByText("active-unit")).toBeVisible();
+    expect(screen.getByText("closed-unit")).toBeVisible();
+    expect(new URLSearchParams(window.location.search).get("project_id")).toBe("p");
+    expect(new URLSearchParams(window.location.search).has("filter")).toBe(false);
+  });
+});

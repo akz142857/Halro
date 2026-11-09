@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Layout } from "../Layout";
 import i18n, { applyPreference } from ".";
@@ -251,6 +251,7 @@ describe("admin internationalization", () => {
       </QueryClientProvider>,
     );
     expect(screen.getByRole("link", { name: "运行总览" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /admin\s*本地管理员/ }));
     expect(screen.getByRole("button", { name: "退出登录" })).toBeVisible();
     expect(screen.queryByRole("link", { name: "Overview" })).not.toBeInTheDocument();
 

@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { FilterChips, ListViews, useListQuery } from "../../ListControls";
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { EmptyState, ErrorState, Loading, Modal } from "../../components";
 import { money, useInstantFormatter } from "../../format";
@@ -66,8 +67,12 @@ export function WorkUnitExplorer({
 }) {
   const { t } = useTranslation();
   const dateTime = useInstantFormatter();
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState(initialFilter === "open" ? "open" : "");
+  const { params, update } = useListQuery();
+  const search = params.get("q") ?? "";
+  const status = params.get("status") ?? "";
+  const setSearch = (value: string) => update({ q: value });
+  const setStatus = (value: string) => update({ status: value });
+  const clear = () => update({ q: "", status: "", filter: "" });
   const selectedUnit = workUnits.find((item) => item.id === selectedWorkUnitID);
   const selectedRun = runs.find((item) => item.id === selectedRunID && item.work_unit_id === selectedWorkUnitID);
   const selectedUnitRuns = runs.filter((item) => item.work_unit_id === selectedWorkUnitID);
@@ -75,6 +80,7 @@ export function WorkUnitExplorer({
   const filtered = useMemo(() => workUnits.filter((unit) => {
     const unitRuns = runs.filter((run) => run.work_unit_id === unit.id);
     if (status && unit.status !== status) return false;
+    if (initialFilter === "open" && unit.status !== "open") return false;
     if (search && !`${unit.id} ${unit.created_by_key_id}`.toLowerCase().includes(search.toLowerCase())) return false;
     if (initialFilter === "active" && !unitRuns.some((run) => run.status === "active")) return false;
     if (initialFilter === "at-risk" && !unitRuns.some((run) => run.budget_state !== "available")) return false;
@@ -82,20 +88,34 @@ export function WorkUnitExplorer({
     return true;
   }), [initialFilter, outcomes, runs, search, status, workUnits]);
 
-  return <section className="governance-workspace" id="run-governance-panel" role="tabpanel" aria-labelledby="run-governance-tab-work-units">
+  return <section className="governance-workspace governance-explorer" id="run-governance-panel" role="tabpanel" aria-labelledby="run-governance-tab-work-units">
+    <div className="list-workbench">
+    <ListViews label={t("listControls.views")} value={initialFilter} items={[
+      { key: "all", label: t("listControls.all"), icon: "all" },
+      { key: "active", label: t("listControls.active"), icon: "active" },
+      { key: "at-risk", label: t("listControls.risk"), icon: "error" },
+      { key: "missing-outcome", label: t("listControls.missing"), icon: "clock" },
+      { key: "open", label: t("runGovernance.open"), icon: "clock" },
+    ]} onChange={(value) => update({ filter: value === "all" ? "" : value, status: "" }, false)} />
     <div className="governance-toolbar" aria-label={t("common.filters")}>
       <label className="governance-search"><span>{t("runGovernance.searchWorkUnits")}</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("runGovernance.searchWorkUnitsPlaceholder")} /></label>
       <label><span>{t("runGovernance.workUnitStatus")}</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">{t("runGovernance.allStatuses")}</option><option value="open">{t("runGovernance.open")}</option><option value="closed">{t("runGovernance.closed")}</option></select></label>
-      {initialFilter !== "all" && <GovernanceBadge tone="neutral">{t(`runGovernance.filter.${initialFilter}`)}</GovernanceBadge>}
+
       <span className="governance-result-count">{t("runGovernance.resultCount", { count: filtered.length })}</span>
     </div>
-    {filtered.length === 0 ? <EmptyState title={t("runGovernance.noWorkUnits")}>{t("runGovernance.noWorkUnitsDescription")}</EmptyState> : <div className="governance-table-shell"><table className="governance-table"><thead><tr><th>{t("runGovernance.workUnit")}</th><th>{t("runGovernance.lifecycle")}</th><th>{t("runGovernance.runs")}</th><th>{t("runGovernance.outcome")}</th><th>{t("runGovernance.costEvidence")}</th><th>{t("runGovernance.lastActivity")}</th><th><span className="sr-only">{t("runGovernance.actions")}</span></th></tr></thead><tbody>{filtered.map((unit) => {
+    <FilterChips items={[
+      ...(search ? [{ key: "search", label: `${t("common.search")}: ${search}`, clear: () => setSearch("") }] : []),
+      ...(status ? [{ key: "status", label: t(`runGovernance.${status}`), clear: () => setStatus("") }] : []),
+      ...(initialFilter !== "all" ? [{ key: "view", label: t(`runGovernance.filter.${initialFilter}`), clear: () => update({ filter: "" }) }] : []),
+    ]} onClear={clear} />
+    {filtered.length === 0 ? <EmptyState title={t(workUnits.length ? "listControls.noMatches" : "runGovernance.noWorkUnits")} action={search || status || initialFilter !== "all" ? <button type="button" className="button ghost" onClick={clear}>{t("listControls.clear")}</button> : undefined}>{t(workUnits.length ? "listControls.noMatchesHint" : "runGovernance.noWorkUnitsDescription")}</EmptyState> : <div className="governance-table-shell"><table className="governance-table"><thead><tr><th>{t("runGovernance.workUnit")}</th><th>{t("runGovernance.lifecycle")}</th><th>{t("runGovernance.runs")}</th><th>{t("runGovernance.outcome")}</th><th>{t("runGovernance.costEvidence")}</th><th>{t("runGovernance.lastActivity")}</th><th><span className="sr-only">{t("runGovernance.actions")}</span></th></tr></thead><tbody>{filtered.map((unit) => {
       const unitRuns = runs.filter((run) => run.work_unit_id === unit.id);
       const active = unitRuns.filter((run) => run.status === "active").length;
       const activity = latestActivity(unit, runs, outcomes);
       return <tr key={unit.id}><td data-label={t("runGovernance.workUnit")}><CopyableID value={unit.id} label={t("runGovernance.workUnit")} /><small>{t("runGovernance.createdByShort", { id: unit.created_by_key_id })}</small></td><td data-label={t("runGovernance.lifecycle")}><WorkUnitStatusBadge status={unit.status} /></td><td data-label={t("runGovernance.runs")}><strong>{unitRuns.length}</strong><small>{t("runGovernance.activeCount", { count: active })}</small></td><td data-label={t("runGovernance.outcome")}><OutcomeSummary unit={unit} outcomes={outcomes} /></td><td data-label={t("runGovernance.costEvidence")}><strong>{unit.committed_micros_usd == null ? "—" : money(unit.committed_micros_usd)}</strong><small>{(unit.unknown_attempts ?? 0) > 0 ? t("runGovernance.unknownAttempts", { count: unit.unknown_attempts }) : unitRuns.length > 0 ? t("runGovernance.inspectAttemptEvidence") : t("runGovernance.noSettledAttempts")}</small></td><td data-label={t("runGovernance.lastActivity")}><time dateTime={activity}>{dateTime(activity, "full")}</time></td><td><button type="button" className="button ghost" onClick={() => onSelectWorkUnit(unit.id)}>{t("runGovernance.viewDetails")}</button></td></tr>;
     })}</tbody></table></div>}
 
+    </div>
     {selectedUnit && <Modal drawer title={`${t("runGovernance.workUnitDetails")} · ${shortID(selectedUnit.id)}`} onClose={onCloseDetail}>
       <div className="governance-detail">
         <header className="governance-detail-summary"><div><span>{t("runGovernance.workUnit")}</span><CopyableID value={selectedUnit.id} label={t("runGovernance.workUnit")} /></div><WorkUnitStatusBadge status={selectedUnit.status} /></header>
