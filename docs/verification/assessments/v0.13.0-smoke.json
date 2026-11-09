@@ -1,0 +1,39 @@
+{
+  "previous_version": "v0.12.2",
+  "candidate_base": "c0f28f73a0376631037e88b7fbd14b81bbb7bfb6",
+  "candidate_binary_sha256": "a0c750019b9d5faeea119204c070859cb9d070aa1f8b559e617c992f2af7c00d",
+  "provider": "isolated Docker HTTPS fixture with synthetic responses",
+  "results": [
+    {
+      "stage": "previous-release",
+      "request_status": 200,
+      "doctor": "passed",
+      "ledger": "passed"
+    },
+    {
+      "stage": "upgrade",
+      "request_status": 200,
+      "doctor": "passed",
+      "ledger": "passed"
+    },
+    {
+      "stage": "restart",
+      "request_status": 200,
+      "doctor": "passed",
+      "ledger": "passed"
+    },
+    {
+      "stage": "restored",
+      "request_status": 200,
+      "doctor": "passed",
+      "ledger": "passed"
+    },
+    {
+      "stage": "rollback",
+      "request_status": 200,
+      "doctor": "passed",
+      "ledger": "passed"
+    }
+  ],
+  "backup_verify": "passed"
+}
