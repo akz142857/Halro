@@ -672,7 +672,7 @@ describe("UsagePage failure detail", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
 
-    expect(await screen.findByText("成功")).toBeVisible();
+    expect(await within(await screen.findByRole("table")).findByRole("cell", { name: /^成功/ })).toBeVisible();
     expect(screen.queryByRole("button", { name: "失败详情" })).not.toBeInTheDocument();
   });
 });
@@ -686,3 +686,25 @@ function emptySummaryMetrics() {
     attempt_latency_samples: 0, attempt_latency_p95_millis: 0, latency_approximate: true,
   };
 }
+
+describe("UsagePage quick views", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState({}, "", "/admin/usage?tab=attempts&project_id=p1&start=2026-11-09T10%3A00%3A12.123Z&end=2026-11-09T11%3A00%3A12.123Z");
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "usage").mockResolvedValue({ items: [], next_cursor: "" });
+  });
+  it("preserves precise linked time boundaries and combines a failure view with project context", async () => {
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><UsagePage /></QueryClientProvider>);
+    await waitFor(() => expect(api.usage).toHaveBeenCalled());
+    expect(new URLSearchParams(vi.mocked(api.usage).mock.calls.at(-1)![0]).get("start")).toBe("2026-11-09T10:00:12.123Z");
+    fireEvent.click(screen.getByRole("button", { name: "失败" }));
+    await waitFor(() => expect(new URLSearchParams(vi.mocked(api.usage).mock.calls.at(-1)![0]).get("status")).toBe("error"));
+    expect(new URLSearchParams(window.location.search).get("project_id")).toBe("p1");
+    expect(new URLSearchParams(window.location.search).get("end")).toBe("2026-11-09T11:00:12.123Z");
+    fireEvent.click(within(screen.getByLabelText("已应用筛选")).getByRole("button", { name: "清除筛选" }));
+    expect(window.location.search).toBe("?tab=attempts");
+  });
+});

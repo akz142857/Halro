@@ -10,7 +10,8 @@
     "test": "vitest run --config vite.config.ts",
     "test:watch": "vitest --config vite.config.ts",
     "check:bundle": "node scripts/check-bundle.mjs",
-    "check:artifacts": "node scripts/check-artifacts.mjs"
+    "check:artifacts": "node scripts/check-artifacts.mjs",
+    "preview:console": "node scripts/console-preview.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "6.0.0",

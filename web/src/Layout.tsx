@@ -5,7 +5,7 @@ import { confirmNavigation, Link, navigate, navigationConfirmationEvent, setNavi
 import { useIsReadOnly } from "./session";
 import { resetAppearance } from "./theme";
 import { useAccountingTimeZone } from "./timezone";
-import { useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 const navigation = [
@@ -45,6 +45,9 @@ export function Layout({
   const timeZone = useAccountingTimeZone();
   const readOnly = useIsReadOnly();
   const queryClient = useQueryClient();
+  const accountRef = useRef<HTMLElement>(null);
+  const accountTriggerRef = useRef<HTMLButtonElement>(null);
+  const [accountOpen, setAccountOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [navigationConfirmation, setNavigationConfirmation] = useState<NavigationConfirmation | null>(null);
@@ -53,7 +56,26 @@ export function Layout({
     window.addEventListener(navigationConfirmationEvent, receiveConfirmation);
     return () => window.removeEventListener(navigationConfirmationEvent, receiveConfirmation);
   }, []);
-  useEffect(() => setMobileNavigationOpen(false), [path]);
+  useEffect(() => { setMobileNavigationOpen(false); setAccountOpen(false); }, [path]);
+  useEffect(() => {
+    if (!accountOpen) return;
+    const dismissOutside = (event: Event) => {
+      if (event.target instanceof Node && !accountRef.current?.contains(event.target)) setAccountOpen(false);
+    };
+    const dismissEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setAccountOpen(false);
+      accountTriggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", dismissOutside);
+    document.addEventListener("focusin", dismissOutside);
+    document.addEventListener("keydown", dismissEscape);
+    return () => {
+      document.removeEventListener("pointerdown", dismissOutside);
+      document.removeEventListener("focusin", dismissOutside);
+      document.removeEventListener("keydown", dismissEscape);
+    };
+  }, [accountOpen]);
   const completeLogout = async () => {
     if (loggingOut) return;
     setLoggingOut(true);
@@ -82,7 +104,7 @@ export function Layout({
               <strong>HALRO</strong>
             </span>
           </Link>
-          <button type="button" className="mobile-navigation-toggle" aria-controls="primary-navigation" aria-expanded={mobileNavigationOpen} onClick={() => setMobileNavigationOpen((open) => !open)}>
+          <button type="button" className="mobile-navigation-toggle" aria-controls="primary-navigation" aria-expanded={mobileNavigationOpen} onClick={() => { setMobileNavigationOpen((open) => !open); setAccountOpen(false); }}>
             <span>{mobileNavigationOpen ? t("navigation.closeMenu") : t("navigation.openMenu")}</span>
             <span aria-hidden="true">{mobileNavigationOpen ? "×" : "☰"}</span>
           </button>
@@ -93,24 +115,29 @@ export function Layout({
               ? path === href
               : path === href || path.startsWith(`${href}/`);
             return (
-              <Link href={href} className={active ? "active" : ""} ariaCurrent={active ? "page" : undefined} key={href}>
+              <Fragment key={href}>
+              {!restricted && ["/admin/providers", "/admin/usage", "/admin/cluster"].includes(href) && <div className="navigation-section-label">{t(href === "/admin/providers" ? "listControls.config" : href === "/admin/usage" ? "listControls.activity" : "listControls.system")}</div>}
+              <Link href={href} className={active ? "active" : ""} ariaCurrent={active ? "page" : undefined}>
                 <NavIcon path={icon} />
                 <span><strong>{t(`navigation.${key}`)}</strong></span>
               </Link>
+              </Fragment>
             );
           })}
         </nav>
-        <footer className="account-footer">
-          <div className="account-card">
-            <div className="operator">
-              <span className="avatar">{username.slice(0, 1).toUpperCase()}</span>
-              <span className="operator-copy"><small>{readOnly ? t("navigation.readOnlyAdmin") : t("navigation.localAdmin")}</small><strong title={username}>{username}</strong></span>
-            </div>
-            <button className="logout-button" onClick={logout} disabled={loggingOut}>
-              <span>{loggingOut ? t("navigation.loggingOut") : t("navigation.logout")}</span>
-              <LogoutIcon />
+        <footer className="account-footer" ref={accountRef}>
+          <button type="button" className="account-trigger" ref={accountTriggerRef} aria-expanded={accountOpen} aria-controls="account-panel" onClick={() => setAccountOpen((open) => !open)}>
+            <span className="account-avatar" aria-hidden="true">{username.slice(0, 1).toUpperCase()}</span>
+            <span className="account-copy"><strong title={username}>{username}</strong><small>{readOnly ? t("navigation.readOnlyAdmin") : t("navigation.localAdmin")}</small></span>
+            <svg className="account-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d={accountOpen ? "m7 9 5 5 5-5" : "m7 15 5-5 5 5"} /></svg>
+          </button>
+          {accountOpen && <div className="account-panel" id="account-panel" role="region" aria-label={t("navigation.accountActions")}>
+            <div className="account-panel-identity"><small>{readOnly ? t("navigation.readOnlyAdmin") : t("navigation.localAdmin")}</small><strong>{username}</strong></div>
+            <Link href="/admin/settings/general" className="account-action">{t("navigation.settings")}</Link>
+            <button type="button" className="account-action account-logout" onClick={logout} disabled={loggingOut}>
+              <span>{loggingOut ? t("navigation.loggingOut") : t("navigation.logout")}</span><LogoutIcon />
             </button>
-          </div>
+          </div>}
         </footer>
       </aside>
       <main className="main" id="main-content" tabIndex={-1}>

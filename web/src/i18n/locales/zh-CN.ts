@@ -1,4 +1,11 @@
 export const zhCN = {
+  listControls: {
+    refreshList: "刷新列表", refresh: "刷新", refreshing: "刷新中…",
+    views: "快捷视图", all: "全部", failures: "失败", active: "活跃", risk: "预算风险", missing: "缺少结果",
+    clear: "清除筛选", searchAudit: "搜索审计记录", auditPlaceholder: "操作、执行者或资源", auditScope: "筛选作用于已加载记录。加载更多可查找更早的活动。",
+    summary: "配置摘要", summaryHint: "保存前核对以下配置。", unnamed: "尚未指定", matching: "已加载 {{total}} 条，匹配 {{visible}} 条", noMatches: "没有匹配的记录", noMatchesHint: "切换视图或清除筛选后重试。",
+    auditAll: "全部活动", auditAttention: "需要关注", auditSuccess: "成功", config: "配置", activity: "活动", system: "系统",
+  },
   aiIntegration: {
     title: "AI 接入", gatewayURL: "Gateway 地址", model: "模型", endpoint: "API 接口", preview: "预览接入说明",
     loadingAddress: "正在读取 Gateway 地址…", addressUnavailable: "无法读取地址，请手动填写。", invalidAddress: "请输入不含凭据、查询或片段的 HTTP(S) Gateway 地址。",
@@ -215,6 +222,7 @@ export const zhCN = {
     cluster: "集群状态",
     masterKey: "根密钥状态",
     settings: "设置与状态",
+    accountActions: "账户操作",
     localAdmin: "本地管理员",
     readOnlyAdmin: "只读管理员",
     readOnlyAction: "只读账户无法执行此操作。",
@@ -855,7 +863,7 @@ mfaTitle: "身份验证器二次验证",  deviceName: "身份验证器名称", a
  title: "用量与调用",
     model: "模型", status: "状态", all: "全部", success: "成功", error: "错误", records_one: "{{count}} 条记录", records_other: "{{count}} 条记录", start: "起始时间", end: "结束时间", emptyTitle: "没有匹配的调用", emptyDescription: "扩大时间范围或清除筛选后重试。",
     filtersTitle: "筛选", activeFilters: "已启用 {{count}} 项", noActiveFilters: "暂无筛选条件", clearFilters: "清除", appliedFilters: "已应用筛选", done: "完成",
-    timeRange: "时间范围", timeRanges: { all: "控制台窗口", "1h": "最近 1 小时", "24h": "最近 24 小时", "7d": "最近 7 天", custom: "自定义范围" },
+    timeRange: "时间范围", timeRanges: { today: "今天", all: "控制台窗口", "1h": "最近 1 小时", "24h": "最近 24 小时", "7d": "最近 7 天", custom: "自定义范围" },
     attemptsTitle: "调用记录", attemptsDescription: "每行一次上游尝试；重试与回退单独记录。",
     request: "请求", deployment: "模型部署", route: "调用路径", result: "结果", usageAndCost: "用量与成本", tokens: "词元", cost: "成本", latency: "延迟", time: "完成时间", attempt: "尝试 {{count}}",
     inputOutput: "{{input}} 输入 / {{output}} 输出", conservative: "保守上限", reported: "服务商报告",
@@ -1301,7 +1309,7 @@ mfaTitle: "身份验证器二次验证",  deviceName: "身份验证器名称", a
     limitSummary: "上下文 {{contextTokens}} · 输出 {{output}} · 并发 {{concurrency}}",
     notifyCreated: "模型部署已创建", notifyUpdated: "模型部署已保存", notifyDeleted: "模型部署已删除", notifyEnabled: "模型部署已启用", notifyDisabled: "模型部署已禁用",
  title: "模型部署",
-    create: "＋ 新建模型部署", emptyTitle: "还没有模型部署", emptyDescription: "先创建服务商，再为具体上游模型建立部署。", list: "模型部署列表", filters: "筛选模型部署", search: "搜索", searchPlaceholder: "搜索名称、模型或服务商", statusFilter: "状态", filterAll: "全部状态", needsAttention: "需要处理", resultCount: "显示 {{visible}} / {{total}} 个部署", noMatches: "没有匹配的模型部署", noMatchesDescription: "请调整搜索词或状态筛选。", expandDetails: "查看详情", detailsTitle: "{{name}} 详情",
+    create: "＋ 新建模型部署", emptyTitle: "还没有模型部署", emptyDescription: "先创建服务商，再为具体上游模型建立部署。", list: "模型部署列表", filters: "筛选模型部署", search: "搜索", searchPlaceholder: "搜索名称、模型或服务商", needsAttention: "需要处理", resultCount: "显示 {{visible}} / {{total}} 个部署", noMatches: "没有匹配的模型部署", noMatchesDescription: "请调整搜索词或状态筛选。", expandDetails: "查看详情", detailsTitle: "{{name}} 详情",
       inputPrice: "输入价格", cachedInputPrice: "缓存输入价格", outputPrice: "输出价格", concurrency: "并发上限", context: "上下文窗口", maxOutput: "输出上限",
     priceStatus: "价格状态", priceNotConfigured: "未设置", priceUnavailable: "不可用", priceRequired: "成本治理流量开始前必须创建有效价格版本", priceTimeline: "价格版本", noPriceVersions: "尚无价格版本", setPrice: "设置价格", adjustPrice: "调整价格",  currentPriceVersion: "当前版本：v{{version}}", billingMode: "计费方式", effectiveFrom: "生效时间",   immutablePriceWarning: "生效后会成为不可变价格版本，不能编辑或删除；后续调整需要创建新版本。", subscriptionPricingTitle: "订阅成本治理", subscriptionPricingDescription: "如有可核对的等效单价，请配置价格版本；如果没有，该部署只能服务已明确关闭成本治理的项目，项目预算不会拦截这些调用，用量成本保持未知。",
     priceSchedule: "分时价位", priceScheduleHint: "服务商在不同时段收取不同费率时启用。启用后，上方费率适用于所有时段之外的时间。", scheduleTimezone: "服务商时区", scheduleTimezoneHint: "服务商的 IANA 时区，如 Asia/Shanghai；独立于会计时区。", scheduleStart: "从", scheduleEnd: "到", addScheduleWindow: "＋ 添加时段", removeScheduleWindow: "删除", scheduleWindowLabel: "时段 {{index}}", scheduleTimeHint: "时段用 24 小时制 HH:MM，一天的结尾写 24:00，跨午夜请拆成两段。", scheduleRateInput: "输入", scheduleRateCachedInput: "缓存输入", scheduleRateOutput: "输出", scheduleRateFixed: "每请求固定", scheduleRateUnit: "费率单位 USD / 百万词元，每请求固定为 USD / 请求。", scheduleBaseHint: "未被任何时段覆盖的时间按上方费率计费：输入 ${{input}}、输出 ${{output}} / 百万词元。", scheduleWindowCount_one: "{{count}} 个时段", scheduleWindowCount_other: "{{count}} 个时段", scheduleZoneSummary: "时段按 {{timezone}} 判定。", scheduleWindowSummary: "{{start}}–{{end}}：输入 ${{input}}、输出 ${{output}} / 百万词元", scheduleBaseSummary: "其余时间：输入 ${{input}}、输出 ${{output}} / 百万词元", scheduleProblem: { timezone: "请填写服务商时区的 IANA 名称，例如 Asia/Shanghai。", windows: "请至少添加一个时段，或关闭分时价位。", time: "每个时段都需要有效的 HH:MM，且开始早于结束。跨午夜的时段请拆成两段。", rate: "每个时段的金额需为不超过 6 位小数的非负数，且至少一项大于 0。", overlap: "时段之间不能重叠。" },
