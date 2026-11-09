@@ -1,6 +1,6 @@
 # Dependency and License Review
 
-Date: 2026-10-30
+Date: 2026-11-09
 
 Halro is distributed under Apache-2.0. The source tree includes the project
 license in `LICENSE`, required attribution in `NOTICE`, and the runtime
@@ -493,22 +493,62 @@ are covered by the focused suites and the integrated Go validation.
   and container image.
 - Repeat this review whenever any dependency input below changes.
 
+The 2026-11-09 security refresh upgrades the Parquet compression dependencies
+`github.com/andybalholm/brotli` from 1.1.1 to 1.2.7 for
+[GO-2026-6888](https://pkg.go.dev/vuln/GO-2026-6888), and
+`github.com/klauspost/compress` from 1.18.7 to 1.20.2 for
+[GO-2026-6865](https://pkg.go.dev/vuln/GO-2026-6865). The module-path set is
+unchanged. Both root LICENSE files are byte-identical across the upgrades
+(MIT and BSD-3-Clause respectively), so the existing notices remain applicable.
+The project stays on Go 1.26.10, above both dependencies' minimum Go versions.
+
+The 2026-11-09 compatibility Go refresh upgrades `openai-go/v3` from
+3.88.0 to 3.91.1. Its downloaded root LICENSE is byte-identical (Apache-2.0).
+The checksum updates also track its existing AWS SDK dependency family; no
+module paths are added or removed. These dependencies remain confined to the
+separate SDK contract-test module, outside the distributed Halro binary.
+
+The 2026-11-09 Python OpenAI contract-test update moves 3.39.0 to 3.42.1.
+The wheel's Apache-2.0 root license and vendored httpx-aiohttp BSD license
+are byte-identical to 3.39.0. No transitive dependency version changes.
+This SDK remains test-only, outside the distributed application.
+
+The 2026-11-09 Node OpenAI contract-test update moves 7.45.0 to 7.47.0.
+The installed package LICENSE and lockfile declare Apache-2.0, unchanged.
+Only this package version changes; its optional Google authentication peer
+range widens without installing another package. The SDK remains test-only.
+
+The 2026-11-09 Node Anthropic contract-test update moves 1.3.0 to 1.4.0.
+The installed root LICENSE and lockfile retain Apache-2.0. There are no
+transitive dependency changes. The SDK remains test-only; the combined lock
+also retains the separately reviewed OpenAI 7.47.0 upgrade.
+
+The 2026-11-09 Python Anthropic contract-test update moves 2.3.0 to 2.4.0.
+The installed Apache-2.0 LICENSE is byte-identical across the upgrade. No
+transitive dependency versions change. The combined test-only lock retains
+OpenAI 3.42.1 and passes both SDKs' local black-box contracts.
+
 ## Drift gate
+
+The 2026-11-09 console preview update adds only the `preview:console` script
+to `web/package.json`. Its dependency and devDependency sections and the npm
+lockfile are unchanged; no dependency, version, license, or distribution scope
+changed. The manifest hash below records that script-only review.
 
 CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `194923898968e6a48374d52c35055258fe92a835`
-- `go.sum`: `69591afe7d4f7536ec67aa9a0ffb0a74cac2bd31`
-- `web/package.json`: `01ea02e507ec2b5479f1c5734ca79788816904d9`
+- `go.mod`: `db6abd498fb64974bad246b41f6ad91694f10beb`
+- `go.sum`: `6974373d33f297850d5bd413385b325dd7df0dc9`
+- `web/package.json`: `02ec6b99b10700aeb8f594f17c17d293083be510`
 - `web/package-lock.json`: `8b3357e0973edbe288b24ae3285759b64e22aee7`
-- `tests/compatibility/go/go.mod`: `1c4e1c1932a91e12754cd98a7aded4784585788a`
-- `tests/compatibility/go/go.sum`: `f532c4b3299bb9fe375c97da938f50e728a123fc`
-- `tests/compatibility/node/package.json`: `1707407145cdb431c81ca6931a415ad1d24abc0e`
-- `tests/compatibility/node/package-lock.json`: `e33d541775b7ca490fddcc978ac498427441aa65`
-- `tests/compatibility/python/requirements.in`: `91c3a2e8bf3904f753e071757f29f1822e76dd23`
-- `tests/compatibility/python/requirements.txt`: `940602350781551db8d1333a464f9fe8eb05f7c3`
+- `tests/compatibility/go/go.mod`: `2ae800a3be32f0a292f5687bb19cfefdc5a3d997`
+- `tests/compatibility/go/go.sum`: `143e853813d133ca51a3072792146408073101e9`
+- `tests/compatibility/node/package.json`: `5d6d3511925689da5e8b2d05ef20f31685321b8a`
+- `tests/compatibility/node/package-lock.json`: `b2fcb4114be5f3d83069da1f50f0115f6bfa14bd`
+- `tests/compatibility/python/requirements.in`: `2f1d85bd1d30eaf3338abc05d1d5607bfec61622`
+- `tests/compatibility/python/requirements.txt`: `7ece297549dc5ac570ab879bd9a26398d2d128e5`
 
 The Python lock hash last moved for the 2026-10-24 `filelock` refresh. All ten
 hashes moved before that for the 2026-10-23 refreshes recorded above, and

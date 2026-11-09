@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { EmptyState, ErrorState, Loading, PageHeader, SegmentedTabs } from "../components";
 import { useInstantFormatter } from "../format";
+import { useListQuery } from "../ListControls";
 import type { OutcomeDefinition } from "../types";
 import { GovernanceFirstRunGuide } from "./run-governance/GovernanceFirstRunGuide";
 import { GovernanceOverview, type OverviewFilter } from "./run-governance/GovernanceOverview";
@@ -32,7 +33,9 @@ export function RunGovernancePage() {
   const [resultsEntry, setResultsEntry] = useState<ResultsView>("analytics");
   const [workUnitID, setWorkUnitID] = useState(initial.workUnitID);
   const [runID, setRunID] = useState(initial.runID);
-  const [overviewFilter, setOverviewFilter] = useState<OverviewFilter>("all");
+  const { params: listParams, update: updateList } = useListQuery();
+  const requestedFilter = listParams.get("filter") ?? "all";
+  const overviewFilter: OverviewFilter = ["open", "active", "at-risk", "missing-outcome"].includes(requestedFilter) ? requestedFilter as OverviewFilter : "all";
   const [definitionID, setDefinitionID] = useState("");
   const [cohortStart, setCohortStart] = useState(() => localDateValue(new Date(Date.now() - 29 * 86400000)));
   const [cohortEnd, setCohortEnd] = useState(() => localDateValue());
@@ -141,7 +144,7 @@ export function RunGovernancePage() {
   function selectProject(id: string) {
     setDefinitionID("");
     setResultsEntry("analytics");
-    setOverviewFilter("all");
+    updateList({ filter: "", q: "", status: "" });
     setGuideRequested(false);
     setGuideDismissed(false);
     rememberGovernanceProject(id);
@@ -151,7 +154,7 @@ export function RunGovernancePage() {
     if (next === "results") setResultsEntry("analytics");
     updateContext({ view: next, workUnitID: next === "work-units" ? workUnitID : "", runID: next === "work-units" ? runID : "" });
   }
-  function openWorkUnits(filter: OverviewFilter, id = "") { setOverviewFilter(filter); updateContext({ view: "work-units", workUnitID: id, runID: "" }); }
+  function openWorkUnits(filter: OverviewFilter, id = "") { updateList({ filter: filter === "all" ? "" : filter, status: "", q: "" }); updateContext({ view: "work-units", workUnitID: id, runID: "" }); }
 
   const selectedProject = governanceProjects.find((project) => project.id === projectID);
   // Historical lifecycle evidence is enough to retire the automatic first-run
