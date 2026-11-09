@@ -1,6 +1,6 @@
 # Dependency and License Review
 
-Date: 2026-10-30
+Date: 2026-11-09
 
 Halro is distributed under Apache-2.0. The source tree includes the project
 license in `LICENSE`, required attribution in `NOTICE`, and the runtime
@@ -495,13 +495,18 @@ are covered by the focused suites and the integrated Go validation.
 
 ## Drift gate
 
+The 2026-11-09 console preview update adds only the `preview:console` script
+to `web/package.json`. Its dependency and devDependency sections and the npm
+lockfile are unchanged; no dependency, version, license, or distribution scope
+changed. The manifest hash below records that script-only review.
+
 CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `194923898968e6a48374d52c35055258fe92a835`
 - `go.sum`: `69591afe7d4f7536ec67aa9a0ffb0a74cac2bd31`
-- `web/package.json`: `01ea02e507ec2b5479f1c5734ca79788816904d9`
+- `web/package.json`: `02ec6b99b10700aeb8f594f17c17d293083be510`
 - `web/package-lock.json`: `8b3357e0973edbe288b24ae3285759b64e22aee7`
 - `tests/compatibility/go/go.mod`: `1c4e1c1932a91e12754cd98a7aded4784585788a`
 - `tests/compatibility/go/go.sum`: `f532c4b3299bb9fe375c97da938f50e728a123fc`
