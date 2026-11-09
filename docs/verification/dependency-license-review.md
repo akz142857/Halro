@@ -513,6 +513,11 @@ The wheel's Apache-2.0 root license and vendored httpx-aiohttp BSD license
 are byte-identical to 3.39.0. No transitive dependency version changes.
 This SDK remains test-only, outside the distributed application.
 
+The 2026-11-09 Node OpenAI contract-test update moves 7.45.0 to 7.47.0.
+The installed package LICENSE and lockfile declare Apache-2.0, unchanged.
+Only this package version changes; its optional Google authentication peer
+range widens without installing another package. The SDK remains test-only.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -530,8 +535,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `web/package-lock.json`: `8b3357e0973edbe288b24ae3285759b64e22aee7`
 - `tests/compatibility/go/go.mod`: `2ae800a3be32f0a292f5687bb19cfefdc5a3d997`
 - `tests/compatibility/go/go.sum`: `143e853813d133ca51a3072792146408073101e9`
-- `tests/compatibility/node/package.json`: `1707407145cdb431c81ca6931a415ad1d24abc0e`
-- `tests/compatibility/node/package-lock.json`: `e33d541775b7ca490fddcc978ac498427441aa65`
+- `tests/compatibility/node/package.json`: `71f60e9a95b96204f0d3ab9aa0609fe9124a67b7`
+- `tests/compatibility/node/package-lock.json`: `71d2b451700ee02a620d790b52f7566fb53da033`
 - `tests/compatibility/python/requirements.in`: `dde47408207636b179e7e6e7d72022739858a227`
 - `tests/compatibility/python/requirements.txt`: `cc3a07dad37af5125b9d7b2a064679ccd59e5161`
 
