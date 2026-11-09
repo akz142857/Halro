@@ -536,6 +536,18 @@ LICENSE and NOTICE files where present (Apache-2.0); no module paths are
 added or removed. Existing distribution notices remain applicable. The
 previously reviewed brotli 1.2.7 and compress 1.20.2 security pins are retained.
 
+The 2026-11-09 Admin UI refresh upgrades @hookform/resolvers to 7.0.3,
+@tanstack/react-query to 5.106.1, i18next to 26.7.2, react-i18next to 17.1.13,
+@vitejs/plugin-react to 6.2.1, jsdom to 31.0.0, vite to 8.3.6, and vitest to
+5.1.0. Their installed root license files remain MIT. The six newly locked
+packages (bcp-47, bcp-47-match, is-alphabetical, is-alphanumerical, is-decimal,
+and parse5-parser-stream) also have MIT license files. Updated entities remains
+BSD-2-Clause; the lock introduces no new license category. The jsdom CSS engine
+removes its previous external CSS-parser dependency chain. These tooling
+changes do not change distribution-notice obligations. Halro uses the Zod
+resolver, not the changed TypeBox integration; jsdom's optional canvas backend
+is not installed. The embedded console is rebuilt from the updated lock.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -549,8 +561,8 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `7feafeb65571eaccd436fd7bc0dedaf89f914dee`
 - `go.sum`: `c838c88b891fc02db2bc14cbe3017cfdf08e46cf`
-- `web/package.json`: `02ec6b99b10700aeb8f594f17c17d293083be510`
-- `web/package-lock.json`: `8b3357e0973edbe288b24ae3285759b64e22aee7`
+- `web/package.json`: `ed5eb015764b3d5d248205771c1135fb766c6242`
+- `web/package-lock.json`: `f2164418fadf6da28ee5beb5c8329a204b273376`
 - `tests/compatibility/go/go.mod`: `2ae800a3be32f0a292f5687bb19cfefdc5a3d997`
 - `tests/compatibility/go/go.sum`: `143e853813d133ca51a3072792146408073101e9`
 - `tests/compatibility/node/package.json`: `5d6d3511925689da5e8b2d05ef20f31685321b8a`
