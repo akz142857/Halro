@@ -245,3 +245,24 @@ describe("operations page", () => {
     expect(within(second as HTMLElement).getByRole("button", { name: "测试" })).toBeEnabled();
   });
 });
+
+describe("audit list quick views", () => {
+  beforeEach(() => {
+    window.history.replaceState({}, "", "/admin/operations");
+    vi.spyOn(api, "alertsPage").mockResolvedValue({ items: [], next_cursor: "" } as never);
+    vi.spyOn(api, "audit").mockResolvedValue({ items: [auditRecord(), auditRecord({ sequence: 8, event_id: "aud_failure", outcome: "failure", actor_id: "reviewer" })], next_cursor: "more" } as never);
+  });
+  afterEach(() => vi.restoreAllMocks());
+  it("labels partial coverage and filters by outcome and actor without inventing a global count", async () => {
+    renderPage();
+    await screen.findByText("筛选作用于已加载记录。加载更多可查找更早的活动。");
+    fireEvent.click(screen.getByRole("button", { name: "需要关注" }));
+    const list = screen.getByRole("list", { name: "审计日志" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(1);
+    expect(list).toHaveTextContent("reviewer");
+    expect(new URLSearchParams(window.location.search).get("audit_view")).toBe("attention");
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索审计记录" }), { target: { value: "missing" } });
+    expect(screen.getByRole("heading", { name: "没有匹配的记录" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "加载更多" })).toBeVisible();
+  });
+});

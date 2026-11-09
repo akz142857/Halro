@@ -95,6 +95,7 @@ describe("admin accessibility baseline", () => {
         <Layout username="admin"><h1>Dashboard</h1></Layout>
       </QueryClientProvider>,
     );
+    fireEvent.click(screen.getByRole("button", { name: /admin\s*本地管理员/ }));
     fireEvent.click(screen.getByRole("button", { name: /退出/ }));
     await waitFor(() => expect(document.documentElement).toHaveAttribute("data-appearance", "dark"));
   });
