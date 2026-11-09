@@ -34,13 +34,18 @@ import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../Onboardin
 import { deploymentCondition, deploymentNeedsAttention, recordedTestState } from "./deploymentCondition";
 import { localizedError } from "../i18n/errors";
 
+import { FilterChips, ListRefresh, ListViews, useListQuery } from "../ListControls";
+
 export function DeploymentsPage() {
   const { t } = useTranslation();
   const readOnly = useIsReadOnly();
   const [editing, setEditing] = useState<Deployment | null | "new">(() => !readOnly && hasOnboardingCreateIntent() ? "new" : null);
   const [replacement, setReplacement] = useState<Deployment>();
-  const [query, setQuery] = useState(() => new URLSearchParams(window.location.search).get("q") ?? "");
-  const [status, setStatus] = useState<"all" | "enabled" | "disabled" | "attention">("all");
+  const { params, update } = useListQuery();
+  const query = params.get("q") ?? "";
+  const status = ["enabled", "disabled", "attention"].includes(params.get("status") ?? "") ? params.get("status")! : "all";
+  const setQuery = (value: string) => update({ q: value });
+  const setStatus = (value: string) => update({ status: value === "all" ? "" : value }, false);
   // What the grid's single live region is currently saying. Cards publish here
   // rather than each owning a region of its own.
   const [announcement, setAnnouncement] = useState("");
@@ -88,23 +93,24 @@ export function DeploymentsPage() {
         <EmptyState title={t("deployments.emptyTitle")}>{t("deployments.emptyDescription")}</EmptyState>
       )}
       {!!deployments.data?.items.length && (
-        <section className="deployment-list" aria-label={t("deployments.list")}>
+        <section className="deployment-list list-workbench" aria-label={t("deployments.list")}>
+          <ListViews label={t("listControls.views")} value={status} items={[
+            { key: "all", label: t("listControls.all"), icon: "all", count: deployments.data?.items.length },
+            { key: "attention", label: t("deployments.needsAttention"), icon: "error", count: deployments.data?.items.filter(deploymentNeedsAttention).length },
+            { key: "enabled", label: t("common.enabled"), icon: "check" },
+            { key: "disabled", label: t("common.disabled"), icon: "paused" },
+          ]} onChange={setStatus} trailing={<ListRefresh busy={deployments.isFetching || providers.isFetching || routes.isFetching} onRefresh={() => { void deployments.refetch(); void providers.refetch(); void routes.refetch(); }} />} />
           <div className="deployment-toolbar" role="search" aria-label={t("deployments.filters")}>
             <label className="deployment-search">
               <span>{t("deployments.search")}</span>
               <input autoComplete="off" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("deployments.searchPlaceholder")} />
             </label>
-            <label>
-              <span>{t("deployments.statusFilter")}</span>
-              <select value={status} onChange={(event) => setStatus(event.target.value as typeof status)}>
-                <option value="all">{t("deployments.filterAll")}</option>
-                <option value="enabled">{t("common.enabled")}</option>
-                <option value="disabled">{t("common.disabled")}</option>
-                <option value="attention">{t("deployments.needsAttention")}</option>
-              </select>
-            </label>
             <span className="deployment-result-count" role="status">{t("deployments.resultCount", { visible: filteredDeployments.length, total: deployments.data.items.length })}</span>
           </div>
+          <FilterChips items={[
+            ...(query ? [{ key: "search", label: `${t("common.search")}: ${query}`, clear: () => setQuery("") }] : []),
+            ...(status !== "all" ? [{ key: "status", label: status === "attention" ? t("deployments.needsAttention") : t(`common.${status}`), clear: () => setStatus("all") }] : []),
+          ]} onClear={() => update({ q: "", status: "" })} />
           {filteredDeployments.length ? (
             <div className="resource-card-grid deployment-grid">
               {filteredDeployments.map((deployment, index) => (
@@ -120,7 +126,7 @@ export function DeploymentsPage() {
                 />
               ))}
             </div>
-          ) : <EmptyState title={t("deployments.noMatches")}>{t("deployments.noMatchesDescription")}</EmptyState>}
+          ) : <EmptyState title={t("deployments.noMatches")} action={<button type="button" className="button ghost" onClick={() => update({ q: "", status: "" })}>{t("listControls.clear")}</button>}>{t("deployments.noMatchesDescription")}</EmptyState>}
           {/* One live region for the whole grid, naming the deployment it is
               speaking about. A region per card is fifty registered regions that
               announce a bare "失败" with no way to tell which card produced

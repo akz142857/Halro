@@ -549,6 +549,7 @@ function RouteForm({ current, routes, deployments, onClose }: { current?: Route;
         <div className="notice warning"><strong>{t("routes.deploymentRequired")}</strong><span>{t("routes.deploymentRequiredDescription")}</span><Link className="notice-link" href="/admin/deployments">{t("routes.openDeployments")}</Link></div>
       ) : (
         <form className="route-form" onSubmit={submit}>
+          <div className="configuration-layout">
           <div className="route-form-body form-grid">
           {/* Pick an existing alias to join its group, or type a new name to
               start one. Both outcomes stay reachable — the list is a
@@ -606,6 +607,17 @@ function RouteForm({ current, routes, deployments, onClose }: { current?: Route;
             </section>
           )}
           {mutation.isError && <ErrorState error={mutation.error} />}
+          </div>
+          <aside className="configuration-summary" aria-label={t("listControls.summary")}>
+            <h3>{t("listControls.summary")}</h3><p>{t("listControls.summaryHint")}</p>
+            <dl>
+              <div><dt>{t("routes.publicAlias")}</dt><dd>{publicModel.trim() || t("listControls.unnamed")}</dd></div>
+              <div><dt>{t("routes.deployment")}</dt><dd>{deploymentNames.get(deploymentID) || deploymentID || "—"}</dd></div>
+              <div><dt>{t("routes.routeStrategy")}</dt><dd>{t(strategy === "ordered" ? "routes.ordered" : "routes.roundRobin")}</dd></div>
+              <div><dt>{t("routes.priority")}</dt><dd>{priority}</dd></div>
+              <div><dt>{t("common.status")}</dt><dd>{t(routeEnabled ? "common.enabled" : "common.disabled")}</dd></div>
+            </dl>
+          </aside>
           </div>
           {/* Whether this alias will answer requests is the state the save
               commits, so it belongs in the bar that commits it. */}

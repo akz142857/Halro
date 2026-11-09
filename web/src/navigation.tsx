@@ -22,14 +22,14 @@ export function confirmNavigation(onConfirm: () => void = () => {}) {
   return false;
 }
 
-export function navigate(path: string) {
+export function navigate(path: string, options: { replace?: boolean } = {}) {
   const commit = () => {
     // Compared against the query too, not the path alone. Several destinations carry
     // their subject in the query — a request ID, a project — so comparing only the
     // path made "go to this page filtered differently" a no-op whenever the reader
     // was already on that page, including clearing a filter back to the plain list.
     if (window.location.pathname + window.location.search === path) return;
-    window.history.pushState({}, "", path);
+    window.history[options.replace ? "replaceState" : "pushState"]({}, "", path);
     window.dispatchEvent(new Event(navigationEvent));
   };
   if (!confirmNavigation(commit)) return;

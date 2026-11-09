@@ -1,4 +1,11 @@
 export const enUS = {
+  listControls: {
+    refreshList: "Refresh list", refresh: "Refresh", refreshing: "Refreshing…",
+    views: "Quick views", all: "All", failures: "Failures", active: "Active", risk: "Budget at risk", missing: "Missing results",
+    clear: "Clear filters", searchAudit: "Search audit records", auditPlaceholder: "Action, actor or resource", auditScope: "Filters apply to loaded records. Load more to search earlier activity.",
+    summary: "Configuration summary", summaryHint: "Review these values before saving.", unnamed: "Not specified", matching: "{{visible}} of {{total}} loaded", noMatches: "No matching records", noMatchesHint: "Try another view or clear the filters.",
+    auditAll: "All activity", auditAttention: "Needs attention", auditSuccess: "Successful", config: "Configuration", activity: "Activity", system: "System",
+  },
   aiIntegration: {
     title: "AI integration", gatewayURL: "Gateway URL", model: "Model", endpoint: "API interface", preview: "Preview instructions",
     loadingAddress: "Loading the Gateway URL…", addressUnavailable: "The URL could not be loaded. Enter it manually.", invalidAddress: "Enter an HTTP(S) Gateway URL without credentials, query parameters, or fragments.",
@@ -207,6 +214,7 @@ export const enUS = {
     cluster: "Cluster status",
     masterKey: "Root Key",
     settings: "Settings & Status",
+    accountActions: "Account actions",
     localAdmin: "Local admin",
     readOnlyAdmin: "Read-only admin",
     readOnlyAction: "A read-only account cannot perform this action.",
@@ -848,7 +856,7 @@ mfaTitle: "Authenticator two-factor authentication",  deviceName: "Authenticator
  title: "Usage & Requests",
     model: "Model", status: "Status", all: "All", success: "Success", error: "Error", records_one: "{{count}} record", records_other: "{{count}} records", start: "Start time", end: "End time", emptyTitle: "No matching calls", emptyDescription: "Widen the time range or clear filters and retry.",
     filtersTitle: "Filters", activeFilters: "{{count}} active", noActiveFilters: "No active filters", clearFilters: "Clear", appliedFilters: "Applied filters", done: "Done",
-    timeRange: "Time range", timeRanges: { all: "Console window", "1h": "Last hour", "24h": "Last 24 hours", "7d": "Last 7 days", custom: "Custom range" },
+    timeRange: "Time range", timeRanges: { today: "Today", all: "Console window", "1h": "Last hour", "24h": "Last 24 hours", "7d": "Last 7 days", custom: "Custom range" },
     attemptsTitle: "Call records", attemptsDescription: "One upstream attempt per row; retries and fallbacks have separate records.",
     request: "Request", deployment: "Deployment", route: "Call path", result: "Result", usageAndCost: "Usage & cost", tokens: "Tokens", cost: "Cost", latency: "Latency", time: "Completed", attempt: "Attempt {{count}}",
     inputOutput: "{{input}} in / {{output}} out", conservative: "Conservative upper bound", reported: "Provider reported",
@@ -1296,7 +1304,7 @@ mfaTitle: "Authenticator two-factor authentication",  deviceName: "Authenticator
     limitSummary: "Context {{contextTokens}} · Output {{output}} · Concurrency {{concurrency}}",
     notifyCreated: "Deployment created", notifyUpdated: "Deployment saved", notifyDeleted: "Deployment deleted", notifyEnabled: "Deployment enabled", notifyDisabled: "Deployment disabled",
  title: "Deployments",
-    create: "＋ New deployment", emptyTitle: "No model deployments", emptyDescription: "Create a provider, then add a deployment for a specific upstream model.", list: "Model deployment list", filters: "Filter model deployments", search: "Search", searchPlaceholder: "Search name, model, or provider", statusFilter: "Status", filterAll: "All statuses", needsAttention: "Needs attention", resultCount: "Showing {{visible}} of {{total}} deployments", noMatches: "No matching deployments", noMatchesDescription: "Adjust the search text or status filter.", expandDetails: "View details", detailsTitle: "{{name}} details",
+    create: "＋ New deployment", emptyTitle: "No model deployments", emptyDescription: "Create a provider, then add a deployment for a specific upstream model.", list: "Model deployment list", filters: "Filter model deployments", search: "Search", searchPlaceholder: "Search name, model, or provider", needsAttention: "Needs attention", resultCount: "Showing {{visible}} of {{total}} deployments", noMatches: "No matching deployments", noMatchesDescription: "Adjust the search text or status filter.", expandDetails: "View details", detailsTitle: "{{name}} details",
       inputPrice: "Input price", cachedInputPrice: "Cached input price", outputPrice: "Output price", concurrency: "Concurrency limit", context: "Context window", maxOutput: "Output limit",
     priceStatus: "Price status", priceNotConfigured: "Not set", priceUnavailable: "Unavailable", priceRequired: "Create an active price version before cost-governed traffic", priceTimeline: "Price versions", noPriceVersions: "No price versions yet", setPrice: "Set price", adjustPrice: "Adjust price",  currentPriceVersion: "Current version: v{{version}}", billingMode: "Billing method", effectiveFrom: "Effective from",   immutablePriceWarning: "Once effective, this immutable price version cannot be edited or deleted. Create another version for later adjustments.", subscriptionPricingTitle: "Subscription cost governance", subscriptionPricingDescription: "Configure an auditable equivalent price if one exists. Without one, this deployment can only serve projects that explicitly disable cost governance; their budgets will not block these calls, and usage cost remains unknown.",
     priceSchedule: "Time-of-day pricing", priceScheduleHint: "Use when the provider charges different rates at different hours. The rates above then apply outside every window below.", scheduleTimezone: "Provider timezone", scheduleTimezoneHint: "The provider’s IANA timezone, such as Asia/Shanghai; independent of the accounting timezone.", scheduleStart: "From", scheduleEnd: "Until", addScheduleWindow: "＋ Add window", removeScheduleWindow: "Remove", scheduleWindowLabel: "Window {{index}}", scheduleTimeHint: "Windows use 24-hour HH:MM; write the end of the day as 24:00 and split one that runs past midnight.", scheduleRateInput: "Input", scheduleRateCachedInput: "Cached input", scheduleRateOutput: "Output", scheduleRateFixed: "Per request", scheduleRateUnit: "Rates are USD per million tokens; the per-request fee is USD per request.", scheduleBaseHint: "Hours no window covers are billed at the rates above: ${{input}} input, ${{output}} output per million tokens.", scheduleWindowCount_one: "{{count}} window", scheduleWindowCount_other: "{{count}} windows", scheduleZoneSummary: "Windows are read in {{timezone}}.", scheduleWindowSummary: "{{start}}–{{end}}: ${{input}} input, ${{output}} output per million tokens", scheduleBaseSummary: "All other hours: ${{input}} input, ${{output}} output per million tokens", scheduleProblem: { timezone: "Enter the provider's timezone as an IANA name, such as Asia/Shanghai.", windows: "Add at least one window, or turn time-of-day pricing off.", time: "Each window needs a valid HH:MM start before its end. A window that runs past midnight is two windows.", rate: "Every window needs non-negative amounts with up to 6 decimal places, and at least one amount greater than zero.", overlap: "Windows cannot overlap." },

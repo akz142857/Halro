@@ -56,4 +56,42 @@ describe("Layout", () => {
     fireEvent.click(screen.getByRole("button", { name: "留在此页" }));
     expect(window.location.pathname).toBe("/admin/settings/security");
   });
+
+  it("reveals account actions on demand and restores focus when Escape dismisses them", () => {
+    renderLayout();
+    const trigger = screen.getByRole("button", { name: /admin\s*本地管理员/ });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "退出登录" })).not.toBeInTheDocument();
+    fireEvent.click(trigger);
+    expect(screen.getByRole("region", { name: "账户操作" })).toBeInTheDocument();
+    screen.getByRole("button", { name: "退出登录" }).focus();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(trigger);
+    fireEvent.pointerDown(screen.getByText("content"));
+    expect(screen.queryByRole("region", { name: "账户操作" })).not.toBeInTheDocument();
+    fireEvent.click(trigger);
+    fireEvent.focusIn(screen.getByText("content"));
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("closes the account disclosure after navigating to settings", () => {
+    window.history.replaceState({}, "", "/admin/usage");
+    renderLayout();
+    fireEvent.click(screen.getByRole("button", { name: /admin\s*本地管理员/ }));
+    fireEvent.click(document.querySelector(".account-panel a")!);
+    expect(window.location.pathname).toBe("/admin/settings/general");
+    expect(screen.queryByRole("region", { name: "账户操作" })).not.toBeInTheDocument();
+  });
+
+  it("preserves unsaved-change protection when signing out from account actions", () => {
+    renderLayout();
+    setNavigationBlocked(true, "Unsaved changes");
+    fireEvent.click(screen.getByRole("button", { name: /admin\s*本地管理员/ }));
+    fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
+    expect(screen.getByRole("alertdialog", { name: "离开当前页面？" })).toHaveTextContent("Unsaved changes");
+    fireEvent.click(screen.getByRole("button", { name: "留在此页" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
 });
