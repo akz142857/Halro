@@ -528,6 +528,14 @@ The installed Apache-2.0 LICENSE is byte-identical across the upgrade. No
 transitive dependency versions change. The combined test-only lock retains
 OpenAI 3.42.1 and passes both SDKs' local black-box contracts.
 
+The 2026-11-09 AWS refresh upgrades aws-sdk-go-v2 1.47.4 to 1.47.7,
+config 1.33.11 to 1.33.15, credentials 1.20.11 to 1.20.15, KMS 1.62.0 to
+1.62.4, and smithy-go 1.28.6 to 1.28.8, with ten existing AWS indirect
+modules following their SDK versions. All 15 modules retain byte-identical
+LICENSE and NOTICE files where present (Apache-2.0); no module paths are
+added or removed. Existing distribution notices remain applicable. The
+previously reviewed brotli 1.2.7 and compress 1.20.2 security pins are retained.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -539,8 +547,8 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `db6abd498fb64974bad246b41f6ad91694f10beb`
-- `go.sum`: `6974373d33f297850d5bd413385b325dd7df0dc9`
+- `go.mod`: `7feafeb65571eaccd436fd7bc0dedaf89f914dee`
+- `go.sum`: `c838c88b891fc02db2bc14cbe3017cfdf08e46cf`
 - `web/package.json`: `02ec6b99b10700aeb8f594f17c17d293083be510`
 - `web/package-lock.json`: `8b3357e0973edbe288b24ae3285759b64e22aee7`
 - `tests/compatibility/go/go.mod`: `2ae800a3be32f0a292f5687bb19cfefdc5a3d997`
