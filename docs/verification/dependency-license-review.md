@@ -518,6 +518,11 @@ The installed package LICENSE and lockfile declare Apache-2.0, unchanged.
 Only this package version changes; its optional Google authentication peer
 range widens without installing another package. The SDK remains test-only.
 
+The 2026-11-09 Node Anthropic contract-test update moves 1.3.0 to 1.4.0.
+The installed root LICENSE and lockfile retain Apache-2.0. There are no
+transitive dependency changes. The SDK remains test-only; the combined lock
+also retains the separately reviewed OpenAI 7.47.0 upgrade.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -535,8 +540,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `web/package-lock.json`: `8b3357e0973edbe288b24ae3285759b64e22aee7`
 - `tests/compatibility/go/go.mod`: `2ae800a3be32f0a292f5687bb19cfefdc5a3d997`
 - `tests/compatibility/go/go.sum`: `143e853813d133ca51a3072792146408073101e9`
-- `tests/compatibility/node/package.json`: `71f60e9a95b96204f0d3ab9aa0609fe9124a67b7`
-- `tests/compatibility/node/package-lock.json`: `71d2b451700ee02a620d790b52f7566fb53da033`
+- `tests/compatibility/node/package.json`: `5d6d3511925689da5e8b2d05ef20f31685321b8a`
+- `tests/compatibility/node/package-lock.json`: `b2fcb4114be5f3d83069da1f50f0115f6bfa14bd`
 - `tests/compatibility/python/requirements.in`: `dde47408207636b179e7e6e7d72022739858a227`
 - `tests/compatibility/python/requirements.txt`: `cc3a07dad37af5125b9d7b2a064679ccd59e5161`
 
