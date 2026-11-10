@@ -90,6 +90,8 @@ jobs:
             tools/modelcatalog/test_verify_publication_gate.py \
             tools/modelcatalog/test_workflow_contract.py \
             tools/release/test_release_workflow_contract.py \
+            tools/release/test_verify_website_docs.py \
+            tools/release/test_prepare_release.py \
             tools/release/test_verify_environment.py \
             tools/release/test_run_evidence.py \
             tools/gates/test_documented_gate_contract.py \

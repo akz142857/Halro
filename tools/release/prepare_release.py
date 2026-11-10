@@ -291,6 +291,22 @@ Re-initialisation required: TODO. Rollback fence: TODO.
 TODO — what was not run, and why that is a scoping decision rather than a waived
 result.
 
+## Website docs release companion
+
+TODO — review the release delta with the Halro-website docs owner: current Chinese
+and English landing/install pages, affected guides, generated API contracts,
+configuration defaults, upgrade/rollback boundaries, console and Provider changes.
+Keep historical guides on their original evidence. Do not relabel unreviewed text.
+
+After this preparation PR is merged, pin the website candidate to the resulting
+full Halro main SHA (not this PR head). Record its PR and immutable website SHA in
+external run evidence; do not commit that SHA back here and change the release SHA.
+Both dry-run and formal dispatch require `website_docs_commit` and build that
+candidate. Keep it unmerged until publication and channel acceptance. Afterward,
+merge the reviewed docs with truthful channel metadata and the real GHCR digest,
+then pass `website-acceptance` for both languages before reporting completion.
+See `docs/verification/website-docs-release.md`.
+
 ## Publication verdict
 
 TODO
@@ -348,10 +364,13 @@ def main() -> int:
     print("  - read the scaffolded assessment's trigger table and answer every row")
     print("  - run `make full-check` on Node 22 with nothing else competing")
     print("  - smoke the release binary against a data directory written by the previous release")
+    print("  - prepare the bilingual website docs companion (docs/verification/website-docs-release.md)")
     print("  - decide the verdict")
     print()
     print("Then: commit, open the pull request, merge, wait for that exact commit's")
-    print("push CI, rehearse with dry_run=true, and dispatch with dry_run=false.")
+    print("push CI, pin the website docs candidate to that exact main SHA, and wait for its CI.")
+    print("Supply website_docs_commit for both dry_run=true and dry_run=false dispatches.")
+    print("After publication, merge/deploy the docs companion; website-acceptance must pass.")
     return 0
 
 

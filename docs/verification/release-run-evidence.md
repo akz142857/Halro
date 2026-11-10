@@ -23,6 +23,9 @@ CHANGELOG section and a completed assessment record.
 
 The dependency graph then enforces these jobs and steps:
 
+- `website-docs`: immutable website candidate checkout, exact release identity
+  and API contract verification, bilingual website build and release-content
+  checks before `provenance` can run;
 - `quality`: repository/license boundary, `go test ./...`,
   `go test -race ./...`, `go vet ./...`, and `govulncheck`;
 - `sdk-compatibility`: the Python, Node, and Go official-SDK black-box
@@ -37,7 +40,11 @@ The dependency graph then enforces these jobs and steps:
 - `publish`: checksum, attestation, and Sigstore verification before tag and
   GitHub Release creation; and
 - `container-push`: architecture images and multi-architecture version and
-  `latest` manifests after publication.
+  `latest` manifests after publication;
+- `website-acceptance`: after container publication, wait for the public bilingual
+  docs, installation pins and API source revisions to match the release. See
+  [the docs companion procedure](website-docs-release.md) for deployment order
+  and bounded recovery without replacing release assets.
 
 There is no `environment:` on `publish`, no independent approval pause, no
 `release-governance` job, and no M11 evidence-secret check. The release graph
@@ -60,6 +67,12 @@ ref, workflow identity, and the name, size, and SHA-256 digest of every file in
 it covers those bundles without placing itself in the release directory and
 creating a self-referential digest.
 
+The docs jobs separately upload `website-docs-candidate-RUN_ID-ATTEMPT` and
+`website-docs-public-RUN_ID-ATTEMPT` with 90-day retention. They bind the intended
+release to the prepared website SHA/manifest digest and the checked live paths,
+respectively. These JSON records are workflow evidence, not signed release
+assets; the public result necessarily occurs after publication.
+
 For a publishing run, `publish` starts as soon as its declared dependencies
 are satisfied. Archive operators must not wait for an approval pause that the
 workflow does not contain.
@@ -80,6 +93,13 @@ archive, verifies that run ID, attempt, and commit match GitHub metadata,
 verifies the manifest's Sigstore identity, recomputes every recorded artifact
 digest, saves the complete workflow log, and writes `archive-sha256.txt` over
 the resulting archive.
+
+The archive script covers the signed provenance artifacts, not the separate
+website acceptance records. Download those with `gh run download RUN_ID --name
+ARTIFACT_NAME --dir DESTINATION` into a separate restricted evidence directory
+and record its hashes and final website deployment run. When only acceptance is
+rerun, retain the successful candidate artifact from its earlier attempt as well
+as the new public artifact. Do not modify an already-hashed release archive.
 
 Record the secure-storage locator, run URL, run ID, attempt, commit, tag, and
 `archive-sha256.txt` digest in the release assessment record. Do not commit

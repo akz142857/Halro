@@ -2,11 +2,13 @@
 
 > **Status.** Two things are described here, and until now the document did not
 > separate them. The **v0.x line** is what `.github/workflows/release.yml`
-> actually does today: thirteen jobs — `prepare`, `quality`, `sdk-compatibility`,
+> actually does today: `prepare`, `website-docs`, `quality`, `sdk-compatibility`,
 > `stress`, `web`, `binaries`, `container`, `debian-packages`, `provenance`,
-> `downstream-preflight`, `publish`, `container-push`, `downstream-package-repositories` — with the
+> `downstream-preflight`, `publish`, `container-push`, `downstream-package-repositories`,
+> and `website-acceptance` — with the
 > publication preconditions being `prepare`'s CHANGELOG section check, a
 > successful ordinary `ci.yml` push run for the exact `main` commit, and a
+> validated website docs candidate pinned to that release source. Entry is a
 > manual `workflow_dispatch` from `main`. There is no environment approval, no `release-governance` preflight,
 > no signed-tag requirement, and no M11 evidence verification in that workflow.
 >
@@ -38,6 +40,13 @@ signatures, and `gh attestation verify` before publication. `prepare` refuses to
 start the matrix unless `CHANGELOG.md` carries a section for the version being
 tagged. The required exact-commit ordinary CI run separately supplies the fuzz
 jobs; the release workflow does not rerun fuzz itself.
+
+Every dispatch also requires `website_docs_commit`, the full SHA of a prepared
+Halro-website companion. The workflow verifies and builds its bilingual docs
+before signing and publishing, then checks the actual public pages after
+publication. Follow the [website docs release procedure](../verification/website-docs-release.md)
+for preparation, deployment order and recovery. A version badge or download-page
+update alone does not satisfy this gate.
 
 The release workflow also refuses an absent or unfinished pre-release
 assessment. Its **Changelog coverage** table enumerates the release range and
@@ -129,12 +138,13 @@ remains private while `packages.halro.ai/apt` is the public package surface.
 
 The website package ingress and automation workflows must already be present on
 the default branch because `repository_dispatch` only loads workflows there.
-Once those one-time conditions are met, a release operator does exactly one
-thing: run `.github/workflows/release.yml` on `main` with the new version and
-`dry_run=false`. Homebrew and APT update through reviewed automation branches;
+Once those one-time conditions are met, prepare the docs companion and run
+`.github/workflows/release.yml` on `main` with the new version,
+`website_docs_commit`, and `dry_run=false`. Homebrew and APT update through reviewed automation branches;
 APT switches the GitOps image by digest, executes clean-host Debian/Ubuntu
 amd64/arm64 acceptance, waits for the Homebrew Formula, and only then updates
-the public install page.
+the public install page. Integrate those accepted channel facts with the prepared
+docs companion, merge and deploy it, and wait for public docs acceptance.
 
 For a publishing run, the workflow creates a short-lived App token and verifies
 that both downstream repositories are installed and writable before it creates
@@ -263,6 +273,13 @@ green dry run does **not** prove that any of these credentials are configured.
 
 ### 3. Run the non-publishing rehearsal
 
+First prepare the bilingual website companion against the exact merged Halro
+commit, validate it and wait for website CI. Keep its PR unmerged until the
+release assets exist. Record its full SHA as `WEBSITE_DOCS_COMMIT`; do not commit
+that SHA back into the Halro release source and thereby change the commit it
+targets. The rehearsal needs the existing release App's contents-read access to
+`akz142857/Halro-website`, even though downstream write checks are skipped.
+
 Start the only supported release workflow on `main` with `dry_run=true`:
 
 ```bash
@@ -270,6 +287,7 @@ gh workflow run release.yml \
   --repo akz142857/Halro \
   --ref main \
   -f version=v0.8.0 \
+  -f website_docs_commit="$WEBSITE_DOCS_COMMIT" \
   -f dry_run=true
 ```
 
@@ -302,6 +320,7 @@ gh workflow run release.yml \
   --repo akz142857/Halro \
   --ref main \
   -f version=v0.8.0 \
+  -f website_docs_commit="$WEBSITE_DOCS_COMMIT" \
   -f dry_run=false \
   -f publish_packages=true
 ```
@@ -314,7 +333,7 @@ approval inside the same release chain, not a second release trigger.
 
 For an explicitly scoped GitHub Release and GHCR publication without package
 channel updates, use `-f publish_packages=false`. In that mode the run is
-complete when `container-push` succeeds; `downstream-preflight` and
+complete when `container-push` and `website-acceptance` succeed; `downstream-preflight` and
 `downstream-package-repositories` are expected to be skipped.
 
 If a transient failure occurs after the tag is created but before the GitHub
@@ -350,7 +369,10 @@ The expected sequence is:
 5. APT waits for that snapshot, runs clean-host Debian and Ubuntu acceptance on
    amd64 and arm64, and waits for the matching Homebrew Formula.
 6. Only after every acceptance cell passes does Halro-website advertise the new
-   version and package channels.
+   version and package channels. Integrate the prepared docs companion into that
+   website update; an advertisement-only version bump fails the docs gate.
+7. Merge and deploy the final website PR, including the real GHCR digest. The
+   release's `website-acceptance` job verifies six public bilingual docs pages.
 
 An `auto-merge-package-release` run with a grey slashed-circle icon and
 `conclusion=skipped` is normal for `main` pushes and unrelated pull requests.
@@ -374,10 +396,14 @@ Verify that the APT clean-host matrix and both Homebrew Formula jobs passed,
 that `brew install halro-ai/tap/halro` and the documented APT installation
 produce `v0.8.0`, and that neither installer initializes configuration or starts
 a service. Finally confirm that `halro.ai` advertises only channels whose install
-acceptance passed.
+acceptance passed, and that current Chinese/English docs and installation
+commands match the release. The public docs acceptance job must pass; a website
+CI or deployment success alone does not establish that the pages are current.
 
 ### 7. Recover without rewriting a published version
 
+- If `website-acceptance` exhausts its 20-minute wait, deploy the corrected docs
+  and rerun that failed job in the original run. Published assets remain valid.
 - If the run fails before the tag exists, fix the candidate and repeat the
   exact-commit dry run before starting a new formal run.
 - If the tag and GitHub Release exist, do not start another formal `v0.8.0`

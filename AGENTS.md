@@ -3,6 +3,18 @@
 Applies to every coding agent working in this repository, not one vendor's.
 `CLAUDE.md` points here for the verification policy below.
 
+## Website docs belong to the release
+
+For every release, follow `docs/verification/website-docs-release.md`. Prepare a
+Chinese/English website docs companion pinned to the exact merged Halro release
+commit, including affected guides and regenerated API contracts. Supply its
+immutable `website_docs_commit` to both the rehearsal and formal release; the
+workflow builds and verifies it before publication. After publication, merge and
+deploy the companion with truthful channel metadata, then pass public
+`website-acceptance` before reporting the release complete. Updating only the
+download page or version badge is not docs synchronization. A website failure is
+repaired downstream without moving the release tag or replacing release assets.
+
 ## Validation policy
 
 The rule behind all of it: run what the change can affect. Re-running a suite that
