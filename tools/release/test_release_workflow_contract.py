@@ -25,6 +25,27 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         cls.ghcr_workflow = GHCR_WORKFLOW.read_text(encoding="utf-8")
         cls.ci_workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
+    def test_docs_candidate_is_required_before_signing_and_publication(self):
+        self.assertIn("website_docs_commit:", self.workflow)
+        prepare = self.workflow.split("\n  website-docs:\n")[0]
+        self.assertIn("website_docs_commit must pin", prepare)
+        candidate = self.workflow.split("\n  website-docs:\n")[1].split("\n  quality:\n")[0]
+        self.assertIn("permission-contents: read", candidate)
+        self.assertIn("ref: ${{ inputs.website_docs_commit }}", candidate)
+        self.assertIn("verify_website_docs.py candidate", candidate)
+        self.assertIn("--commit \"${GITHUB_SHA}\"", candidate)
+        self.assertIn("docker build --target build", candidate)
+        self.assertIn("bun run check:release", candidate)
+        self.assertNotIn("if:", candidate)
+        self.assertIn("needs: [prepare, binaries, container, debian-packages, website-docs]", self.workflow)
+        public = self.workflow.split("\n  website-acceptance:\n")[1]
+        self.assertIn("needs: [prepare, container-push]", public)
+        self.assertIn("needs.container-push.result == 'success'", public)
+        self.assertIn("verify_website_docs.py public", public)
+        self.assertNotIn("continue-on-error", public)
+        self.assertNotIn("publish_packages", public)
+        self.assertIn("tools/release/test_verify_website_docs.py", self.ci_workflow)
+
     def test_fresh_go_evidence_is_explicit(self):
         for name, workflow in (("CI", self.ci_workflow), ("release", self.workflow)):
             with self.subTest(workflow=name):

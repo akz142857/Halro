@@ -126,6 +126,10 @@ class PrepareReleaseTest(unittest.TestCase):
         assessment = self.read("docs/verification/assessments/v1.2.4.md")
         self.assertIn("# v1.2.4 pre-release assessment", assessment)
         self.assertIn("## Changelog coverage", assessment)
+        self.assertIn("## Website docs release companion", assessment)
+        self.assertIn("website_docs_commit", assessment)
+        self.assertIn("website_docs_commit", result.stdout)
+        self.assertIn("website-acceptance", result.stdout)
         self.assertIn("no changelog", assessment)
         self.assertIn("TODO", assessment)
 

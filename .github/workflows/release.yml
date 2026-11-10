@@ -7,6 +7,10 @@ on:
         description: "Version to release, e.g. v0.3.0"
         required: true
         type: string
+      website_docs_commit:
+        description: "Full SHA of the reviewed Halro-website docs candidate for this exact release commit"
+        required: true
+        type: string
       dry_run:
         description: "Run every gate and build every artifact, but publish nothing"
         required: false
@@ -47,11 +51,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
+          WEBSITE_DOCS_COMMIT: ${{ inputs.website_docs_commit }}
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
+          if ! printf '%s' "${WEBSITE_DOCS_COMMIT}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::website_docs_commit must pin the reviewed website candidate; prepare docs before release"
+            exit 1
+          fi
           version="${INPUT_VERSION}"
           publish=true
           if [ "${INPUT_DRY_RUN}" = "true" ]; then
@@ -125,6 +134,52 @@ jobs:
             printf '| ref | `%s` |\n' "${GITHUB_REF}"
             printf '| commit | `%s` |\n' "${GITHUB_SHA}"
           } >>"${GITHUB_STEP_SUMMARY}"
+
+  website-docs:
+    # Both rehearsals and formal releases build the exact docs candidate before
+    # signing/publishing. Keep this website PR unmerged until artifacts exist.
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Create a read-only website token
+        id: website-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.HALRO_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HALRO_RELEASE_APP_PRIVATE_KEY }}
+          owner: akz142857
+          repositories: Halro-website
+          permission-contents: read
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: akz142857/Halro-website
+          ref: ${{ inputs.website_docs_commit }}
+          token: ${{ steps.website-token.outputs.token }}
+          path: website-docs
+          persist-credentials: false
+      - name: Verify the docs candidate against the exact Halro source
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          WEBSITE_COMMIT: ${{ inputs.website_docs_commit }}
+        run: |
+          python3 tools/release/verify_website_docs.py candidate \
+            --version "${VERSION}" --commit "${GITHUB_SHA}" \
+            --website-dir website-docs --website-commit "${WEBSITE_COMMIT}" \
+            --output evidence/website-docs-candidate.json
+      - name: Build both documentation languages and verify release content
+        run: |
+          set -euo pipefail
+          docker build --target build -t halro-website-docs:check website-docs
+          docker run --rm halro-website-docs:check bun run check:release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: website-docs-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/website-docs-candidate.json
+          if-no-files-found: error
+          retention-days: 90
 
   quality:
     needs: prepare
@@ -443,7 +498,7 @@ jobs:
           path: release/*.deb
 
   provenance:
-    needs: [prepare, binaries, container, debian-packages]
+    needs: [prepare, binaries, container, debian-packages, website-docs]
     runs-on: ubuntu-latest
     permissions:
       attestations: write
@@ -780,3 +835,31 @@ jobs:
               --method POST "repos/halro-ai/${repository}/dispatches" \
               --input -
           done
+
+  website-acceptance:
+    # Publication is not complete until the prepared docs reach halro.ai.
+    # Package acceptance and the operator's website PR merge can run in parallel.
+    needs: [prepare, container-push]
+    if: >-
+      always()
+      && needs.prepare.outputs.publish == 'true'
+      && needs.container-push.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Wait for current bilingual docs, install commands and API reference
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          python3 tools/release/verify_website_docs.py public \
+            --version "${VERSION}" --commit "${GITHUB_SHA}" --wait-seconds 1200 \
+            --output evidence/website-docs-public.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: website-docs-public-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/website-docs-public.json
+          if-no-files-found: error
+          retention-days: 90

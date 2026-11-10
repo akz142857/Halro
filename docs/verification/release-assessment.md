@@ -179,10 +179,13 @@ The verdict is a judgement; publishing is a button. Once `chore(release): vX.Y.Z
 is on the default branch — the changelog section, the README image tags, the web
 package version, and the dependency-license drift hashes that version bump moves
 — open **Actions → release → Run workflow**, leave the branch on `main`, and type
-the version. `dry_run` runs the build, test, signing and attestation graph while
-publishing nothing, which is how a release is rehearsed. It deliberately skips
-the publishing-only downstream credential preflight, so the operator must still
-verify that App setup before the formal run.
+the version and immutable `website_docs_commit`. First prepare the bilingual
+[website docs companion](website-docs-release.md) against that exact merged main
+SHA and wait for its CI. `dry_run` runs the build, test, docs, signing and
+attestation graph while publishing nothing, which is how a release is rehearsed.
+It requires the App's website read access, but deliberately skips the
+publishing-only downstream write-credential preflight, so the operator must
+still verify that App setup before the formal run.
 
 The run refuses before spending the build matrix if the version is invalid, the
 run is not on the default branch, exact-commit ordinary CI is absent, or
@@ -198,3 +201,8 @@ publish job after the build, verification and downstream preflight jobs pass.
 If a later publish step fails, the exact unpublished tag may remain; recover by
 rerunning the failed jobs or by a fresh formal dispatch at the same commit,
 never by moving or replacing the tag.
+
+After publication, merge and deploy the prepared website docs with accepted
+channel metadata. The `website-acceptance` job must verify the public bilingual
+docs before reporting completion. A failed website check is repaired downstream
+and rerun without republishing the immutable release.
