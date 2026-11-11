@@ -1,6 +1,6 @@
 # Dependency and License Review
 
-Date: 2026-11-09
+Date: 2026-11-11
 
 Halro is distributed under Apache-2.0. The source tree includes the project
 license in `LICENSE`, required attribution in `NOTICE`, and the runtime
@@ -500,7 +500,8 @@ The 2026-11-09 security refresh upgrades the Parquet compression dependencies
 [GO-2026-6865](https://pkg.go.dev/vuln/GO-2026-6865). The module-path set is
 unchanged. Both root LICENSE files are byte-identical across the upgrades
 (MIT and BSD-3-Clause respectively), so the existing notices remain applicable.
-The project stays on Go 1.26.10, above both dependencies' minimum Go versions.
+The project stayed on Go 1.26.10 for that refresh, above both dependencies'
+minimum Go versions.
 
 The 2026-11-09 compatibility Go refresh upgrades `openai-go/v3` from
 3.88.0 to 3.91.1. Its downloaded root LICENSE is byte-identical (Apache-2.0).
@@ -548,6 +549,11 @@ changes do not change distribution-notice obligations. Halro uses the Zod
 resolver, not the changed TypeBox integration; jsdom's optional canvas backend
 is not installed. The embedded console is rebuilt from the updated lock.
 
+The 2026-11-11 toolchain refresh raises the `go` directive from 1.26.10 to
+1.26.11 for GO-2026-6859 in `net/http`. The module requirements and `go.sum`
+are unchanged. The refresh leaves the dependency inventory, licenses, and
+distribution notices unchanged.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -559,7 +565,7 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `7feafeb65571eaccd436fd7bc0dedaf89f914dee`
+- `go.mod`: `f5f9ef6631db7aa3e576388a1cd3306c67d9fae5`
 - `go.sum`: `c838c88b891fc02db2bc14cbe3017cfdf08e46cf`
 - `web/package.json`: `0035f05213b3160942714d679740049330630fe4`
 - `web/package-lock.json`: `538de2407d6c97d190276d0a15ebbe434e4e61c7`
