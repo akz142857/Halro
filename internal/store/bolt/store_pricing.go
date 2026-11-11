@@ -425,34 +425,42 @@ func (s *Store) ListDeploymentPriceVersions(ctx context.Context, deploymentID st
 	}
 	var prices []domain.DeploymentPriceVersion
 	err := s.view(func(tx *Tx) error {
-		timeline := tx.Bucket(bucketDeploymentPriceTimeline).Bucket([]byte(deploymentID))
-		if timeline == nil {
-			if tx.Bucket(bucketDeployments).Get([]byte(deploymentID)) == nil {
-				return ErrNotFound
-			}
+		var err error
+		prices, err = listDeploymentPriceVersionsTx(tx, deploymentID)
+		return err
+	})
+	return prices, err
+}
+
+func listDeploymentPriceVersionsTx(tx *Tx, deploymentID string) ([]domain.DeploymentPriceVersion, error) {
+	var prices []domain.DeploymentPriceVersion
+	timeline := tx.Bucket(bucketDeploymentPriceTimeline).Bucket([]byte(deploymentID))
+	if timeline == nil {
+		if tx.Bucket(bucketDeployments).Get([]byte(deploymentID)) == nil {
+			return nil, ErrNotFound
+		}
+		return nil, nil
+	}
+	err := timeline.ForEach(func(_, priceID []byte) error {
+		if priceID == nil {
 			return nil
 		}
-		return timeline.ForEach(func(_, priceID []byte) error {
-			if priceID == nil {
-				return nil
-			}
-			raw := tx.Bucket(bucketDeploymentPriceVersions).Get(priceID)
-			if raw == nil {
-				return errors.New("deployment price timeline references a missing record")
-			}
-			var price domain.DeploymentPriceVersion
-			if err := json.Unmarshal(raw, &price); err != nil {
-				return err
-			}
-			if price.DeploymentID != deploymentID {
-				return errors.New("deployment price timeline references another deployment")
-			}
-			if err := price.Validate(); err != nil {
-				return err
-			}
-			prices = append(prices, price)
-			return nil
-		})
+		raw := tx.Bucket(bucketDeploymentPriceVersions).Get(priceID)
+		if raw == nil {
+			return errors.New("deployment price timeline references a missing record")
+		}
+		var price domain.DeploymentPriceVersion
+		if err := json.Unmarshal(raw, &price); err != nil {
+			return err
+		}
+		if price.DeploymentID != deploymentID {
+			return errors.New("deployment price timeline references another deployment")
+		}
+		if err := price.Validate(); err != nil {
+			return err
+		}
+		prices = append(prices, price)
+		return nil
 	})
 	return prices, err
 }
@@ -660,13 +668,21 @@ func (s *Store) DeploymentPricingQuarantine(ctx context.Context, deploymentID st
 	}
 	var high domain.DeploymentPricingHighWater
 	err := s.view(func(tx *Tx) error {
-		raw := tx.Bucket(bucketDeploymentPricingHighWater).Get([]byte(deploymentID))
-		if raw == nil {
-			return nil
-		}
-		return json.Unmarshal(raw, &high)
+		var err error
+		high, err = deploymentPricingHighWaterTx(tx, deploymentID)
+		return err
 	})
 	return high.Quarantined, high.QuarantineReason, err
+}
+
+func deploymentPricingHighWaterTx(tx *Tx, deploymentID string) (domain.DeploymentPricingHighWater, error) {
+	var high domain.DeploymentPricingHighWater
+	raw := tx.Bucket(bucketDeploymentPricingHighWater).Get([]byte(deploymentID))
+	if raw == nil {
+		return high, nil
+	}
+	err := json.Unmarshal(raw, &high)
+	return high, err
 }
 
 func (s *Store) QuarantineRestoredScheduledPrices(ctx context.Context, backupCreatedAt, restoredAt time.Time) (int, error) {

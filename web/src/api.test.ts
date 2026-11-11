@@ -60,6 +60,20 @@ describe("typed admin API client", () => {
     expect(JSON.stringify(calls)).not.toContain("localStorage");
   });
 
+  it("preserves 64-bit values through configuration download and upload", async () => {
+    const bundle = '{"version":1,"projects":[{"daily_budget_micros_usd":9007199254740993}]}';
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/configuration/export")) return new Response(bundle);
+      expect(init?.body).toBe(`{"bundle":${bundle},"bindings":{}}`);
+      return response({ plan_id: "ready" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const downloaded = await api.exportConfiguration();
+    expect(downloaded).toBe(bundle);
+    await expect(api.previewConfigurationImport(downloaded, {})).resolves.toEqual({ plan_id: "ready" });
+  });
+
   it("follows every page of a listing rather than returning the first", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

@@ -17,12 +17,13 @@ import { MFASettings } from "./MFASettings";
 import { PasswordChangeForm } from "./PasswordChangeForm";
 import { RuntimeSettingsForm } from "./RuntimeSettingsForm";
 import { UsageWindowForm } from "./UsageWindowForm";
+const ConfigurationTransferPanel = lazy(() => import("./ConfigurationTransferPanel").then((module) => ({ default: module.ConfigurationTransferPanel })));
 const MasterKeyCustodyPage = lazy(() => import("./MasterKeyCustodyPage").then((module) => ({ default: module.MasterKeyCustodyPage })));
 
 // One list, in the order the nav renders them. The routing used to repeat the
 // names in a chain of comparisons and the nav in its own array, so a pane could
 // be reachable by URL and absent from the menu, or the reverse.
-const SETTINGS_PANES = ["general", "security", "accounts", "instance", "config", "custody", "diagnostics"] as const;
+const SETTINGS_PANES = ["general", "security", "accounts", "instance", "config", "transfer", "custody", "diagnostics"] as const;
 type SettingsPane = (typeof SETTINGS_PANES)[number];
 
 function paneFromPath(path: string): SettingsPane {
@@ -39,8 +40,11 @@ export function SettingsPage({
 }) {
   const { t } = useTranslation();
   const session = useSession();
+  const readOnly = useIsReadOnly();
+  const panes: readonly SettingsPane[] = readOnly ? SETTINGS_PANES.filter((item) => item !== "transfer") : SETTINGS_PANES;
   const path = usePathname();
-  const pane = mfaSetupRequired ? "security" : paneFromPath(path);
+  const requestedPane = paneFromPath(path);
+  const pane = mfaSetupRequired ? "security" : panes.includes(requestedPane) ? requestedPane : "general";
   const status = useQuery({
     queryKey: ["system-status"],
     queryFn: api.systemStatus,
@@ -100,11 +104,11 @@ export function SettingsPage({
           <label className="settings-section-select">
             <span>{t("settings.sectionNavigation")}</span>
             <select value={pane} onChange={(event) => navigate(`/admin/settings/${event.target.value}`)}>
-              {SETTINGS_PANES.map((item) => <option value={item} key={item}>{t(`settings.panes.${item}`)}</option>)}
+              {panes.map((item) => <option value={item} key={item}>{t(`settings.panes.${item}`)}</option>)}
             </select>
           </label>
           <nav className="settings-nav" aria-label={t("settings.sectionNavigation")}>
-            {SETTINGS_PANES.map((item) => (
+            {panes.map((item) => (
               <a key={item} href={`/admin/settings/${item}`} className={pane === item ? "active" : ""} aria-current={pane === item ? "page" : undefined} onClick={(event) => { event.preventDefault(); navigate(`/admin/settings/${item}`); }}>{t(`settings.panes.${item}`)}</a>
             ))}
           </nav>
@@ -116,6 +120,10 @@ export function SettingsPage({
             {pane === "accounts" && <section aria-labelledby="accounts-title"><SettingsGroupHeader title={t("settings.panes.accounts")} id="accounts-title" /><AdminUsersSection /></section>}
             {!pending && !error && pane === "instance" && uiSettings.data && preferences.data && settings.data && <section aria-labelledby="instance-title"><SettingsGroupHeader title={t("settings.panes.instance")} description={t("settings.instanceDescription")} id="instance-title" /><InstanceLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} />{accounting.data && <AccountingTimezoneForm settings={accounting.data.data} />}{usageSettings.data && <UsageWindowForm settings={usageSettings.data.data} />}<RuntimeSettingsForm settings={settings.data.data} /></section>}
             {!pending && !error && pane === "config" && config.data && modelCatalog.data && <section aria-labelledby="config-title"><SettingsGroupHeader title={t("settings.panes.config")} id="config-title" /><ModelCatalogCard info={modelCatalog.data} onRefresh={() => modelCatalog.refetch()} /><ConfigPreviewCard yaml={config.data.yaml} entries={config.data.entries} /></section>}
+            {pane === "transfer" && <section aria-labelledby="transfer-title">
+              <SettingsGroupHeader title={t("settings.panes.transfer")} id="transfer-title" />
+              <Suspense fallback={<Loading />}><ConfigurationTransferPanel /></Suspense>
+            </section>}
             {pane === "custody" && <Suspense fallback={<Loading />}><MasterKeyCustodyPage embedded /></Suspense>}
             {!pending && !error && pane === "diagnostics" && status.data && <DiagnosticsPane status={status.data} findings={advisor.data?.items} findingsUnavailable={advisor.isError} accountingLabels={accountingLabels} metricLabels={metricLabels} />}
           </div>

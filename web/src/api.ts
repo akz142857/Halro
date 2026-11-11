@@ -48,6 +48,9 @@ import type {
   SetupStatus,
   SystemStatus,
   ClusterStatus,
+  ConfigurationBindings,
+  ConfigurationImportPreview,
+  ConfigurationImportResult,
   SystemConfig,
   ModelCatalogInfo,
   TokenGuardPolicy,
@@ -180,6 +183,7 @@ async function request<T>(
   path: string,
   init: RequestInit = {},
   etag = "",
+  responseType: "json" | "text" = "json",
 ): Promise<ApiResult<T>> {
   requireAvailableSession(path);
   const generation = sessionGeneration;
@@ -197,6 +201,9 @@ async function request<T>(
     cache: "no-store",
   });
   const text = await response.text();
+  if (response.ok && responseType === "text") {
+    return { data: text as T, etag: response.headers.get("ETag") || "" };
+  }
   let payload: unknown = undefined;
   if (text) {
     try {
@@ -234,6 +241,14 @@ export interface Reauth {
 
 function stepUpBody(reauth: Reauth) {
   return { current_password: reauth.currentPassword, totp_code: reauth.totpCode };
+}
+
+// Keep the bundle's original JSON bytes so JS numbers cannot round int64
+// limits or prices. Parse only to verify that the file contains a single value.
+function configurationImportBody(bundle: string, options: { bindings: ConfigurationBindings; plan_id?: string; accept_operator_declarations?: boolean } & Partial<ReturnType<typeof stepUpBody>>): RequestInit {
+  const value: unknown = JSON.parse(bundle);
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid configuration bundle");
+  return { method: "POST", body: `{"bundle":${bundle},${JSON.stringify(options).slice(1)}` };
 }
 
 export const api = {
@@ -318,6 +333,14 @@ export const api = {
     request<ClusterStatus>("/cluster/status").then((value) => value.data),
   systemConfig: () =>
     request<SystemConfig>("/system/config").then((value) => value.data),
+  exportConfiguration: () => request<string>("/configuration/export", {}, "", "text").then((value) => value.data),
+  previewConfigurationImport: (bundle: string, bindings: ConfigurationBindings) =>
+    request<ConfigurationImportPreview>("/configuration/import/preview", configurationImportBody(bundle, { bindings })).then((value) => value.data),
+  applyConfigurationImport: (bundle: string, bindings: ConfigurationBindings, planID: string, reauth: Reauth, acceptDeclarations: boolean) =>
+    request<ConfigurationImportResult>("/configuration/import", configurationImportBody(bundle, {
+      bindings, plan_id: planID, accept_operator_declarations: acceptDeclarations, ...stepUpBody(reauth),
+    })).then((value) => value.data),
+
   /** What this build can serve: capability keys, and per profile the defaults,
    * ceiling, endpoint template and initial endpoint. Compile-time data, so it
    * never changes while a session is open — fetch it once and keep it. */

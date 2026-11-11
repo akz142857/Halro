@@ -1632,3 +1632,66 @@ export interface AdminPreferences {
 
 export interface PricingClockConfirmation { revision: number; reason: string; price_id: string; reviewed_at: string }
 export interface PricingClockReview { deployment_id: string; confirmation: PricingClockConfirmation; previous_selected_at: string; price: DeploymentPriceVersion }
+
+export interface ConfigurationProviderTarget {
+  credential_id: string;
+  base_url?: string;
+  egress_proxy_id?: string;
+  bedrock_project_id?: string;
+  acknowledged_policy_revision?: string;
+}
+
+export type ConfigurationBindings = Record<string, ConfigurationProviderTarget>;
+export type ConfigurationResource = "providers" | "deployments" | "routes" | "redaction_policies" | "token_guard_policies" | "projects" | "gateway_keys";
+
+export interface ConfigurationObject {
+  id: string;
+  name: string;
+  target?: string;
+}
+
+export interface ConfigurationProviderReview extends ConfigurationObject {
+  type: ProviderType;
+  access_surface: AccessSurface;
+  credential_scheme: CredentialScheme;
+  base_url: string;
+  requires_egress_proxy: boolean;
+  bedrock_project_id?: string;
+  policy_revision?: string;
+  policy_url?: string;
+}
+
+export interface ConfigurationNotice {
+  resource: ConfigurationResource;
+  id: string;
+  code: string;
+  alias?: string;
+}
+
+export interface ConfigurationImportPreview {
+  counts: Record<ConfigurationResource, number>;
+  providers: ConfigurationProviderReview[];
+  issues: { resource: ConfigurationResource | "bundle" | "target"; id?: string; code: string; message: string }[];
+  deployments_to_enable: ConfigurationObject[];
+  routes_to_enable: ConfigurationObject[];
+  notices?: ConfigurationNotice[];
+  operator_declarations?: (ConfigurationObject & { model: string; capabilities: string[] })[];
+  region_changes?: (ConfigurationObject & { source_region: string; target_region: string })[];
+  plan_id?: string;
+}
+
+type ConfigurationKeyReference = ConfigurationObject & { project_id: string };
+
+export type ConfigurationImportResult = {
+  operation_id: string;
+  counts: ConfigurationImportPreview["counts"];
+} & ({
+  status: "imported";
+  deployments_to_enable: ConfigurationObject[];
+  routes_to_enable: ConfigurationObject[];
+  gateway_keys: (ConfigurationKeyReference & { key: string })[];
+  activation_stale: boolean;
+} | {
+  status: "confirmation_unavailable";
+  keys_to_reissue: ConfigurationKeyReference[];
+});

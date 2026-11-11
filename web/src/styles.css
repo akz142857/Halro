@@ -3586,3 +3586,17 @@ textarea { resize: vertical; }
 }
 .usage-tabs-shell { margin-bottom: var(--space-3); }
 .usage-tabs-shell > .provider-tabs { border-bottom: 1px solid var(--line); }
+
+.configuration-transfer-card { padding: var(--space-5); margin-bottom: var(--space-4); }
+.configuration-transfer-card > h3 { margin: 0 0 var(--space-2); }
+.configuration-transfer-card > .form-actions { justify-content: flex-start; flex-wrap: wrap; }
+.configuration-counts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(9rem, 100%), 1fr)); gap: var(--space-3); margin-block: var(--space-4); }
+.configuration-counts > div { border-block-start: 1px solid var(--line); padding-block-start: var(--space-2); }
+.configuration-counts dt { color: var(--muted); font-size: var(--font-size-xs); }
+.configuration-counts dd { margin: 0; font-variant-numeric: tabular-nums; }
+.configuration-binding { min-width: 0; margin: 0 0 var(--space-3); border: 1px solid var(--line); padding: var(--space-3); }
+.configuration-binding > legend { max-width: 100%; overflow-wrap: anywhere; padding-inline: var(--space-2); }
+.configuration-acknowledgement { display: flex; align-items: baseline; gap: var(--space-2); }
+.configuration-acknowledgement input { width: auto; min-height: auto; }
+.configuration-list { display: block; overflow-wrap: anywhere; }
+.configuration-list :is(ol, ul) { margin: var(--space-2) 0 0; padding-inline-start: var(--space-5); }
