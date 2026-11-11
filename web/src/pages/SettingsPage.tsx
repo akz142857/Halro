@@ -120,8 +120,8 @@ export function SettingsPage({
             {pane === "accounts" && <section aria-labelledby="accounts-title"><SettingsGroupHeader title={t("settings.panes.accounts")} id="accounts-title" /><AdminUsersSection /></section>}
             {!pending && !error && pane === "instance" && uiSettings.data && preferences.data && settings.data && <section aria-labelledby="instance-title"><SettingsGroupHeader title={t("settings.panes.instance")} description={t("settings.instanceDescription")} id="instance-title" /><InstanceLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} />{accounting.data && <AccountingTimezoneForm settings={accounting.data.data} />}{usageSettings.data && <UsageWindowForm settings={usageSettings.data.data} />}<RuntimeSettingsForm settings={settings.data.data} /></section>}
             {!pending && !error && pane === "config" && config.data && modelCatalog.data && <section aria-labelledby="config-title"><SettingsGroupHeader title={t("settings.panes.config")} id="config-title" /><ModelCatalogCard info={modelCatalog.data} onRefresh={() => modelCatalog.refetch()} /><ConfigPreviewCard yaml={config.data.yaml} entries={config.data.entries} /></section>}
-            {pane === "transfer" && <section aria-labelledby="transfer-title">
-              <SettingsGroupHeader title={t("settings.panes.transfer")} id="transfer-title" />
+            {pane === "transfer" && <section className="configuration-transfer" aria-labelledby="transfer-title">
+              <SettingsGroupHeader title={t("settings.panes.transfer")} description={t("configurationTransfer.description")} id="transfer-title" />
               <Suspense fallback={<Loading />}><ConfigurationTransferPanel /></Suspense>
             </section>}
             {pane === "custody" && <Suspense fallback={<Loading />}><MasterKeyCustodyPage embedded /></Suspense>}
