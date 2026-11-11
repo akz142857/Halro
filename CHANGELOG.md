@@ -6,6 +6,25 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-11
+
+### Added
+
+- Export portable configuration from **Settings → Configuration transfer**
+  and import it into a fresh Halro instance. The JSON includes providers,
+  model deployments and current prices, routes, security policies, projects,
+  and gateway key settings. It excludes credentials, key material, logs,
+  and usage history.
+- Preview the import, bind credentials on the target, and review capability
+  declarations and the resources to enable. Import issues new gateway keys
+  for one-time download. Verify and enable deployments before enabling routes.
+
+### Upgrading
+
+- Upgrading from v0.13.0 does not require reinitializing data or changing
+  configuration. Configuration transfer is for setting up a separate
+  instance. Use the normal backup procedure for upgrade recovery.
+
 ### Security
 
 - Build with Go 1.26.11 to address GO-2026-6859 in the HTTP standard library.
@@ -2966,6 +2985,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.14.0]: https://github.com/akz142857/Halro/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/akz142857/Halro/compare/v0.12.2...v0.13.0
 [0.12.2]: https://github.com/akz142857/Halro/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/akz142857/Halro/compare/v0.12.0...v0.12.1
