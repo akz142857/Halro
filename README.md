@@ -185,7 +185,7 @@ identity; use that release's own verification instructions.
 | Understand contracts | [API compatibility](docs/compatibility/README.md) · [Gateway correctness](docs/contracts/gateway-correctness.md) · [Audit integrity](docs/contracts/audit-integrity.md) |
 | Explore the project | [Documentation index](docs/README.md) · [Architecture decisions](docs/adr/) · [Implementation evidence](docs/milestones/implementation-status.md) |
 
-Build and start from source with Go 1.26.10+:
+Build and start from source with Go 1.26.11+:
 
 ```bash
 git clone https://github.com/akz142857/Halro.git

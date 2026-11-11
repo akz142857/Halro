@@ -10,6 +10,30 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
+it("shows how to replace an empty bundle without showing a zero-count preview", async () => {
+  vi.spyOn(api, "previewConfigurationImport").mockResolvedValue({
+    counts: { providers: 0, deployments: 0, routes: 0, redaction_policies: 0, token_guard_policies: 0, projects: 0, gateway_keys: 0 },
+    providers: [], deployments_to_enable: [], routes_to_enable: [],
+    issues: [{ resource: "bundle", code: "record_count", message: "configuration is empty" }],
+  });
+  window.history.replaceState(null, "", "/admin/settings/transfer");
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client.setQueryData(["session"], { username: "admin", role: "administrator" });
+  render(<QueryClientProvider client={client}><SettingsPage /></QueryClientProvider>);
+  const input = await screen.findByLabelText("配置文件");
+  const chooseFile = vi.spyOn(input, "click");
+  fireEvent.click(screen.getByRole("button", { name: "选择文件…" }));
+  expect(chooseFile).toHaveBeenCalledOnce();
+  const file = new File(['{"version":1}'], "empty.json");
+  Object.defineProperty(file, "text", { value: () => Promise.resolve('{"version":1}') });
+  fireEvent.change(input, { target: { files: [file] } });
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("请从有配置的源实例重新下载。");
+  expect(screen.queryByRole("region", { name: "配置摘要" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "检查导入" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "更换文件…" })).toHaveAccessibleDescription("empty.json");
+});
+
 it("requires a fresh preview after binding edits and offers newly issued keys once", async () => {
   const unbound: ConfigurationImportPreview = {
     counts: { providers: 1, deployments: 1, routes: 1, redaction_policies: 0, token_guard_policies: 0, projects: 1, gateway_keys: 1 },

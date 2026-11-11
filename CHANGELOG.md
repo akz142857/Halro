@@ -6,6 +6,10 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Security
+
+- Build with Go 1.26.11 to address GO-2026-6859 in the HTTP standard library.
+
 ## [0.13.0] - 2026-11-10
 
 ### Upgrading

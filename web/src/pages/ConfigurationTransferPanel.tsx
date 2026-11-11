@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ApiError, api, type Reauth } from "../api";
 import { ConfirmButton, ErrorState } from "../components";
@@ -28,6 +28,8 @@ function downloadJSON(name: string, content: string) {
 export function ConfigurationTransferPanel() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [fileName, setFileName] = useState("");
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<unknown>(null);
   const [exportOmissions, setExportOmissions] = useState<ConfigurationNotice[]>([]);
@@ -53,6 +55,9 @@ export function ConfigurationTransferPanel() {
     };
   }, [unsavedKeys, t]);
   const hasProviders = Boolean(preview?.providers.length);
+  const fileRejected = preview?.issues.some(({ code }) => code === "record_count" || code === "unsupported_version");
+  const emptyBundle = preview && resources.every((resource) => preview.counts[resource] === 0);
+  const canApply = Boolean(preview?.plan_id);
   const credentials = useQuery({ queryKey: ["credentials"], queryFn: api.credentials, enabled: hasProviders, refetchOnWindowFocus: true });
   const proxies = useQuery({ queryKey: ["provider-egress-proxies"], queryFn: api.providerEgressProxies, enabled: hasProviders, refetchOnWindowFocus: true });
 
@@ -73,13 +78,14 @@ export function ConfigurationTransferPanel() {
   }
 
   async function selectFile(file: File | undefined) {
+    if (!file) return;
+    setFileName(file.name);
     setBundle("");
     setTargets(new Map());
     setPreview(undefined);
     setAcceptDeclarations(false);
     setFileError(null);
     setImportError(null);
-    if (!file) return;
     if (file.size > fileLimit) {
       setFileError("fileSize");
       return;
@@ -148,66 +154,88 @@ export function ConfigurationTransferPanel() {
   }
 
   return <>
-    <section className="panel configuration-transfer-card" aria-labelledby="configuration-export-title">
-      <h3 id="configuration-export-title">{t("configurationTransfer.exportTitle")}</h3>
-      <p>{t("configurationTransfer.exportDescription")}</p>
-      <p className="form-note">{t("configurationTransfer.exportSensitiveRules")}</p>
-      <div className="form-actions">
-        <button className="button secondary" type="button" disabled={exporting} onClick={() => void exportBundle()}>
+    <section className="configuration-transfer-card" aria-labelledby="configuration-export-title">
+      <div className="configuration-transfer-row">
+        <div>
+          <h3 id="configuration-export-title">{t("configurationTransfer.exportTitle")}</h3>
+          <p className="configuration-transfer-description">{t("configurationTransfer.exportDescription")}</p>
+        </div>
+        <button className="button" type="button" disabled={exporting} onClick={() => void exportBundle()}>
           {exporting ? t("common.working") : t("configurationTransfer.downloadBundle")}
         </button>
       </div>
+      <p className="configuration-transfer-note">{t("configurationTransfer.exportSensitiveRules")}</p>
       {Boolean(exportError) && <ErrorState error={exportError} />}
       <ConfigurationNotices notices={exportOmissions} />
     </section>
 
-    <section className="panel configuration-transfer-card" aria-labelledby="configuration-import-title">
+    <section className="configuration-transfer-card" aria-labelledby="configuration-import-title">
       <h3 id="configuration-import-title">{t("configurationTransfer.importTitle")}</h3>
       {!result && <>
-        <p>{t("configurationTransfer.importDescription")}</p>
-        <div className="field">
-          <label htmlFor="configuration-file">{t("configurationTransfer.file")}</label>
-          <input id="configuration-file" type="file" accept=".json,application/json" disabled={busy}
-            onChange={(event) => void selectFile(event.currentTarget.files?.[0])} />
+        <p className="configuration-transfer-description">{t("configurationTransfer.importDescription")}</p>
+        <div className="configuration-transfer-row configuration-file">
+          <div>
+            <label htmlFor="configuration-file">{t("configurationTransfer.file")}</label>
+            <p className="configuration-transfer-note" id="configuration-file-detail" aria-live="polite">
+              {fileName || t("configurationTransfer.fileFormat")}
+            </p>
+          </div>
+          <input ref={fileInput} id="configuration-file" type="file" accept=".json,application/json" hidden disabled={busy}
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = "";
+              void selectFile(file);
+            }} />
+          <button className={`button${fileName ? "" : " primary"}`} type="button" disabled={busy}
+            aria-describedby="configuration-file-detail" onClick={() => fileInput.current?.click()}>
+            {busy && !preview ? t("common.working") : t(fileName ? "configurationTransfer.replaceFile" : "configurationTransfer.chooseFile")}
+          </button>
         </div>
-        {fileError && <p className="notice error" role="alert">{t(`configurationTransfer.${fileError}`)}</p>}
+        {fileError && <p className="notice error configuration-list" role="alert">{t(`configurationTransfer.${fileError}`)}</p>}
         {Boolean(importError) && <ErrorState error={importError} />}
         {preview && <>
-          <ConfigurationCounts counts={preview.counts} />
+          {!fileRejected && <ConfigurationCounts counts={preview.counts} />}
+          {preview.issues.length > 0 && <div className={`notice ${fileRejected ? "error" : "warning"} configuration-list`} role={fileRejected ? "alert" : "status"}>
+            <strong>{t("configurationTransfer.issues")}</strong>
+            <ul>{preview.issues.map((issue, index) => <li key={index}>
+              {issue.id ? <>{preview.providers.find((provider) => provider.id === issue.id)?.name ?? issue.id}{" — "}</> : null}
+              {issue.code === "record_count" && emptyBundle ? t("configurationTransfer.emptyFile") :
+                t(`configurationTransfer.issueCodes.${issue.code}`, { defaultValue: issue.message })}
+            </li>)}</ul>
+          </div>}
           {hasProviders && <>
-            <p>{t("configurationTransfer.bindingHelp")} <a className="text-link" href="/admin/providers?view=credentials" target="_blank" rel="noreferrer">{t("configurationTransfer.manageCredentials")}</a></p>
+            <div className="configuration-transfer-row configuration-section-header">
+              <div>
+                <h4>{t("configurationTransfer.targetBindings")}</h4>
+                <p className="configuration-transfer-description">{t("configurationTransfer.bindingHelp")}</p>
+              </div>
+              <a className="text-link" href="/admin/providers?view=credentials" target="_blank" rel="noreferrer">{t("configurationTransfer.manageCredentials")}</a>
+            </div>
             {(credentials.error || proxies.error) && <ErrorState error={credentials.error || proxies.error} />}
             {preview.providers.map((provider) => <ConfigurationProviderBinding key={provider.id}
               provider={provider} target={targets.get(provider.id) ?? emptyTarget}
               credentials={credentials.data?.items ?? []} proxies={proxies.data?.items ?? []}
               disabled={busy} onChange={(change) => updateTarget(provider.id, change)} />)}
           </>}
-          {preview.issues.length > 0 && <div className="notice warning configuration-list" role="status">
-            <strong>{t("configurationTransfer.issues")}</strong>
-            <ul>{preview.issues.map((issue, index) => <li key={index}>
-              {t(`configurationTransfer.resources.${issue.resource}`)}{issue.id ? ` (${preview.providers.find((provider) => provider.id === issue.id)?.name ?? issue.id})` : ""}{" — "}
-              {t(`configurationTransfer.issueCodes.${issue.code}`, { defaultValue: issue.message })}
-            </li>)}</ul>
-          </div>}
           <ConfigurationNotices notices={preview.notices ?? []} />
-          {Boolean(preview.region_changes?.length) && <div className="notice info configuration-list">
+          {canApply && Boolean(preview.region_changes?.length) && <div className="notice info configuration-list">
             <strong>{t("configurationTransfer.regionChanges")}</strong>
             <ul>{preview.region_changes?.map((change) => <li key={change.id}>{change.name} ({change.source_region || "—"} → {change.target_region})</li>)}</ul>
           </div>}
-          {Boolean(preview.operator_declarations?.length) && <div className="notice warning configuration-list">
+          {canApply && Boolean(preview.operator_declarations?.length) && <div className="configuration-detail configuration-list">
             <strong>{t("configurationTransfer.operatorDeclarations")}</strong>
             <ul>{preview.operator_declarations?.map((declaration) => <li key={declaration.id}>
               {declaration.name} ({declaration.model}) — {declaration.capabilities.map((name) => t(`capabilities.${name}`, { defaultValue: name })).join(t("common.listSeparator"))}
             </li>)}</ul>
-            {preview.plan_id && <label className="check-row">
+            <label className="check-row">
               <input type="checkbox" checked={acceptDeclarations} onChange={(event) => setAcceptDeclarations(event.target.checked)} />
               <span>{t("configurationTransfer.acceptDeclarations")}</span>
-            </label>}
+            </label>
           </div>}
-          <ConfigurationActivationSteps deployments={preview.deployments_to_enable} routes={preview.routes_to_enable} />
+          {canApply && <ConfigurationActivationSteps deployments={preview.deployments_to_enable} routes={preview.routes_to_enable} />}
         </>}
-        {bundle && <div className="form-actions">
-          <button type="button" className="button secondary" disabled={busy} onClick={() => void reviewImport()}>
+        {bundle && !fileRejected && <div className="form-actions configuration-transfer-actions">
+          <button type="button" className={`button${canApply ? "" : " primary"}`} disabled={busy} onClick={() => void reviewImport()}>
             {busy ? t("common.working") : t("configurationTransfer.preview")}
           </button>
           {preview?.plan_id && <ConfirmButton className="button primary" label={t("configurationTransfer.apply")}
@@ -231,18 +259,18 @@ export function ConfigurationTransferPanel() {
         <ConfigurationCounts counts={result.counts} />
       </>}
       {result?.status === "imported" && <>
-        <p className="notice success" role="status">{t("configurationTransfer.imported")}</p>
-        {result.activation_stale && <p className="notice warning" role="alert">{t("settings.activationStaleDescription")}</p>}
+        <p className="notice success configuration-list" role="status">{t("configurationTransfer.imported")}</p>
+        {result.activation_stale && <p className="notice warning configuration-list" role="alert">{t("settings.activationStaleDescription")}</p>}
         <ConfigurationCounts counts={result.counts} />
         <ConfigurationActivationSteps deployments={result.deployments_to_enable} routes={result.routes_to_enable} imported />
-        {result.gateway_keys.length > 0 && <div className="field">
-          <strong>{t("configurationTransfer.newKeys")}</strong>
-          <p>{t("configurationTransfer.keyHelp")}</p>
+        {result.gateway_keys.length > 0 && <div className="configuration-detail">
+          <h4>{t("configurationTransfer.newKeys")}</h4>
+          <p className="configuration-transfer-description">{t("configurationTransfer.keyHelp")}</p>
           <label className="check-row">
             <input type="checkbox" checked={keysSaved} onChange={(event) => setKeysSaved(event.target.checked)} />
             <span>{t("configurationTransfer.keysSaved")}</span>
           </label>
-          <div className="form-actions">
+          <div className="form-actions configuration-transfer-actions">
             <button type="button" className="button primary" onClick={() =>
               downloadJSON("halro-new-gateway-keys.json", JSON.stringify(result.gateway_keys, null, 2))}>
               {t("configurationTransfer.downloadKeys")}
@@ -271,9 +299,14 @@ function ConfigurationNotices({ notices }: { notices: ConfigurationNotice[] }) {
 
 function ConfigurationCounts({ counts }: { counts: ConfigurationImportPreview["counts"] }) {
   const { t } = useTranslation();
-  return <dl className="configuration-counts">{resources.map((resource) => <div key={resource}>
-    <dt>{t(`configurationTransfer.resources.${resource}`)}</dt><dd>{counts[resource]}</dd>
-  </div>)}</dl>;
+  const populated = resources.filter((resource) => counts[resource] > 0);
+  if (!populated.length) return null;
+  return <section className="configuration-count-summary" aria-label={t("configurationTransfer.configurationSummary")}>
+    <h4>{t("configurationTransfer.configurationSummary")}</h4>
+    <dl className="configuration-counts">{populated.map((resource) => <div key={resource}>
+      <dt>{t(`configurationTransfer.resources.${resource}`)}</dt><dd>{counts[resource]}</dd>
+    </div>)}</dl>
+  </section>;
 }
 
 function ConfigurationProviderBinding({ provider, target, credentials, proxies, disabled, onChange }: {
@@ -289,28 +322,30 @@ function ConfigurationProviderBinding({ provider, target, credentials, proxies, 
     credential.access_surface === provider.access_surface && credential.scheme === provider.credential_scheme);
   return <fieldset className="configuration-binding" disabled={disabled}>
     <legend>{provider.name}</legend>
-    <label className="field"><span>{t("configurationTransfer.endpoint")}</span>
-      <input type="url" value={target.base_url ?? provider.base_url} onChange={(event) =>
-        onChange({ base_url: event.target.value, acknowledged_policy_revision: undefined })} />
-    </label>
-    <label className="field"><span>{t("configurationTransfer.credential")}</span>
-      <select value={target.credential_id} onChange={(event) => onChange({ credential_id: event.target.value })}>
-        <option value="">{t("configurationTransfer.selectCredential")}</option>
-        {compatible.map((credential) => <option key={credential.id} value={credential.id}>
-          {credential.name} ({credential.bound_base_url})
-        </option>)}
-      </select>
-    </label>
-    <label className="field"><span>{t("configurationTransfer.proxy")}</span>
-      <select value={target.egress_proxy_id ?? ""} onChange={(event) => onChange({ egress_proxy_id: event.target.value })}>
-        <option value="">{t(provider.requires_egress_proxy ? "configurationTransfer.selectProxy" : "configurationTransfer.direct")}</option>
-        {proxies.map((proxy) => <option key={proxy.id} value={proxy.id}>{proxy.name}</option>)}
-      </select>
-    </label>
-    {provider.access_surface === "bedrock-mantle" && <label className="field"><span>{t("configurationTransfer.bedrockProject")}</span>
-      <input value={target.bedrock_project_id ?? provider.bedrock_project_id ?? ""} onChange={(event) =>
-        onChange({ bedrock_project_id: event.target.value })} />
-    </label>}
+    <div className="configuration-binding-fields">
+      <label className="field configuration-endpoint"><span>{t("configurationTransfer.endpoint")}</span>
+        <input type="url" value={target.base_url ?? provider.base_url} onChange={(event) =>
+          onChange({ base_url: event.target.value, acknowledged_policy_revision: undefined })} />
+      </label>
+      <label className="field"><span>{t("configurationTransfer.credential")}</span>
+        <select value={target.credential_id} onChange={(event) => onChange({ credential_id: event.target.value })}>
+          <option value="">{t("configurationTransfer.selectCredential")}</option>
+          {compatible.map((credential) => <option key={credential.id} value={credential.id}>
+            {credential.name} ({credential.bound_base_url})
+          </option>)}
+        </select>
+      </label>
+      <label className="field"><span>{t("configurationTransfer.proxy")}</span>
+        <select value={target.egress_proxy_id ?? ""} onChange={(event) => onChange({ egress_proxy_id: event.target.value })}>
+          <option value="">{t(provider.requires_egress_proxy ? "configurationTransfer.selectProxy" : "configurationTransfer.direct")}</option>
+          {proxies.map((proxy) => <option key={proxy.id} value={proxy.id}>{proxy.name}</option>)}
+        </select>
+      </label>
+      {provider.access_surface === "bedrock-mantle" && <label className="field configuration-endpoint"><span>{t("configurationTransfer.bedrockProject")}</span>
+        <input value={target.bedrock_project_id ?? provider.bedrock_project_id ?? ""} onChange={(event) =>
+          onChange({ bedrock_project_id: event.target.value })} />
+      </label>}
+    </div>
     {provider.policy_revision && <label className="configuration-acknowledgement">
       <input type="checkbox" checked={target.acknowledged_policy_revision === provider.policy_revision} onChange={(event) =>
         onChange({ acknowledged_policy_revision: event.target.checked ? provider.policy_revision : undefined })} />
@@ -333,7 +368,7 @@ function ConfigurationActivationSteps({ deployments, routes, imported = false }:
         {imported ? <a className="text-link" href={`/admin/${page}#${kind}-${encodeURIComponent(item.id)}`} target="_blank" rel="noreferrer">{label}</a> : label}
       </span>;
     });
-  return <div className="notice warning configuration-list">
+  return <div className="configuration-detail configuration-list">
     <strong>{t("configurationTransfer.activationTitle")}</strong>
     <ol>
       {deployments.length > 0 && <li>{t("configurationTransfer.activateDeployments")}{" "}
