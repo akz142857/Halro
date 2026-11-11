@@ -243,6 +243,13 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 		(input.ProfileID == "" || input.ProfileID == current.ProfileID) {
 		prior.Evidence = current.CapabilityEvidence
 		prior.OperatorDisabled = current.OperatorDisabled
+		// A state toggle does not edit which catalog model backs an alias.
+		if input.Enabled != current.Enabled && input.CapabilityModel == "" &&
+			input.ResolutionRevision == "" && input.CapabilityDetectionID == "" && input.Mode != deploymentModeOperatorDeclared &&
+			(current.TargetKind == domain.TargetAzureDeployment || current.TargetKind == domain.TargetCustomEndpointModel) &&
+			current.ModelCapabilitySnapshot.CanonicalModelRef != current.ProviderModel {
+			input.CapabilityModel = current.ModelCapabilitySnapshot.CanonicalModelRef
+		}
 	}
 	deployment, err := r.deploymentFromInput(request, current.ID, input, prior, current.CreatedAt, time.Now().UTC())
 	if err != nil {

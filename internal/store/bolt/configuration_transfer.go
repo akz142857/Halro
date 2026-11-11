@@ -21,6 +21,7 @@ type PortableConfiguration struct {
 	Projects           []domain.Project
 	GatewayKeys        []domain.GatewayKey
 	Prices             map[string]domain.DeploymentPriceVersion
+	QuarantinedPrices  map[string]bool
 }
 
 func (s *Store) ReadPortableConfiguration(ctx context.Context, at time.Time) (PortableConfiguration, error) {
@@ -47,12 +48,21 @@ func (s *Store) ReadPortableConfiguration(ctx context.Context, at time.Time) (Po
 			normalizeProviderBindings(&config.Providers[i])
 		}
 		config.Prices = make(map[string]domain.DeploymentPriceVersion)
+		config.QuarantinedPrices = make(map[string]bool)
 		for _, deployment := range config.Deployments {
-			if deployment.DeletedAt != nil || deployment.PricingQuarantined {
+			if deployment.DeletedAt != nil {
 				continue
 			}
 			if err := ctx.Err(); err != nil {
 				return err
+			}
+			high, err := deploymentPricingHighWaterTx(tx, deployment.ID)
+			if err != nil {
+				return err
+			}
+			if high.Quarantined {
+				config.QuarantinedPrices[deployment.ID] = true
+				continue
 			}
 			timeline, err := listDeploymentPriceVersionsTx(tx, deployment.ID)
 			if err != nil {
@@ -104,16 +114,26 @@ func checkConfigurationImportTarget(tx *Tx) error {
 	return nil
 }
 
+// ConfigurationImportConfirmationError means the local transaction committed
+// but its replica confirmation could not be established.
+type ConfigurationImportConfirmationError struct{ Cause error }
+
+func (e *ConfigurationImportConfirmationError) Error() string { return e.Cause.Error() }
+func (e *ConfigurationImportConfirmationError) Unwrap() error { return e.Cause }
+
 // ImportPortableConfiguration commits prepared configuration and its audit
-// intent in one recorded transaction. Existing credentials and egress proxies
+// intents in one recorded transaction. Existing credentials and egress proxies
 // are references to the target instance and are never written here.
-func (s *Store) ImportPortableConfiguration(ctx context.Context, config PortableConfiguration, intent *domain.AdminAuditIntent) error {
-	if err := s.updateContext(ctx, func(tx *Tx) error {
+func (s *Store) ImportPortableConfiguration(ctx context.Context, config PortableConfiguration, intents ...*domain.AdminAuditIntent) error {
+	write := func(tx *Tx) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if err := checkConfigurationImportTarget(tx); err != nil {
 			return err
+		}
+		if tx.Bucket(bucketAdminAuditIntents).Stats().KeyN+len(intents) > maxAdminAuditIntents {
+			return errors.New("admin audit intent backlog cannot accommodate the import")
 		}
 		for _, write := range []func() error{
 			func() error {
@@ -163,12 +183,24 @@ func (s *Store) ImportPortableConfiguration(ctx context.Context, config Portable
 				return err
 			}
 		}
-		return putAdminAuditIntentTx(tx, intent)
-	}); err != nil {
+		for _, intent := range intents {
+			if err := putAdminAuditIntentTx(tx, intent); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	receipt, requiresConfirmation, err := s.updateAll([]func(*Tx) error{write})
+	if err != nil {
 		return err
 	}
 	for deploymentID := range config.Prices {
 		s.invalidateDeploymentPricingTimeline(deploymentID)
+	}
+	if requiresConfirmation && s.journal != nil {
+		if err := s.journal.WaitConfirmed(ctx, receipt); err != nil {
+			return &ConfigurationImportConfirmationError{Cause: err}
+		}
 	}
 	return nil
 }

@@ -146,6 +146,7 @@ export function localizedError(t: TFunction, error: unknown) {
     // it falls back to the generic headline plus the server's reason, which is
     // what every one of these did before.
     configuration_bundle_too_large: "configurationTransfer.bundleTooLarge",
+    configuration_declarations_required: "configurationTransfer.declarationsRequired",
     configuration_preview_required: "configurationTransfer.previewRequired",
     configuration_target_not_empty: "configurationTransfer.targetNotEmpty",
     invalid_request: "errors.badRequest",

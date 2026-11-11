@@ -245,7 +245,7 @@ function stepUpBody(reauth: Reauth) {
 
 // Keep the bundle's original JSON bytes so JS numbers cannot round int64
 // limits or prices. Parse only to verify that the file contains a single value.
-function configurationImportBody(bundle: string, options: { bindings: ConfigurationBindings; plan_id?: string } & Partial<ReturnType<typeof stepUpBody>>): RequestInit {
+function configurationImportBody(bundle: string, options: { bindings: ConfigurationBindings; plan_id?: string; accept_operator_declarations?: boolean } & Partial<ReturnType<typeof stepUpBody>>): RequestInit {
   const value: unknown = JSON.parse(bundle);
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid configuration bundle");
   return { method: "POST", body: `{"bundle":${bundle},${JSON.stringify(options).slice(1)}` };
@@ -336,9 +336,9 @@ export const api = {
   exportConfiguration: () => request<string>("/configuration/export", {}, "", "text").then((value) => value.data),
   previewConfigurationImport: (bundle: string, bindings: ConfigurationBindings) =>
     request<ConfigurationImportPreview>("/configuration/import/preview", configurationImportBody(bundle, { bindings })).then((value) => value.data),
-  applyConfigurationImport: (bundle: string, bindings: ConfigurationBindings, planID: string, reauth: Reauth) =>
+  applyConfigurationImport: (bundle: string, bindings: ConfigurationBindings, planID: string, reauth: Reauth, acceptDeclarations: boolean) =>
     request<ConfigurationImportResult>("/configuration/import", configurationImportBody(bundle, {
-      bindings, plan_id: planID, ...stepUpBody(reauth),
+      bindings, plan_id: planID, accept_operator_declarations: acceptDeclarations, ...stepUpBody(reauth),
     })).then((value) => value.data),
 
   /** What this build can serve: capability keys, and per profile the defaults,

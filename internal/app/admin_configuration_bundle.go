@@ -27,6 +27,7 @@ type configurationBundle struct {
 	TokenGuardPolicies []configurationTokenGuard `json:"token_guard_policies"`
 	Projects           []configurationProject    `json:"projects"`
 	GatewayKeys        []configurationKey        `json:"gateway_keys"`
+	Omissions          []configurationNotice     `json:"omissions,omitempty"`
 }
 
 type configurationProvider struct {
@@ -50,18 +51,19 @@ type configurationBinding struct {
 }
 
 type configurationDeployment struct {
-	ID              string                      `json:"id"`
-	Name            string                      `json:"name"`
-	ProviderID      string                      `json:"provider_id"`
-	ProviderModel   string                      `json:"provider_model"`
-	CapabilityModel string                      `json:"capability_model,omitempty"`
-	TargetKind      domain.DeploymentTargetKind `json:"target_kind,omitempty"`
-	ProfileID       domain.ProviderProfileID    `json:"profile_id"`
-	Region          string                      `json:"region,omitempty"`
-	Capabilities    domain.ProviderCapabilities `json:"capabilities"`
-	MaxConcurrency  int64                       `json:"max_concurrency"`
-	Enabled         bool                        `json:"enabled"`
-	Price           *configurationPrice         `json:"price,omitempty"`
+	ID               string                      `json:"id"`
+	Name             string                      `json:"name"`
+	ProviderID       string                      `json:"provider_id"`
+	ProviderModel    string                      `json:"provider_model"`
+	CapabilityModel  string                      `json:"capability_model,omitempty"`
+	TargetKind       domain.DeploymentTargetKind `json:"target_kind,omitempty"`
+	ProfileID        domain.ProviderProfileID    `json:"profile_id"`
+	Region           string                      `json:"region,omitempty"`
+	Capabilities     domain.ProviderCapabilities `json:"capabilities"`
+	OperatorDisabled []string                    `json:"operator_disabled,omitempty"`
+	MaxConcurrency   int64                       `json:"max_concurrency"`
+	Enabled          bool                        `json:"enabled"`
+	Price            *configurationPrice         `json:"price,omitempty"`
 }
 
 type configurationPrice struct {
@@ -139,6 +141,7 @@ func exportConfiguration(config boltstore.PortableConfiguration) configurationBu
 		Routes: []configurationRoute{}, RedactionPolicies: []configurationRedaction{}, TokenGuardPolicies: []configurationTokenGuard{},
 		Projects: []configurationProject{}, GatewayKeys: []configurationKey{},
 	}
+	providerProfiles := make(map[string]map[domain.ProviderProfileID]struct{}, len(config.Providers))
 	for _, item := range config.Providers {
 		if item.DeletedAt != nil {
 			continue
@@ -149,21 +152,29 @@ func exportConfiguration(config boltstore.PortableConfiguration) configurationBu
 			RequiresEgressProxy: item.EgressProxyID != "", AllowedAnthropicBetas: item.AllowedAnthropicBetas,
 			MaxConcurrency: item.MaxConcurrency, Enabled: item.Enabled,
 		}
+		profiles := make(map[domain.ProviderProfileID]struct{})
 		for _, binding := range item.EffectiveProfileBindings() {
+			profiles[binding.ProfileID] = struct{}{}
 			provider.Bindings = append(provider.Bindings, configurationBinding{
 				ProfileID: binding.ProfileID, Capabilities: binding.Capabilities, Enabled: binding.Enabled,
 			})
 		}
 		bundle.Providers = append(bundle.Providers, provider)
+		providerProfiles[item.ID] = profiles
 	}
+	deploymentIDs := make(map[string]bool, len(config.Deployments))
 	for _, item := range config.Deployments {
 		if item.DeletedAt != nil {
+			continue
+		}
+		if _, ok := providerProfiles[item.ProviderID][item.ProfileID]; !ok {
+			bundle.omit("deployments", item.ID, "retired_provider_binding")
 			continue
 		}
 		deployment := configurationDeployment{
 			ID: item.ID, Name: item.Name, ProviderID: item.ProviderID, ProviderModel: item.ProviderModel,
 			TargetKind: item.TargetKind, ProfileID: item.ProfileID, Region: item.Region,
-			Capabilities: item.Capabilities, MaxConcurrency: item.MaxConcurrency, Enabled: item.Enabled,
+			Capabilities: item.Capabilities, OperatorDisabled: item.OperatorDisabled, MaxConcurrency: item.MaxConcurrency, Enabled: item.Enabled,
 		}
 		if item.ModelCapabilitySnapshot.CanonicalModelRef != item.ProviderModel &&
 			(item.TargetKind == domain.TargetAzureDeployment || item.TargetKind == domain.TargetCustomEndpointModel) {
@@ -175,17 +186,26 @@ func exportConfiguration(config boltstore.PortableConfiguration) configurationBu
 				CachedInputMicrosPerMillion: price.CachedInputMicrosPerMillion, OutputMicrosPerMillion: price.OutputMicrosPerMillion,
 				FixedRequestMicrosUSD: price.FixedRequestMicrosUSD, Schedule: price.Schedule,
 			}
+		} else if config.QuarantinedPrices[item.ID] {
+			bundle.omit("deployments", item.ID, "quarantined_price")
 		}
 		bundle.Deployments = append(bundle.Deployments, deployment)
+		deploymentIDs[item.ID] = true
 	}
 	for _, item := range config.Routes {
-		if item.DeletedAt == nil {
-			bundle.Routes = append(bundle.Routes, configurationRoute{ID: item.ID, routeInput: routeInput{
-				PublicModel: item.PublicModel, DeploymentID: item.DeploymentID, Priority: item.Priority,
-				Strategy: item.Strategy, Enabled: item.Enabled,
-			}})
+		if item.DeletedAt != nil {
+			continue
 		}
+		if !deploymentIDs[item.DeploymentID] {
+			bundle.omit("routes", item.ID, "retired_deployment")
+			continue
+		}
+		bundle.Routes = append(bundle.Routes, configurationRoute{ID: item.ID, routeInput: routeInput{
+			PublicModel: item.PublicModel, DeploymentID: item.DeploymentID, Priority: item.Priority,
+			Strategy: item.Strategy, Enabled: item.Enabled,
+		}})
 	}
+	redactionIDs, tokenGuardIDs := make(map[string]bool), make(map[string]bool)
 	for _, item := range config.RedactionPolicies {
 		if item.DeletedAt != nil {
 			continue
@@ -198,17 +218,26 @@ func exportConfiguration(config boltstore.PortableConfiguration) configurationBu
 				Enabled: rule.Enabled, Priority: rule.Priority,
 			})
 		}
+		redactionIDs[item.ID] = true
 		bundle.RedactionPolicies = append(bundle.RedactionPolicies, configurationRedaction{ID: item.ID, redactionPolicyInput: settings})
 	}
 	for _, item := range config.TokenGuardPolicies {
 		if item.DeletedAt == nil {
+			tokenGuardIDs[item.ID] = true
 			bundle.TokenGuardPolicies = append(bundle.TokenGuardPolicies, configurationTokenGuard{ID: item.ID, tokenGuardInput: tokenGuardSettings(item)})
 		}
 	}
+	projectIDs := make(map[string]bool, len(config.Projects))
 	for _, item := range config.Projects {
 		if item.DeletedAt != nil {
 			continue
 		}
+		if (item.RedactionPolicyID != "" && !redactionIDs[item.RedactionPolicyID]) ||
+			(item.TokenGuardPolicyID != "" && !tokenGuardIDs[item.TokenGuardPolicyID]) {
+			bundle.omit("projects", item.ID, "retired_policy")
+			continue
+		}
+		projectIDs[item.ID] = true
 		cidrs := make([]string, 0, len(item.AllowedCIDRs))
 		for _, prefix := range item.AllowedCIDRs {
 			cidrs = append(cidrs, prefix.String())
@@ -223,14 +252,30 @@ func exportConfiguration(config boltstore.PortableConfiguration) configurationBu
 		}})
 	}
 	for _, item := range config.GatewayKeys {
-		if item.DeletedAt == nil {
-			bundle.GatewayKeys = append(bundle.GatewayKeys, configurationKey{
-				ID: item.ID, ProjectID: item.ProjectID, Name: item.Name, Enabled: item.Enabled,
-				Scopes: domain.EffectiveGatewayScopes(item.Scopes), ExpiresAt: item.ExpiresAt,
-			})
+		if item.DeletedAt != nil {
+			continue
 		}
+		if !projectIDs[item.ProjectID] {
+			bundle.omit("gateway_keys", item.ID, "retired_project")
+			continue
+		}
+		bundle.GatewayKeys = append(bundle.GatewayKeys, configurationKey{
+			ID: item.ID, ProjectID: item.ProjectID, Name: item.Name, Enabled: item.Enabled,
+			Scopes: domain.EffectiveGatewayScopes(item.Scopes), ExpiresAt: item.ExpiresAt,
+		})
 	}
 	return bundle
+}
+
+type configurationNotice struct {
+	Resource string `json:"resource"`
+	ID       string `json:"id"`
+	Code     string `json:"code"`
+	Alias    string `json:"alias,omitempty"`
+}
+
+func (b *configurationBundle) omit(resource, id, code string) {
+	b.Omissions = append(b.Omissions, configurationNotice{Resource: resource, ID: id, Code: code})
 }
 
 // Reject URL components commonly used to carry credentials. A bundle without

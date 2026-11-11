@@ -1661,19 +1661,37 @@ export interface ConfigurationProviderReview extends ConfigurationObject {
   policy_url?: string;
 }
 
+export interface ConfigurationNotice {
+  resource: ConfigurationResource;
+  id: string;
+  code: string;
+  alias?: string;
+}
+
 export interface ConfigurationImportPreview {
   counts: Record<ConfigurationResource, number>;
   providers: ConfigurationProviderReview[];
   issues: { resource: ConfigurationResource | "bundle" | "target"; id?: string; code: string; message: string }[];
   deployments_to_enable: ConfigurationObject[];
   routes_to_enable: ConfigurationObject[];
+  notices?: ConfigurationNotice[];
+  operator_declarations?: (ConfigurationObject & { model: string; capabilities: string[] })[];
+  region_changes?: (ConfigurationObject & { source_region: string; target_region: string })[];
   plan_id?: string;
 }
 
-export interface ConfigurationImportResult {
+type ConfigurationKeyReference = ConfigurationObject & { project_id: string };
+
+export type ConfigurationImportResult = {
+  operation_id: string;
   counts: ConfigurationImportPreview["counts"];
+} & ({
+  status: "imported";
   deployments_to_enable: ConfigurationObject[];
   routes_to_enable: ConfigurationObject[];
-  gateway_keys: (ConfigurationObject & { project_id: string; key: string })[];
+  gateway_keys: (ConfigurationKeyReference & { key: string })[];
   activation_stale: boolean;
-}
+} | {
+  status: "confirmation_unavailable";
+  keys_to_reissue: ConfigurationKeyReference[];
+});

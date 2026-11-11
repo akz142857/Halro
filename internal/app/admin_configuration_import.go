@@ -13,6 +13,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/auth"
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/modelcatalog"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
@@ -32,7 +33,8 @@ type configurationProviderTarget struct {
 type configurationApplyInput struct {
 	configurationImportInput
 	stepUpMaterial
-	PlanID string `json:"plan_id"`
+	PlanID                     string `json:"plan_id"`
+	AcceptOperatorDeclarations bool   `json:"accept_operator_declarations,omitempty"`
 }
 
 type configurationImportPreview struct {
@@ -41,6 +43,9 @@ type configurationImportPreview struct {
 	DeploymentsToEnable []configurationObject         `json:"deployments_to_enable"`
 	RoutesToEnable      []configurationObject         `json:"routes_to_enable"`
 	Issues              []configurationIssue          `json:"issues"`
+	Notices             []configurationNotice         `json:"notices,omitempty"`
+	Declarations        []configurationDeclaration    `json:"operator_declarations,omitempty"`
+	RegionChanges       []configurationRegionChange   `json:"region_changes,omitempty"`
 	PlanID              string                        `json:"plan_id,omitempty"`
 }
 
@@ -48,6 +53,18 @@ type configurationObject struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Target string `json:"target,omitempty"`
+}
+
+type configurationDeclaration struct {
+	configurationObject
+	Model        string   `json:"model"`
+	Capabilities []string `json:"capabilities"`
+}
+
+type configurationRegionChange struct {
+	configurationObject
+	SourceRegion string `json:"source_region"`
+	TargetRegion string `json:"target_region"`
 }
 
 type configurationProviderReview struct {
@@ -70,10 +87,9 @@ type configurationIssue struct {
 }
 
 type configurationIssuedKey struct {
-	ID        string `json:"id"`
+	configurationObject
 	ProjectID string `json:"project_id"`
-	Name      string `json:"name"`
-	Key       string `json:"key"`
+	Key       string `json:"key,omitempty"`
 }
 
 var configurationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
@@ -141,6 +157,12 @@ func (r *Runtime) applyAdminConfigurationImport(writer http.ResponseWriter, requ
 	if !decodeConfigurationImport(writer, request, &input) {
 		return
 	}
+	if input.CurrentPassword == "" {
+		writeJSON(writer, http.StatusUnauthorized, map[string]string{
+			"code": "recent_reauth_required", "error": "recent re-authentication required",
+		})
+		return
+	}
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
 	if !r.verifyAdminStepUp(writer, request, admin.session.Username, input.CurrentPassword, input.TOTPCode) {
 		return
@@ -163,6 +185,10 @@ func (r *Runtime) applyAdminConfigurationImport(writer http.ResponseWriter, requ
 		})
 		return
 	}
+	if len(preview.Declarations) > 0 && !input.AcceptOperatorDeclarations {
+		adminBadRequestCode(writer, "configuration_declarations_required", "review and acknowledge the operator declarations")
+		return
+	}
 	issuedKeys := make([]configurationIssuedKey, 0, len(config.GatewayKeys))
 	for i, template := range config.GatewayKeys {
 		plaintext, key, err := auth.GenerateGatewayKeyWithID(template.ID, template.ProjectID, template.Name, template.ExpiresAt)
@@ -172,23 +198,37 @@ func (r *Runtime) applyAdminConfigurationImport(writer http.ResponseWriter, requ
 		}
 		key.Scopes, key.Enabled = template.Scopes, template.Enabled
 		config.GatewayKeys[i] = key
-		issuedKeys = append(issuedKeys, configurationIssuedKey{ID: key.ID, ProjectID: key.ProjectID, Name: key.Name, Key: plaintext})
+		issuedKeys = append(issuedKeys, configurationIssuedKey{configurationObject: configurationObject{ID: key.ID, Name: key.Name}, ProjectID: key.ProjectID, Key: plaintext})
 	}
-	intent, err := r.newAdminAuditIntentWithMetadata(request, "configuration.import", "configuration", "v1",
-		map[string]string{"plan_id": preview.PlanID, "record_count": fmt.Sprint(input.Bundle.recordCount())})
+	intents, err := r.configurationImportAudit(request, config, preview.PlanID, input.Bundle.recordCount())
 	if err != nil {
 		adminStoreError(writer)
 		return
 	}
-	if err := r.store.ImportPortableConfiguration(request.Context(), config, intent); err != nil {
-		if errors.Is(err, boltstore.ErrConfigurationTargetNotEmpty) {
+	intent := intents[0]
+	writer.Header().Set("Cache-Control", "no-store")
+	if err := r.store.ImportPortableConfiguration(request.Context(), config, intents...); err != nil {
+		var unconfirmed *boltstore.ConfigurationImportConfirmationError
+		switch {
+		case errors.As(err, &unconfirmed):
+			// A confirmation error cannot roll back the local commit. Do not
+			// hand out keys from an unconfirmed replication prefix.
+			writer.Header().Set("Halro-Operation-Id", intent.EventID)
+			for i := range issuedKeys {
+				issuedKeys[i].Key = ""
+			}
+			writeJSON(writer, http.StatusAccepted, map[string]any{
+				"status": "confirmation_unavailable", "operation_id": intent.EventID,
+				"counts": preview.Counts, "keys_to_reissue": issuedKeys,
+			})
+		case errors.Is(err, boltstore.ErrConfigurationTargetNotEmpty):
 			writeJSON(writer, http.StatusConflict, map[string]string{
 				"code": "configuration_target_not_empty", "error": "the target already has configuration",
 			})
-			return
+		default:
+			r.logger.Error("configuration import failed", "error", err)
+			adminStoreError(writer)
 		}
-		r.logger.Error("configuration import failed", "error", err)
-		adminStoreError(writer)
 		return
 	}
 	r.activateTopologyAfterCommit()
@@ -196,12 +236,69 @@ func (r *Runtime) applyAdminConfigurationImport(writer http.ResponseWriter, requ
 	r.activateTokenGuardPolicies()
 	r.activateAuthSnapshot()
 	r.completeAdminMutation(writer, request, *intent)
-	writer.Header().Set("Cache-Control", "no-store")
 	writeJSON(writer, http.StatusCreated, map[string]any{
+		"status": "imported", "operation_id": intent.EventID,
 		"counts": preview.Counts, "gateway_keys": issuedKeys,
 		"deployments_to_enable": preview.DeploymentsToEnable, "routes_to_enable": preview.RoutesToEnable,
 		"activation_stale": r.activation.status().Stale,
 	})
+}
+
+func (r *Runtime) configurationImportAudit(request *http.Request, config boltstore.PortableConfiguration, planID string, count int) ([]*domain.AdminAuditIntent, error) {
+	summary, err := r.newAdminAuditIntentWithMetadata(request, "configuration.import", "configuration", "v1",
+		map[string]string{"plan_id": planID, "record_count": fmt.Sprint(count)})
+	if err != nil {
+		return nil, err
+	}
+	intents := []*domain.AdminAuditIntent{summary}
+	record := func(action, resource, id string, metadata map[string]string) error {
+		metadata["configuration_import_id"] = summary.EventID
+		intent, err := r.newAdminAuditIntentWithMetadata(request, action, resource, id, metadata)
+		if err == nil {
+			intents = append(intents, intent)
+		}
+		return err
+	}
+	for _, instance := range config.Providers {
+		metadata := make(map[string]string)
+		if requirement, ok := domain.UsagePolicyRequirementForProfile(instance.ProfileID, instance.BaseURL); ok {
+			metadata = usagePolicyAuditMetadata(requirement, instance.ProfileID, true)
+		}
+		if instance.EgressProxyID != "" {
+			metadata["egress_mode_before"] = "none"
+			metadata["egress_mode_after"] = "proxy"
+			metadata["proxy_id_after"] = instance.EgressProxyID
+		}
+		if len(metadata) > 0 {
+			if err := record("provider.create", "provider", instance.ID, metadata); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for _, deployment := range config.Deployments {
+		metadata := make(map[string]string)
+		for key, value := range capabilitySnapshotMetadata(deployment) {
+			if names, ok := value.([]string); ok {
+				metadata[key] = strings.Join(names, ",")
+			} else {
+				metadata[key] = fmt.Sprint(value)
+			}
+		}
+		if model := deployment.ModelCapabilitySnapshot.CanonicalModelRef; model != "" {
+			metadata["canonical_model_ref"] = model
+		}
+		if err := record(auditCapabilitySnapshotCreated, "deployment", deployment.ID, metadata); err != nil {
+			return nil, err
+		}
+		if deployment.ModelCapabilitySnapshot.Source == string(modelcatalog.SourceOperatorDeclared) {
+			if err := record(auditOperatorCapabilitiesDeclared, "deployment", deployment.ID, metadata); err != nil {
+				return nil, err
+			}
+		}
+	}
+	// The summary is delivered synchronously. The existing audit drain delivers
+	// the per-resource records without delaying one-time key delivery.
+	return intents, nil
 }
 
 func (r *Runtime) prepareConfigurationImport(request *http.Request, input configurationImportInput, now time.Time) (configurationImportPreview, boltstore.PortableConfiguration, error) {
@@ -214,6 +311,7 @@ func (r *Runtime) prepareConfigurationImport(request *http.Request, input config
 		},
 		Providers: []configurationProviderReview{}, Issues: []configurationIssue{},
 		DeploymentsToEnable: []configurationObject{}, RoutesToEnable: []configurationObject{},
+		Notices: append([]configurationNotice(nil), b.Omissions...),
 	}
 	config := boltstore.PortableConfiguration{Prices: make(map[string]domain.DeploymentPriceVersion)}
 	if b.Version != configurationBundleVersion {
@@ -286,6 +384,18 @@ func (r *Runtime) prepareConfigurationImport(request *http.Request, input config
 			}
 			config.Prices[item.ID] = price
 		}
+		if deployment.ModelCapabilitySnapshot.Source == string(modelcatalog.SourceOperatorDeclared) {
+			preview.Declarations = append(preview.Declarations, configurationDeclaration{
+				configurationObject: configurationObject{ID: deployment.ID, Name: deployment.Name},
+				Model:               deployment.ProviderModel, Capabilities: domain.EnabledCapabilityNames(deployment.Capabilities),
+			})
+		}
+		if instance.AccessSurface == domain.SurfaceBedrockMantle && deployment.Region != item.Region {
+			preview.RegionChanges = append(preview.RegionChanges, configurationRegionChange{
+				configurationObject: configurationObject{ID: deployment.ID, Name: deployment.Name},
+				SourceRegion:        item.Region, TargetRegion: deployment.Region,
+			})
+		}
 		config.Deployments = append(config.Deployments, deployment)
 		deployments[item.ID] = deployment
 	}
@@ -317,7 +427,11 @@ func (r *Runtime) prepareConfigurationImport(request *http.Request, input config
 
 	preview.prepareProjects(b, aliases, now, &config)
 	if len(preview.Issues) == 0 {
-		encoded, err := json.Marshal(input)
+		encoded, err := json.Marshal(struct {
+			Input         configurationImportInput
+			Declarations  []configurationDeclaration
+			RegionChanges []configurationRegionChange
+		}{input, preview.Declarations, preview.RegionChanges})
 		if err != nil {
 			return preview, config, err
 		}
@@ -406,11 +520,27 @@ func (r *Runtime) prepareConfigurationDeployment(request *http.Request, instance
 		}
 	}
 	instance.Bindings = bindings
-	return r.deploymentFromProvider(request, instance, item.ID, deploymentInput{
+	region := item.Region
+	if instance.AccessSurface == domain.SurfaceBedrockMantle {
+		// Mantle's endpoint is the authority for deployment region. A target
+		// endpoint override must not carry the source endpoint's region.
+		region = ""
+	}
+	for _, name := range item.OperatorDisabled {
+		if enabled, known := domain.CapabilityValue(item.Capabilities, name); !known || enabled {
+			return domain.Deployment{}, fmt.Errorf("invalid disabled capability %q", name)
+		}
+	}
+	deployment, err := r.deploymentFromProvider(request, instance, item.ID, deploymentInput{
 		Name: item.Name, ProviderID: item.ProviderID, ProviderModel: item.ProviderModel, CapabilityModel: item.CapabilityModel,
-		TargetKind: item.TargetKind, ProfileID: item.ProfileID, BindingID: bindingID, Region: item.Region,
+		TargetKind: item.TargetKind, ProfileID: item.ProfileID, BindingID: bindingID, Region: region,
 		Capabilities: &item.Capabilities, MaxConcurrency: item.MaxConcurrency, Mode: deploymentModeOperatorDeclared,
 	}, nil, now, now)
+	if err != nil {
+		return domain.Deployment{}, err
+	}
+	deployment.OperatorDisabled = domain.OperatorDisabledCapabilities(deployment.ModelCapabilitySnapshot, deployment.Capabilities, item.OperatorDisabled)
+	return deployment, nil
 }
 
 func (p configurationPrice) version(deploymentID, actor string, now time.Time) domain.DeploymentPriceVersion {
@@ -466,8 +596,11 @@ func (p *configurationImportPreview) prepareProjects(b configurationBundle, alia
 		}
 		for _, alias := range project.AllowedModels {
 			if _, ok := aliases[alias]; !ok {
-				p.issue("projects", item.ID, "missing_alias", fmt.Errorf("unknown model alias %q", alias))
-				break
+				// Keep the explicit allowlist: pruning the last alias would
+				// grant access to every model. Missing aliases are unavailable.
+				p.Notices = append(p.Notices, configurationNotice{
+					Resource: "projects", ID: item.ID, Code: "unavailable_alias", Alias: alias,
+				})
 			}
 		}
 		if enabled, ok := redactionEnabled[project.RedactionPolicyID]; project.RedactionPolicyID != "" && (!ok || (project.Enabled && !enabled)) {

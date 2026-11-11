@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { api, type Reauth } from "../api";
+import { ApiError, api, type Reauth } from "../api";
 import { ConfirmButton, ErrorState } from "../components";
+import { setNavigationBlocked } from "../navigation";
 import type {
   ConfigurationBindings, ConfigurationImportPreview, ConfigurationImportResult,
-  ConfigurationObject, ConfigurationProviderReview, ConfigurationProviderTarget, ConfigurationResource, Credential, ProviderEgressProxy,
+  ConfigurationNotice, ConfigurationObject, ConfigurationProviderReview, ConfigurationProviderTarget, ConfigurationResource, Credential, ProviderEgressProxy,
 } from "../types";
 
 const fileLimit = 2 * 1024 * 1024;
@@ -29,6 +30,7 @@ export function ConfigurationTransferPanel() {
   const queryClient = useQueryClient();
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<unknown>(null);
+  const [exportOmissions, setExportOmissions] = useState<ConfigurationNotice[]>([]);
   const [busy, setBusy] = useState(false);
   const [fileError, setFileError] = useState<"fileSize" | "fileInvalid" | null>(null);
   const [importError, setImportError] = useState<unknown>(null);
@@ -36,15 +38,33 @@ export function ConfigurationTransferPanel() {
   const [targets, setTargets] = useState(new Map<string, ConfigurationProviderTarget>());
   const [preview, setPreview] = useState<ConfigurationImportPreview>();
   const [result, setResult] = useState<ConfigurationImportResult>();
+  const [acceptDeclarations, setAcceptDeclarations] = useState(false);
+  const [keysSaved, setKeysSaved] = useState(false);
+  const unsavedKeys = result?.status === "imported" && result.gateway_keys.length > 0 && !keysSaved;
+
+  useEffect(() => {
+    if (!unsavedKeys) return;
+    setNavigationBlocked(true, t("configurationTransfer.keysLeaveWarning"));
+    const beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      setNavigationBlocked(false);
+    };
+  }, [unsavedKeys, t]);
   const hasProviders = Boolean(preview?.providers.length);
   const credentials = useQuery({ queryKey: ["credentials"], queryFn: api.credentials, enabled: hasProviders, refetchOnWindowFocus: true });
   const proxies = useQuery({ queryKey: ["provider-egress-proxies"], queryFn: api.providerEgressProxies, enabled: hasProviders, refetchOnWindowFocus: true });
 
   async function exportBundle() {
     setExportError(null);
+    setExportOmissions([]);
     setExporting(true);
     try {
-      downloadJSON("halro-configuration.json", await api.exportConfiguration());
+      const contents = await api.exportConfiguration();
+      const bundle = JSON.parse(contents) as { omissions?: ConfigurationNotice[] };
+      downloadJSON("halro-configuration.json", contents);
+      setExportOmissions(bundle.omissions ?? []);
     } catch (error) {
       setExportError(error);
     } finally {
@@ -56,6 +76,7 @@ export function ConfigurationTransferPanel() {
     setBundle("");
     setTargets(new Map());
     setPreview(undefined);
+    setAcceptDeclarations(false);
     setFileError(null);
     setImportError(null);
     if (!file) return;
@@ -83,6 +104,7 @@ export function ConfigurationTransferPanel() {
   }
 
   function updateTarget(id: string, change: Partial<ConfigurationProviderTarget>) {
+    setAcceptDeclarations(false);
     setTargets((previous) => new Map(previous).set(id, { ...(previous.get(id) ?? emptyTarget), ...change }));
     setPreview((previous) => previous && { ...previous, plan_id: undefined });
   }
@@ -92,6 +114,7 @@ export function ConfigurationTransferPanel() {
   }
 
   async function reviewImport() {
+    setAcceptDeclarations(false);
     setBusy(true);
     setImportError(null);
     setPreview((previous) => previous && { ...previous, plan_id: undefined });
@@ -106,24 +129,36 @@ export function ConfigurationTransferPanel() {
 
   async function applyImport(reauth: Reauth) {
     if (!preview?.plan_id) return;
-    const imported = await api.applyConfigurationImport(bundle, bindings(), preview.plan_id, reauth);
-    setResult(imported);
-    setBundle("");
-    setPreview(undefined);
-    setTargets(new Map());
-    void queryClient.invalidateQueries();
+    try {
+      const imported = await api.applyConfigurationImport(bundle, bindings(), preview.plan_id, reauth, acceptDeclarations);
+      setResult(imported);
+      setKeysSaved(false);
+      setBundle("");
+      setPreview(undefined);
+      setTargets(new Map());
+      void queryClient.invalidateQueries();
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 409 ||
+          !["configuration_preview_required", "configuration_target_not_empty"].includes(error.code)) throw error;
+      const current = (error.payload as { preview?: ConfigurationImportPreview } | undefined)?.preview;
+      setPreview({ ...(current ?? preview), plan_id: undefined });
+      setAcceptDeclarations(false);
+      setImportError(error);
+    }
   }
 
   return <>
     <section className="panel configuration-transfer-card" aria-labelledby="configuration-export-title">
       <h3 id="configuration-export-title">{t("configurationTransfer.exportTitle")}</h3>
       <p>{t("configurationTransfer.exportDescription")}</p>
+      <p className="form-note">{t("configurationTransfer.exportSensitiveRules")}</p>
       <div className="form-actions">
         <button className="button secondary" type="button" disabled={exporting} onClick={() => void exportBundle()}>
           {exporting ? t("common.working") : t("configurationTransfer.downloadBundle")}
         </button>
       </div>
       {Boolean(exportError) && <ErrorState error={exportError} />}
+      <ConfigurationNotices notices={exportOmissions} />
     </section>
 
     <section className="panel configuration-transfer-card" aria-labelledby="configuration-import-title">
@@ -154,6 +189,21 @@ export function ConfigurationTransferPanel() {
               {t(`configurationTransfer.issueCodes.${issue.code}`, { defaultValue: issue.message })}
             </li>)}</ul>
           </div>}
+          <ConfigurationNotices notices={preview.notices ?? []} />
+          {Boolean(preview.region_changes?.length) && <div className="notice info configuration-list">
+            <strong>{t("configurationTransfer.regionChanges")}</strong>
+            <ul>{preview.region_changes?.map((change) => <li key={change.id}>{change.name} ({change.source_region || "—"} → {change.target_region})</li>)}</ul>
+          </div>}
+          {Boolean(preview.operator_declarations?.length) && <div className="notice warning configuration-list">
+            <strong>{t("configurationTransfer.operatorDeclarations")}</strong>
+            <ul>{preview.operator_declarations?.map((declaration) => <li key={declaration.id}>
+              {declaration.name} ({declaration.model}) — {declaration.capabilities.map((name) => t(`capabilities.${name}`, { defaultValue: name })).join(t("common.listSeparator"))}
+            </li>)}</ul>
+            {preview.plan_id && <label className="check-row">
+              <input type="checkbox" checked={acceptDeclarations} onChange={(event) => setAcceptDeclarations(event.target.checked)} />
+              <span>{t("configurationTransfer.acceptDeclarations")}</span>
+            </label>}
+          </div>}
           <ConfigurationActivationSteps deployments={preview.deployments_to_enable} routes={preview.routes_to_enable} />
         </>}
         {bundle && <div className="form-actions">
@@ -162,10 +212,25 @@ export function ConfigurationTransferPanel() {
           </button>
           {preview?.plan_id && <ConfirmButton className="button primary" label={t("configurationTransfer.apply")}
             title={t("configurationTransfer.apply")} confirmLabel={t("configurationTransfer.confirm")}
-            disabled={busy} requireStepUp onConfirm={applyImport} />}
+            disabled={busy || (Boolean(preview.operator_declarations?.length) && !acceptDeclarations)} requireStepUp onConfirm={applyImport} />}
         </div>}
       </>}
-      {result && <>
+      {result?.status === "confirmation_unavailable" && <>
+        <div className="notice warning configuration-list" role="alert">
+          <strong>{t("configurationTransfer.confirmationUnavailable")}</strong>
+          <p>{t("configurationTransfer.confirmationRecovery")}</p>
+          <p>{t("configurationTransfer.operationId")} <code>{result.operation_id}</code></p>
+          {result.keys_to_reissue.length > 0 && <>
+            <p>{t("configurationTransfer.reissueKeys")}</p>
+            <ul>{result.keys_to_reissue.map((key) => <li key={key.id}>
+              <a className="text-link" href={`/admin/projects?project_id=${encodeURIComponent(key.project_id)}`} target="_blank" rel="noreferrer">{key.name}</a>{" "}
+              <code>{key.id}</code>
+            </li>)}</ul>
+          </>}
+        </div>
+        <ConfigurationCounts counts={result.counts} />
+      </>}
+      {result?.status === "imported" && <>
         <p className="notice success" role="status">{t("configurationTransfer.imported")}</p>
         {result.activation_stale && <p className="notice warning" role="alert">{t("settings.activationStaleDescription")}</p>}
         <ConfigurationCounts counts={result.counts} />
@@ -173,19 +238,35 @@ export function ConfigurationTransferPanel() {
         {result.gateway_keys.length > 0 && <div className="field">
           <strong>{t("configurationTransfer.newKeys")}</strong>
           <p>{t("configurationTransfer.keyHelp")}</p>
+          <label className="check-row">
+            <input type="checkbox" checked={keysSaved} onChange={(event) => setKeysSaved(event.target.checked)} />
+            <span>{t("configurationTransfer.keysSaved")}</span>
+          </label>
           <div className="form-actions">
             <button type="button" className="button primary" onClick={() =>
               downloadJSON("halro-new-gateway-keys.json", JSON.stringify(result.gateway_keys, null, 2))}>
               {t("configurationTransfer.downloadKeys")}
             </button>
-            <button type="button" className="button ghost" onClick={() => {
-              setResult({ ...result, gateway_keys: [] });
-            }}>{t("configurationTransfer.dismissKeys")}</button>
+            <button type="button" className="button ghost" disabled={!keysSaved} onClick={() =>
+              setResult({ ...result, gateway_keys: [] })
+            }>{t("configurationTransfer.dismissKeys")}</button>
           </div>
         </div>}
       </>}
     </section>
   </>;
+}
+
+function ConfigurationNotices({ notices }: { notices: ConfigurationNotice[] }) {
+  const { t } = useTranslation();
+  if (!notices.length) return null;
+  return <div className="notice warning configuration-list" role="status">
+    <strong>{t("configurationTransfer.notices")}</strong>
+    <ul>{notices.map((notice, index) => <li key={index}>
+      {t(`configurationTransfer.resources.${notice.resource}`)} <code>{notice.id}</code>{" — "}
+      {t(`configurationTransfer.noticeCodes.${notice.code}`, { alias: notice.alias, defaultValue: notice.code })}
+    </li>)}</ul>
+  </div>;
 }
 
 function ConfigurationCounts({ counts }: { counts: ConfigurationImportPreview["counts"] }) {

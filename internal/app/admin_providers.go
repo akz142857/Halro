@@ -1527,20 +1527,24 @@ func requireUsagePolicyAcknowledgement(
 		writeJSON(writer, http.StatusConflict, fields)
 		return nil, nil, false
 	}
+	acknowledgement, _ := domain.UsagePolicyAcknowledgementForProfileAtEndpoint(profileID, endpoint, acknowledgedRevision)
+	return usagePolicyAuditMetadata(requirement, profileID, includeProfile), acknowledgement, true
+}
+
+func usagePolicyAuditMetadata(requirement domain.UsagePolicyRequirement, profileID domain.ProviderProfileID, includeProfile bool) map[string]string {
 	metadata := map[string]string{
 		"offering_id":                string(requirement.OfferingID),
 		"access_surface":             string(requirement.AccessSurface),
 		"account_region_id":          string(requirement.AccountRegion),
 		"usage_policy_documentation": requirement.DocumentationURL,
-		"usage_policy_revision":      acknowledgedRevision,
+		"usage_policy_revision":      requirement.PolicyRevision,
 		"usage_warning_acknowledged": "true",
 		"product_identity_assurance": string(requirement.ProductIdentityAssurance),
 	}
 	if includeProfile {
 		metadata["profile_id"] = string(profileID)
 	}
-	acknowledgement, _ := domain.UsagePolicyAcknowledgementForProfileAtEndpoint(profileID, endpoint, acknowledgedRevision)
-	return metadata, acknowledgement, true
+	return metadata
 }
 
 // validateCredentialMaterial runs the credential through the same constructor
