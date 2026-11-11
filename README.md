@@ -91,7 +91,7 @@ integration instructions without exposing or creating a Gateway Key.
 Release images support `linux/amd64` and `linux/arm64`:
 
 ```bash
-docker pull ghcr.io/akz142857/halro:v0.13.0
+docker pull ghcr.io/akz142857/halro:v0.14.0
 ```
 
 Follow the [container deployment guide](docs/guides/operator-guide.md#optional-container-image)
@@ -149,7 +149,7 @@ branch identity below, while the attestation must match the **exact release comm
 (
 set -eu
 # Download all assets so the complete checksum manifest can be checked.
-gh release download v0.13.0 --repo akz142857/Halro
+gh release download v0.14.0 --repo akz142857/Halro
 : "${RELEASE_COMMIT:?Set RELEASE_COMMIT to the full SHA from the release notes}"
 COSIGN_IDENTITY='https://github.com/akz142857/Halro/.github/workflows/release.yml@refs/heads/main'
 COSIGN_ISSUER='https://token.actions.githubusercontent.com'
