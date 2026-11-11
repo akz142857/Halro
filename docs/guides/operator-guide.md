@@ -97,6 +97,21 @@ proxy must carry a syntactically valid `X-Forwarded-For` chain. Missing or
 malformed chains are rejected with HTTP 400 so CIDR authorization and Token
 Guard cannot silently lose their source-IP signal.
 
+## Copy configuration to a test instance
+
+In the source console, open **Settings → Configuration transfer** and download
+the JSON bundle. Sign in to a fresh target instance, create target provider
+credentials and any required egress proxies, then upload the file in the same
+settings pane. Review the endpoints, select target credentials and check the
+import before confirming. Download the newly issued gateway keys from the
+result, then validate and enable the deployments and enable their routes.
+
+The bundle carries providers, deployments with their current effective prices,
+routes, security policies, projects and gateway key settings. Credentials,
+gateway key material, logs and usage history are excluded. The [configuration
+transfer design](../prd/configuration-transfer.zh-CN.md) covers the full file
+scope and Admin API.
+
 ## Configuration reference
 
 `halro start` writes an annotated `config.yaml` when none exists, carrying

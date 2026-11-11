@@ -314,7 +314,7 @@ describe("SettingsPage system configuration pane", () => {
 
     // The nav entry sits between the instance pane and the diagnostics pane.
     const entries = [...screen.getByRole("navigation", { name: "设置分区" }).querySelectorAll("a")].map((a) => a.textContent);
-    expect(entries).toEqual(["通用", "登录与安全", "管理员账户", "实例配置", "系统配置", "根密钥状态", "关于与诊断"]);
+    expect(entries).toEqual(["通用", "登录与安全", "管理员账户", "实例配置", "系统配置", "配置迁移", "根密钥状态", "关于与诊断"]);
     const compactNavigation = screen.getByRole("combobox", { name: "设置分区" });
     expect(compactNavigation).toHaveValue("config");
     expect([...compactNavigation.querySelectorAll("option")].map((option) => option.textContent)).toEqual(entries);

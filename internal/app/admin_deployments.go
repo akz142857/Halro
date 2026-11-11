@@ -584,6 +584,11 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 	if err != nil || instance.DeletedAt != nil || (input.Enabled && !instance.Enabled) {
 		return domain.Deployment{}, errors.New("deployment provider is unavailable")
 	}
+	return r.deploymentFromProvider(request, instance, deploymentID, input, prior, createdAt, updatedAt)
+}
+
+func (r *Runtime) deploymentFromProvider(request *http.Request, instance domain.ProviderInstance, deploymentID string, input deploymentInput, prior *priorDeployment, createdAt, updatedAt time.Time) (domain.Deployment, error) {
+	var err error
 	model := strings.TrimSpace(input.ProviderModel)
 	if err := validateBedrockMantleRegion(instance, input.Region); err != nil {
 		return domain.Deployment{}, err
@@ -1177,6 +1182,9 @@ func resolveDeploymentTargetWithCatalog(instance domain.ProviderInstance, input 
 			capabilities: modelcatalog.Clamp(entry.Capabilities, binding.Capabilities),
 			entry:        entry,
 			mapped:       mapped,
+		}
+		if mapped {
+			resolution.canonicalModelRef = strings.TrimSpace(input.CapabilityModel)
 		}
 		if found && (entry.Source == modelcatalog.SourceBuiltin || entry.Source == modelcatalog.SourceSignedCatalog) {
 			known = append(known, resolution)

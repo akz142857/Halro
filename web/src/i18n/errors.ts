@@ -145,6 +145,9 @@ export function localizedError(t: TFunction, error: unknown) {
     // language. Adding a refusal upstream without a code here is not a break —
     // it falls back to the generic headline plus the server's reason, which is
     // what every one of these did before.
+    configuration_bundle_too_large: "configurationTransfer.bundleTooLarge",
+    configuration_preview_required: "configurationTransfer.previewRequired",
+    configuration_target_not_empty: "configurationTransfer.targetNotEmpty",
     invalid_request: "errors.badRequest",
     invalid_console_window: "errors.invalidConsoleWindow",
     console_window_exceeds_retention: "errors.consoleWindowExceedsRetention",

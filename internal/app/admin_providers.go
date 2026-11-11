@@ -1723,14 +1723,12 @@ func adminProviderInputError(writer http.ResponseWriter, err error) {
 	adminBadRequest(writer, err.Error())
 }
 
-func (r *Runtime) providerFromInput(
+func (r *Runtime) providerConnectionFromInput(
 	request *http.Request,
 	id string,
 	input providerInput,
 	currentProfile domain.ProviderProfileID,
 	currentEgressProxyID string,
-	currentEvidence domain.CapabilityEvidenceSet,
-	currentBindings []domain.ProviderProfileBinding,
 	createdAt time.Time,
 	updatedAt time.Time,
 ) (domain.ProviderInstance, error) {
@@ -1887,6 +1885,25 @@ func (r *Runtime) providerFromInput(
 		MaxConcurrency:        input.MaxConcurrency,
 		Enabled:               input.Enabled, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
+	return instance, nil
+}
+
+func (r *Runtime) providerFromInput(
+	request *http.Request,
+	id string,
+	input providerInput,
+	currentProfile domain.ProviderProfileID,
+	currentEgressProxyID string,
+	currentEvidence domain.CapabilityEvidenceSet,
+	currentBindings []domain.ProviderProfileBinding,
+	createdAt time.Time,
+	updatedAt time.Time,
+) (domain.ProviderInstance, error) {
+	instance, err := r.providerConnectionFromInput(request, id, input, currentProfile, currentEgressProxyID, createdAt, updatedAt)
+	if err != nil {
+		return domain.ProviderInstance{}, err
+	}
+
 	// One flat set in, one binding per profile that will serve part of it out.
 	// The caller says what the connection should do; which profile does it is
 	// read from the matrix, so the console, a script, and a restore all get the
@@ -1899,14 +1916,14 @@ func (r *Runtime) providerFromInput(
 	// and re-widened its chat capabilities, with a 200 and nothing said. Only a
 	// create, which has nothing to preserve, starts from the defaults of the
 	// profile the request named.
-	requested := domain.DefaultProviderCapabilitiesForProfile(input.Type, profile.ProfileID)
+	requested := domain.DefaultProviderCapabilitiesForProfile(input.Type, instance.ProfileID)
 	if len(currentBindings) > 0 {
 		requested, _ = domain.BindingsCapabilitiesSummary(currentBindings)
 	}
 	if input.Capabilities != nil {
 		requested = *input.Capabilities
 	}
-	assignment := domain.AssignConnectionCapabilities(input.Type, profile.ProfileID, requested)
+	assignment := domain.AssignConnectionCapabilities(input.Type, instance.ProfileID, requested)
 	// Refused, not filtered. Intersecting the request with what the connection
 	// can serve is the natural implementation and the wrong one: it stores a
 	// connection that does less than was asked for, and nothing tells the caller
@@ -1992,7 +2009,7 @@ func (r *Runtime) providerFromInput(
 			// re-enabling would come up with nothing ticked.
 			Enabled: true,
 		}
-		if binding.CredentialScheme != credential.Scheme || binding.AccessSurface != credential.AccessSurface {
+		if binding.CredentialScheme != instance.CredentialScheme || binding.AccessSurface != instance.AccessSurface {
 			return domain.ProviderInstance{}, errors.New("provider binding credential profile does not match connection")
 		}
 		// A bound the operator already narrowed survives an edit that says nothing

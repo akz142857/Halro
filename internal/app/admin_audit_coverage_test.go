@@ -68,6 +68,7 @@ var auditSweepExemptions = map[string]string{
 	// behind the mutation guard because they carry a CSRF token, not because
 	// they mutate.
 	"preflightAdminDeploymentCapabilities": "computes a capability preflight and returns it; no durable change",
+	"previewAdminConfigurationImport":      "validates a configuration bundle and bindings; no durable change",
 	"previewAdminDeploymentPrice":          "computes a price preview and returns it; no durable change",
 
 	// These two reach the network on the operator's behalf and still record

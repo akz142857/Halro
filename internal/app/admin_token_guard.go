@@ -47,33 +47,10 @@ type tokenGuardPreviewInput struct {
 }
 
 type tokenGuardView struct {
-	ID                              string  `json:"id"`
-	Name                            string  `json:"name"`
-	Enabled                         bool    `json:"enabled"`
-	Action                          string  `json:"action"`
-	RequestTokens                   int64   `json:"request_tokens"`
-	TokensPerMinute                 int64   `json:"tokens_per_minute"`
-	CostMicrosPerMinute             int64   `json:"cost_micros_per_minute"`
-	ErrorRate                       float64 `json:"error_rate"`
-	MinimumSamples                  int64   `json:"minimum_samples"`
-	Concurrency                     int64   `json:"concurrency"`
-	UniqueIPsPerMinute              int64   `json:"unique_ips_per_minute"`
-	ViolationsBeforeBlock           int64   `json:"violations_before_block"`
-	BlockTTLSeconds                 int64   `json:"block_ttl_seconds"`
-	CooldownSeconds                 int64   `json:"cooldown_seconds"`
-	EWMAEnabled                     bool    `json:"ewma_enabled"`
-	EWMAAlpha                       float64 `json:"ewma_alpha"`
-	EWMAMultiplier                  float64 `json:"ewma_multiplier"`
-	EWMAMinimumSamples              int64   `json:"ewma_minimum_samples"`
-	EWMAWarmupSeconds               int64   `json:"ewma_warmup_seconds"`
-	EWMAEvaluationWindowSeconds     int64   `json:"ewma_evaluation_window_seconds"`
-	EWMACooldownSeconds             int64   `json:"ewma_cooldown_seconds"`
-	EWMAAbsoluteRPM                 int64   `json:"ewma_absolute_rpm"`
-	EWMAAbsoluteTPM                 int64   `json:"ewma_absolute_tpm"`
-	EWMAAbsoluteTokensPerRequest    float64 `json:"ewma_absolute_tokens_per_request"`
-	EWMAAbsoluteCostMicrosPerMinute int64   `json:"ewma_absolute_cost_micros_per_minute"`
-	Revision                        uint64  `json:"revision"`
-	BoundProjects                   int     `json:"bound_projects,omitempty"`
+	ID string `json:"id"`
+	tokenGuardInput
+	Revision      uint64 `json:"revision"`
+	BoundProjects int    `json:"bound_projects,omitempty"`
 }
 
 func (r *Runtime) getAdminTokenGuardPolicy(writer http.ResponseWriter, request *http.Request) {
@@ -279,8 +256,12 @@ func (input tokenGuardInput) policy(id string, createdAt, updatedAt time.Time) d
 }
 
 func tokenGuardPolicyView(policy domain.TokenGuardPolicy) tokenGuardView {
-	return tokenGuardView{
-		ID: policy.ID, Name: policy.Name, Enabled: policy.Enabled, Action: policy.Action,
+	return tokenGuardView{ID: policy.ID, tokenGuardInput: tokenGuardSettings(policy), Revision: policy.Revision}
+}
+
+func tokenGuardSettings(policy domain.TokenGuardPolicy) tokenGuardInput {
+	return tokenGuardInput{
+		Name: policy.Name, Enabled: policy.Enabled, Action: policy.Action,
 		RequestTokens: policy.RequestTokens, TokensPerMinute: policy.TokensPerMinute,
 		CostMicrosPerMinute: policy.CostMicrosPerMinute, ErrorRate: policy.ErrorRate,
 		MinimumSamples: policy.MinimumSamples, Concurrency: policy.Concurrency,
@@ -296,7 +277,6 @@ func tokenGuardPolicyView(policy domain.TokenGuardPolicy) tokenGuardView {
 		EWMAAbsoluteRPM:             policy.EWMAAbsoluteRPM, EWMAAbsoluteTPM: policy.EWMAAbsoluteTPM,
 		EWMAAbsoluteTokensPerRequest:    policy.EWMAAbsoluteTokensPerRequest,
 		EWMAAbsoluteCostMicrosPerMinute: policy.EWMAAbsoluteCostMicrosPerMinute,
-		Revision:                        policy.Revision,
 	}
 }
 
