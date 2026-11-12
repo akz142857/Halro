@@ -51,6 +51,8 @@ import type {
   ConfigurationBindings,
   ConfigurationImportPreview,
   ConfigurationImportResult,
+  AIConfigurationPreview,
+  AIConfigurationResult,
   SystemConfig,
   ModelCatalogInfo,
   TokenGuardPolicy,
@@ -340,6 +342,15 @@ export const api = {
     request<ConfigurationImportResult>("/configuration/import", configurationImportBody(bundle, {
       bindings, plan_id: planID, accept_operator_declarations: acceptDeclarations, ...stepUpBody(reauth),
     })).then((value) => value.data),
+
+  exportConfigurationSkill: (deploymentID: string, projectID: string, locale: string) =>
+    request<string>(`/skill.md?${new URLSearchParams({ deployment_id: deploymentID, project_id: projectID, locale })}`, {}, "", "text").then((value) => value.data),
+  previewAIConfiguration: (plan: string) =>
+    request<AIConfigurationPreview>("/configuration/ai/preview", { method: "POST", body: plan }).then((value) => value.data),
+  applyAIConfiguration: (plan: string, previewID: string, reauth: Reauth) => {
+    const options = JSON.stringify({ preview_id: previewID, ...stepUpBody(reauth) });
+    return request<AIConfigurationResult>("/configuration/ai/apply", { method: "POST", body: `{"plan":${plan},${options.slice(1)}` }).then((value) => value.data);
+  },
 
   /** What this build can serve: capability keys, and per profile the defaults,
    * ceiling, endpoint template and initial endpoint. Compile-time data, so it

@@ -1383,6 +1383,7 @@ export interface DeploymentPriceProposal {
 
 export interface AuditRecord {
   sequence: number;
+  event_id: string;
   occurred_at: string;
   actor_type: string;
   actor_id: string;
@@ -1679,6 +1680,19 @@ export interface ConfigurationImportPreview {
   region_changes?: (ConfigurationObject & { source_region: string; target_region: string })[];
   plan_id?: string;
 }
+
+export interface AIConfigurationResult {
+  status: "applied" | "already_applied" | "confirmation_unavailable";
+  operation_id: string;
+  route_id: string;
+  verification: "verified" | "activation_pending" | "readback_unavailable" | "configuration_changed" | "route_unavailable";
+}
+
+type AIConfigurationResource = { id: string; name: string; revision: number };
+export type AIConfigurationPreview = { public_model: string } & (
+  { preview_id: string; deployment: AIConfigurationResource; project: AIConfigurationResource; result?: never } |
+  { result: AIConfigurationResult; preview_id?: never }
+);
 
 type ConfigurationKeyReference = ConfigurationObject & { project_id: string };
 

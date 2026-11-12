@@ -97,6 +97,20 @@ proxy must carry a syntactically valid `X-Forwarded-For` chain. Missing or
 malformed chains are rejected with HTTP 400 so CIDR authorization and Token
 Guard cannot silently lose their source-IP signal.
 
+## Publish a model alias with an AI configuration plan
+
+Open **Settings → AI configuration**, choose an enabled deployment and its
+intended project, and download `SKILL.md`. Give the file to your AI along with
+the new alias. The file contains the plan schema and the selected resource IDs,
+names, and revisions. Credentials and gateway keys stay in Halro.
+
+Upload the resulting `halro-plan.json` and review the enabled route and project
+grant. Confirm the plan in Halro and complete reauthentication if prompted.
+Halro records the two changes together and returns the operation ID and runtime
+verification result. If a resource changed after export, download a fresh Skill
+and regenerate the plan. For an independent discovery check, use a key with
+inference and discovery scopes for the intended project to list `/v1/models`.
+
 ## Copy configuration to a test instance
 
 In the source console, open **Settings → Configuration transfer** and download

@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -120,6 +121,12 @@ func (s *Snapshot) Authenticate(plaintext string, now time.Time) (AuthResult, er
 		return AuthResult{}, ErrInvalidKey
 	}
 	return authorize(current, key, now)
+}
+
+// ProjectAllowsModel checks the live project policy without requiring a key.
+func (s *Snapshot) ProjectAllowsModel(projectID, alias string) bool {
+	project, ok := s.current.Load().projects[projectID]
+	return ok && project.Enabled && slices.Contains(project.AllowedModels, alias)
 }
 
 func authorize(current *snapshotData, key domain.GatewayKey, now time.Time) (AuthResult, error) {

@@ -69,6 +69,7 @@ var auditSweepExemptions = map[string]string{
 	// they mutate.
 	"preflightAdminDeploymentCapabilities": "computes a capability preflight and returns it; no durable change",
 	"previewAdminConfigurationImport":      "validates a configuration bundle and bindings; no durable change",
+	"previewAdminAIConfiguration":          "validates an AI configuration plan; no durable change",
 	"previewAdminDeploymentPrice":          "computes a price preview and returns it; no durable change",
 
 	// These two reach the network on the operator's behalf and still record
