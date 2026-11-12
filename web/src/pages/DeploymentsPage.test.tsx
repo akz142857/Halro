@@ -1208,6 +1208,84 @@ describe("deployment invocation target workflow", () => {
 
 });
 
+describe("deployment provider filter", () => {
+  beforeEach(() => {
+    vi.spyOn(api, "providers").mockResolvedValue({
+      items: [provider, { ...provider, id: "provider_openai_backup" }],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "deployments").mockResolvedValue({
+      items: [
+        deployment("dep_primary", { provider_model: "shared-model", enabled: true, last_test_current: true, last_test_status: "unhealthy" }),
+        deployment("dep_disabled", { provider_model: "shared-model" }),
+        deployment("dep_other_model", { provider_model: "different-model", enabled: true }),
+        deployment("dep_backup", { provider_id: "provider_openai_backup", provider_model: "shared-model", enabled: true }),
+      ],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState({}, "", "/admin/deployments");
+  });
+
+  it("combines the exact provider with URL-backed search and status", async () => {
+    window.history.replaceState({}, "", "/admin/deployments?q=shared-model&status=enabled&provider_id=provider_openai");
+    renderPage();
+
+    const select = await screen.findByRole("combobox", { name: "服务商" });
+    expect(select).toHaveValue(provider.id);
+    expect(await within(select).findByRole("option", { name: "OpenAI production · provider_openai" })).toBeInTheDocument();
+    expect(within(select).getByRole("option", { name: "OpenAI production · provider_openai_backup" })).toBeInTheDocument();
+    expect(screen.getByRole("article", { name: "Deployment dep_primary" })).toBeVisible();
+    expect(screen.getAllByRole("article")).toHaveLength(1);
+    expect(screen.getByText("显示 1 / 4 个部署")).toBeVisible();
+    expect(screen.getByRole("button", { name: /^全部\s*3$/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: /^需要处理\s*1$/ })).toBeVisible();
+
+    fireEvent.change(select, { target: { value: "provider_openai_backup" } });
+    expect(screen.getByRole("article", { name: "Deployment dep_backup" })).toBeVisible();
+    expect(screen.getAllByRole("article")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: /^全部\s*1$/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: /^需要处理\s*0$/ })).toBeVisible();
+    expect(Object.fromEntries(new URLSearchParams(window.location.search))).toEqual({
+      q: "shared-model", status: "enabled", provider_id: "provider_openai_backup",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "服务商：OpenAI production · provider_openai_backup" }));
+    expect(select).toHaveValue("");
+    expect(screen.getAllByRole("article")).toHaveLength(2);
+    expect(window.location.search).toBe("?q=shared-model&status=enabled");
+  });
+
+  it("clears a stale provider link from the empty result state", async () => {
+    window.history.replaceState({}, "", "/admin/deployments?q=shared-model&status=enabled&provider_id=provider_removed");
+    renderPage();
+
+    expect(await screen.findByRole("combobox", { name: "服务商" })).toHaveValue("provider_removed");
+    expect(screen.queryByRole("article")).not.toBeInTheDocument();
+    const empty = screen.getByRole("heading", { name: "没有匹配的模型部署" }).parentElement!;
+    fireEvent.click(within(empty).getByRole("button", { name: "清除筛选" }));
+    expect(window.location.search).toBe("");
+    expect(screen.getAllByRole("article")).toHaveLength(4);
+  });
+
+  it("allows clearing the provider when there are no deployments left", async () => {
+    vi.mocked(api.deployments).mockResolvedValue({ items: [], next_cursor: "" });
+    window.history.replaceState({}, "", `/admin/deployments?provider_id=${provider.id}`);
+    renderPage();
+
+    const select = await screen.findByRole("combobox", { name: "服务商" });
+    expect(select).toHaveValue(provider.id);
+    fireEvent.change(select, { target: { value: "" } });
+    expect(window.location.search).toBe("");
+    expect(screen.getByRole("heading", { name: "还没有模型部署" })).toBeVisible();
+  });
+});
+
 // The card is a layout change, not a scope change. Two facts on it decide
 // whether a deployment serves traffic at all, and a third is the reason two of
 // its own buttons are disabled — a card that dropped them would look tidier and
