@@ -44,8 +44,12 @@ export function DeploymentsPage() {
   const { params, update } = useListQuery();
   const query = params.get("q") ?? "";
   const status = ["enabled", "disabled", "attention"].includes(params.get("status") ?? "") ? params.get("status")! : "all";
+  const providerID = params.get("provider_id") ?? "";
+  const hasFilters = Boolean(query || providerID || status !== "all");
   const setQuery = (value: string) => update({ q: value });
   const setStatus = (value: string) => update({ status: value === "all" ? "" : value }, false);
+  const setProviderID = (value: string) => update({ provider_id: value }, false);
+  const clearFilters = () => update({ q: "", status: "", provider_id: "" });
   // What the grid's single live region is currently saying. Cards publish here
   // rather than each owning a region of its own.
   const [announcement, setAnnouncement] = useState("");
@@ -56,6 +60,20 @@ export function DeploymentsPage() {
     () => new Map(providers.data?.items.map((provider) => [provider.id, provider.name]) ?? []),
     [providers.data],
   );
+  const providerOptions = useMemo(() => {
+    const ids = new Set(deployments.data?.items.map((deployment) => deployment.provider_id));
+    if (providerID) ids.add(providerID);
+    const options = Array.from(ids, (id) => ({ id, name: providerNames.get(id) || id }));
+    const nameCounts = new Map<string, number>();
+    for (const { name } of options) nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
+    return options
+      .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+      .map(({ id, name }) => ({
+        id,
+        label: nameCounts.get(name) === 1 ? name : `${name}${t("common.dotSeparator")}${id}`,
+      }));
+  }, [deployments.data?.items, providerID, providerNames, t]);
+  const selectedProvider = providerOptions.find(({ id }) => id === providerID);
   const activeRouteCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const route of routes.data?.items ?? []) {
@@ -63,9 +81,13 @@ export function DeploymentsPage() {
     }
     return counts;
   }, [routes.data]);
+  const providerDeployments = useMemo(() => {
+    const items = deployments.data?.items ?? [];
+    return providerID ? items.filter((deployment) => deployment.provider_id === providerID) : items;
+  }, [deployments.data?.items, providerID]);
   const filteredDeployments = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
-    return (deployments.data?.items ?? []).filter((deployment) => {
+    return providerDeployments.filter((deployment) => {
       const matchesQuery = !normalizedQuery || [
         deployment.id,
         deployment.name,
@@ -79,7 +101,7 @@ export function DeploymentsPage() {
         || (status === "attention" && deploymentNeedsAttention(deployment));
       return matchesQuery && matchesStatus;
     });
-  }, [deployments.data?.items, providerNames, query, status]);
+  }, [providerDeployments, providerNames, query, status]);
   return (
     <>
       <PageHeader
@@ -89,14 +111,14 @@ export function DeploymentsPage() {
       <OnboardingContextBanner />
       {(deployments.isPending || providers.isPending || routes.isPending) && <Loading />}
       {(deployments.isError || providers.isError || routes.isError) && <ErrorState error={deployments.error || providers.error || routes.error} />}
-      {deployments.data?.items.length === 0 && (
+      {deployments.data?.items.length === 0 && !hasFilters && (
         <EmptyState title={t("deployments.emptyTitle")}>{t("deployments.emptyDescription")}</EmptyState>
       )}
-      {!!deployments.data?.items.length && (
+      {deployments.data && (deployments.data.items.length > 0 || hasFilters) && (
         <section className="deployment-list list-workbench" aria-label={t("deployments.list")}>
           <ListViews label={t("listControls.views")} value={status} items={[
-            { key: "all", label: t("listControls.all"), icon: "all", count: deployments.data?.items.length },
-            { key: "attention", label: t("deployments.needsAttention"), icon: "error", count: deployments.data?.items.filter(deploymentNeedsAttention).length },
+            { key: "all", label: t("listControls.all"), icon: "all", count: providerDeployments.length },
+            { key: "attention", label: t("deployments.needsAttention"), icon: "error", count: providerDeployments.filter(deploymentNeedsAttention).length },
             { key: "enabled", label: t("common.enabled"), icon: "check" },
             { key: "disabled", label: t("common.disabled"), icon: "paused" },
           ]} onChange={setStatus} trailing={<ListRefresh busy={deployments.isFetching || providers.isFetching || routes.isFetching} onRefresh={() => { void deployments.refetch(); void providers.refetch(); void routes.refetch(); }} />} />
@@ -105,12 +127,20 @@ export function DeploymentsPage() {
               <span>{t("deployments.search")}</span>
               <input autoComplete="off" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("deployments.searchPlaceholder")} />
             </label>
+            <label className="deployment-provider-filter">
+              <span>{t("deployments.provider")}</span>
+              <select value={providerID} onChange={(event) => setProviderID(event.target.value)}>
+                <option value="">{t("deployments.allProviders")}</option>
+                {providerOptions.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}
+              </select>
+            </label>
             <span className="deployment-result-count" role="status">{t("deployments.resultCount", { visible: filteredDeployments.length, total: deployments.data.items.length })}</span>
           </div>
           <FilterChips items={[
             ...(query ? [{ key: "search", label: `${t("common.search")}: ${query}`, clear: () => setQuery("") }] : []),
             ...(status !== "all" ? [{ key: "status", label: status === "attention" ? t("deployments.needsAttention") : t(`common.${status}`), clear: () => setStatus("all") }] : []),
-          ]} onClear={() => update({ q: "", status: "" })} />
+            ...(selectedProvider ? [{ key: "provider", label: `${t("deployments.provider")}${t("common.labelSeparator")}${selectedProvider.label}`, clear: () => setProviderID("") }] : []),
+          ]} onClear={clearFilters} />
           {filteredDeployments.length ? (
             <div className="resource-card-grid deployment-grid">
               {filteredDeployments.map((deployment, index) => (
@@ -126,7 +156,7 @@ export function DeploymentsPage() {
                 />
               ))}
             </div>
-          ) : <EmptyState title={t("deployments.noMatches")} action={<button type="button" className="button ghost" onClick={() => update({ q: "", status: "" })}>{t("listControls.clear")}</button>}>{t("deployments.noMatchesDescription")}</EmptyState>}
+          ) : <EmptyState title={t("deployments.noMatches")} action={<button type="button" className="button ghost" onClick={clearFilters}>{t("listControls.clear")}</button>}>{t("deployments.noMatchesDescription")}</EmptyState>}
           {/* One live region for the whole grid, naming the deployment it is
               speaking about. A region per card is fifty registered regions that
               announce a bare "失败" with no way to tell which card produced
