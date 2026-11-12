@@ -18,12 +18,13 @@ import { PasswordChangeForm } from "./PasswordChangeForm";
 import { RuntimeSettingsForm } from "./RuntimeSettingsForm";
 import { UsageWindowForm } from "./UsageWindowForm";
 const ConfigurationTransferPanel = lazy(() => import("./ConfigurationTransferPanel").then((module) => ({ default: module.ConfigurationTransferPanel })));
+const AIConfigurationPanel = lazy(() => import("./AIConfigurationPanel").then((module) => ({ default: module.AIConfigurationPanel })));
 const MasterKeyCustodyPage = lazy(() => import("./MasterKeyCustodyPage").then((module) => ({ default: module.MasterKeyCustodyPage })));
 
 // One list, in the order the nav renders them. The routing used to repeat the
 // names in a chain of comparisons and the nav in its own array, so a pane could
 // be reachable by URL and absent from the menu, or the reverse.
-const SETTINGS_PANES = ["general", "security", "accounts", "instance", "config", "transfer", "custody", "diagnostics"] as const;
+const SETTINGS_PANES = ["general", "security", "accounts", "instance", "config", "ai-configuration", "transfer", "custody", "diagnostics"] as const;
 type SettingsPane = (typeof SETTINGS_PANES)[number];
 
 function paneFromPath(path: string): SettingsPane {
@@ -41,7 +42,7 @@ export function SettingsPage({
   const { t } = useTranslation();
   const session = useSession();
   const readOnly = useIsReadOnly();
-  const panes: readonly SettingsPane[] = readOnly ? SETTINGS_PANES.filter((item) => item !== "transfer") : SETTINGS_PANES;
+  const panes: readonly SettingsPane[] = readOnly ? SETTINGS_PANES.filter((item) => item !== "transfer" && item !== "ai-configuration") : SETTINGS_PANES;
   const path = usePathname();
   const requestedPane = paneFromPath(path);
   const pane = mfaSetupRequired ? "security" : panes.includes(requestedPane) ? requestedPane : "general";
@@ -120,6 +121,10 @@ export function SettingsPage({
             {pane === "accounts" && <section aria-labelledby="accounts-title"><SettingsGroupHeader title={t("settings.panes.accounts")} id="accounts-title" /><AdminUsersSection /></section>}
             {!pending && !error && pane === "instance" && uiSettings.data && preferences.data && settings.data && <section aria-labelledby="instance-title"><SettingsGroupHeader title={t("settings.panes.instance")} description={t("settings.instanceDescription")} id="instance-title" /><InstanceLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} />{accounting.data && <AccountingTimezoneForm settings={accounting.data.data} />}{usageSettings.data && <UsageWindowForm settings={usageSettings.data.data} />}<RuntimeSettingsForm settings={settings.data.data} /></section>}
             {!pending && !error && pane === "config" && config.data && modelCatalog.data && <section aria-labelledby="config-title"><SettingsGroupHeader title={t("settings.panes.config")} id="config-title" /><ModelCatalogCard info={modelCatalog.data} onRefresh={() => modelCatalog.refetch()} /><ConfigPreviewCard yaml={config.data.yaml} entries={config.data.entries} /></section>}
+            {pane === "ai-configuration" && <section className="configuration-transfer" aria-labelledby="ai-configuration-title">
+              <SettingsGroupHeader title={t("settings.panes.ai-configuration")} description={t("aiConfiguration.description")} id="ai-configuration-title" />
+              <Suspense fallback={<Loading />}><AIConfigurationPanel /></Suspense>
+            </section>}
             {pane === "transfer" && <section className="configuration-transfer" aria-labelledby="transfer-title">
               <SettingsGroupHeader title={t("settings.panes.transfer")} description={t("configurationTransfer.description")} id="transfer-title" />
               <Suspense fallback={<Loading />}><ConfigurationTransferPanel /></Suspense>

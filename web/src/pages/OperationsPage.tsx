@@ -70,7 +70,7 @@ export function OperationsPage() {
   const visibleAudit = auditRecords.filter((record) => {
     if (auditView === "success" && record.outcome !== "success") return false;
     if (auditView === "attention" && record.outcome === "success") return false;
-    return !auditSearch.trim() || [record.action, record.actor_id, record.target_id, record.target_type, record.reason_code,
+    return !auditSearch.trim() || [record.event_id, record.action, record.actor_id, record.target_id, record.target_type, record.reason_code,
       auditTerm(t, "actions", record.action), auditTerm(t, "outcomes", record.outcome), auditTerm(t, "targets", record.target_type)]
       .some((value) => value?.toLocaleLowerCase().includes(auditSearch.trim().toLocaleLowerCase()));
   });

@@ -149,6 +149,11 @@ export function localizedError(t: TFunction, error: unknown) {
     configuration_declarations_required: "configurationTransfer.declarationsRequired",
     configuration_preview_required: "configurationTransfer.previewRequired",
     configuration_target_not_empty: "configurationTransfer.targetNotEmpty",
+    ai_configuration_invalid_plan: "aiConfiguration.invalidPlan",
+    ai_configuration_stale: "aiConfiguration.stale",
+    ai_configuration_alias_in_use: "aiConfiguration.aliasInUse",
+    ai_configuration_target_unavailable: "aiConfiguration.targetUnavailable",
+    ai_configuration_preview_required: "aiConfiguration.previewRequired",
     invalid_request: "errors.badRequest",
     invalid_console_window: "errors.invalidConsoleWindow",
     console_window_exceeds_retention: "errors.consoleWindowExceedsRetention",
@@ -218,6 +223,11 @@ export function errorDetail(error: unknown) {
   // field. Repeating the server's English sentinel under the translated
   // instruction makes the UI look like an internal validation failure.
   const localizedWorkflowCodes = [
+    "ai_configuration_invalid_plan",
+    "ai_configuration_stale",
+    "ai_configuration_alias_in_use",
+    "ai_configuration_target_unavailable",
+    "ai_configuration_preview_required",
     "invalid_request",
     "replication_unavailable",
     "alert_id_required",
