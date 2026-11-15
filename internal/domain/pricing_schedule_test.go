@@ -84,7 +84,7 @@ func TestPriceScheduleSnapshotPinsTheReservationTier(t *testing.T) {
 	}
 	// The attempt finishes two minutes later, after the boundary. Settlement
 	// prices from the snapshot, which still carries the peak rung.
-	settled, err := snapshot.Calculate(1_000_000, 0, 0)
+	settled, err := snapshot.Calculate(BilledTokens{Input: 1_000_000, CachedInput: 0, Output: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,23 +148,20 @@ func TestPriceScheduleFallsBackToTheDearestTierWhenTheZoneIsUnknown(t *testing.T
 	if tier.Provenance.LocalMinute != nil {
 		t.Fatal("the zone-unavailable rung must not claim a local time")
 	}
-	for _, tokens := range [][3]int64{{1_000_000, 0, 0}, {1_000_000, 900_000, 0}, {0, 0, 1_000_000}, {7, 3, 11}} {
-		fallback, err := tier.Calculate(tokens[0], tokens[1], tokens[2])
+	for _, tokens := range []BilledTokens{
+		{Input: 1_000_000}, {Input: 1_000_000, CachedInput: 900_000}, {Output: 1_000_000}, {Input: 7, CachedInput: 3, Output: 11},
+		{Input: 1_000_000, CacheWrite: 600_000, CacheWriteLong: 200_000}, {Input: 9, CachedInput: 2, CacheWrite: 5, CacheWriteLong: 5, Output: 3},
+	} {
+		fallback, err := tier.Calculate(tokens)
 		if err != nil {
 			t.Fatal(err)
 		}
-		candidates := []PriceTier{{
-			InputMicrosPerMillion: price.InputMicrosPerMillion, CachedInputMicrosPerMillion: price.CachedInputMicrosPerMillion,
-			OutputMicrosPerMillion: price.OutputMicrosPerMillion, FixedRequestMicrosUSD: price.FixedRequestMicrosUSD,
-		}}
+		candidates := []PriceTier{price.BaseTier()}
 		for _, window := range price.Schedule.Windows {
-			candidates = append(candidates, PriceTier{
-				InputMicrosPerMillion: window.InputMicrosPerMillion, CachedInputMicrosPerMillion: window.CachedInputMicrosPerMillion,
-				OutputMicrosPerMillion: window.OutputMicrosPerMillion, FixedRequestMicrosUSD: window.FixedRequestMicrosUSD,
-			})
+			candidates = append(candidates, window.Tier())
 		}
 		for index, candidate := range candidates {
-			cost, err := candidate.Calculate(tokens[0], tokens[1], tokens[2])
+			cost, err := candidate.Calculate(tokens)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -277,38 +274,68 @@ func TestRecordsWrittenBeforeSchedulesDecodeAndHashUnchanged(t *testing.T) {
 	if err := price.Validate(); err != nil {
 		t.Fatalf("an existing price stopped validating: %v", err)
 	}
-	// The snapshot such a price produces must still encode to exactly the bytes
-	// the previous build produced, so its digest is the same one on disk.
-	selectedAt := time.Date(2026, 8, 18, 2, 0, 0, 0, time.UTC)
-	snapshot, err := NewVersionedPriceSnapshot(price, selectedAt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := json.Marshal(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	expected := `{"pricing_selected_at":"2026-08-18T02:00:00Z","price_evidence_status":"versioned",` +
+	// A snapshot a previous build wrote — the one a stored price pin's digest
+	// was taken over — must re-encode to exactly the same bytes, or every pin in
+	// an existing data directory would stop matching its Ledger lease. That
+	// holds for snapshots written before schedules and before cache-write
+	// rates alike, because both are omitted when absent.
+	legacy := `{"pricing_selected_at":"2026-08-18T02:00:00Z","price_evidence_status":"versioned",` +
 		`"cost_value_status":"known","price_version_id":"price_legacy","price_version":3,` +
 		`"billing_mode":"metered","currency":"USD","formula_version":"usd_token_v1",` +
 		`"input_micros_per_million":400000,"cached_input_micros_per_million":40000,` +
 		`"output_micros_per_million":1600000,"fixed_request_micros_usd":0,` +
 		`"effective_from":"2026-08-01T00:00:00Z","source_type":"manual","source_assurance":"asserted",` +
 		`"source_reference":"standard","source_without_archive":true}`
-	if string(encoded) != expected {
-		t.Fatalf("snapshot encoding changed:\n got %s\nwant %s", encoded, expected)
-	}
-	// And a snapshot read back from a record that predates the field is still
-	// priceable, at the same rung it was written with.
 	var restored PriceSnapshot
-	if err := json.Unmarshal([]byte(expected), &restored); err != nil {
+	if err := json.Unmarshal([]byte(legacy), &restored); err != nil {
 		t.Fatal(err)
 	}
-	if restored.ScheduleTier != nil {
-		t.Fatal("a snapshot with no schedule_tier key decoded one")
+	if restored.ScheduleTier != nil || restored.CacheWriteMicrosPerMillion != nil || restored.CacheWriteLongMicrosPerMillion != nil {
+		t.Fatalf("a legacy snapshot decoded terms it does not carry: %#v", restored)
 	}
-	cost, err := restored.Calculate(1_000_000, 0, 0)
+	reencoded, err := json.Marshal(restored.Clone())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(reencoded) != legacy {
+		t.Fatalf("legacy snapshot encoding changed:\n got %s\nwant %s", reencoded, legacy)
+	}
+	// A snapshot taken now from the same price carries both write terms: a
+	// price stored before they existed decodes them as zero until the schema
+	// 43 migration fills them with the input rate.
+	selectedAt := time.Date(2026, 8, 18, 2, 0, 0, 0, time.UTC)
+	snapshot, err := NewVersionedPriceSnapshot(price, selectedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.CacheWriteMicrosPerMillion == nil || snapshot.CacheWriteLongMicrosPerMillion == nil {
+		t.Fatal("a new snapshot omitted the cache-write terms")
+	}
+	// And the legacy snapshot is still priceable, at the same rung it was
+	// written with, its absent write terms reading as zero.
+	cost, err := restored.Calculate(BilledTokens{Input: 1_000_000, CachedInput: 0, Output: 0})
 	if err != nil || cost.TotalCostMicrosUSD != 400_000 {
 		t.Fatalf("cost=%d err=%v", cost.TotalCostMicrosUSD, err)
+	}
+}
+
+func TestUnavailableZoneBoundsIndependentlyRoundedWriteTiers(t *testing.T) {
+	price := deepSeekShapedPrice(t)
+	price.InputMicrosPerMillion = 400_000
+	price.CacheWriteMicrosPerMillion = 400_000
+	price.CacheWriteLongMicrosPerMillion = 400_000
+	price.Schedule = &PriceSchedule{Timezone: "Mars/Olympus_Mons", Windows: []PriceWindow{{
+		StartMinute: 60, EndMinute: 120,
+		InputMicrosPerMillion: 100_000, CacheWriteMicrosPerMillion: 300_000, CacheWriteLongMicrosPerMillion: 350_000,
+	}}}
+	tokens := BilledTokens{Input: 3, CacheWrite: 2, CacheWriteLong: 1}
+	fallback := price.TierAt(priceTestInstant)
+	cost, err := fallback.Calculate(tokens)
+	if err != nil || cost.InputCostMicrosUSD != 3 || !fallback.Provenance.SeparateCacheWriteRounding {
+		t.Fatalf("fallback=%+v cost=%+v err=%v", fallback, cost, err)
+	}
+	want, err := price.Schedule.Windows[0].Tier().Calculate(tokens)
+	if err != nil || cost.InputCostMicrosUSD < want.InputCostMicrosUSD {
+		t.Fatalf("fallback=%+v window=%+v err=%v", cost, want, err)
 	}
 }

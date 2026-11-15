@@ -32,6 +32,47 @@ func (v rejectingBoltTestCandidateVerifier) VerifyCandidate(context.Context, []b
 	return v.err
 }
 
+func TestOpenKeySlotMetadataBeforeLegacyMigration(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "metadata.db")
+	store, err := OpenForWholeFilePublish(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	descriptor := newTestKeySlotDescriptor(t)
+	keyCheck := []byte("vault-check-envelope")
+	if err := store.PutKeySlotDescriptor(ctx, descriptor); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutVaultKeyCheck(keyCheck); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.migrate(func(tx *Tx) error {
+		return tx.Bucket(bucketMeta).Put(keySchemaVersion, encodeUint64(41))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := OpenKeySlotMetadata(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer legacy.Close()
+	stored, err := legacy.KeySlotDescriptor(ctx)
+	if err != nil || stored.MasterKeyFingerprint != descriptor.MasterKeyFingerprint {
+		t.Fatalf("read old descriptor: %+v (%v)", stored, err)
+	}
+	if storedCheck, err := legacy.VaultKeyCheck(); err != nil || !bytes.Equal(storedCheck, keyCheck) {
+		t.Fatalf("read old Vault Key Check: %q (%v)", storedCheck, err)
+	}
+	if version, err := legacy.SchemaVersion(); err != nil || version != 41 {
+		t.Fatalf("key lookup changed the schema: %d (%v)", version, err)
+	}
+}
+
 func TestKeySlotDescriptorPersistenceUsesRevisionedCOW(t *testing.T) {
 	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {

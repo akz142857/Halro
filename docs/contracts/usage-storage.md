@@ -31,6 +31,10 @@ the schema version, exported Ledger sequence, per-file SHA-256, row count,
 token totals, and cost totals. A crash before manifest commit can leave an
 orphan file; the next compaction validates and adopts an identical orphan.
 
+Usage schema 9 adds `provider_cache_write_long_input_tokens`, the long-lived
+subset of `provider_cache_write_input_tokens`. Schema 3–8 partitions remain
+readable and return zero for the new counter.
+
 ## The console checkpoint
 
 The aggregate the console reads is checkpointed into `metadata.db` so a restart

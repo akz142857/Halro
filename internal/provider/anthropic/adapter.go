@@ -523,6 +523,9 @@ func (adapter *Adapter) ChatStream(ctx context.Context, call provider.ChatCall, 
 	if err == nil {
 		err = bridge.Finalize()
 	}
+	if bridge.finalUsage != nil {
+		return openaiwire.RenderUsage(bridge.finalUsage), err
+	}
 	if usage == nil {
 		usage = bridge.usage
 	}
@@ -535,31 +538,13 @@ func (adapter *Adapter) ChatStream(ctx context.Context, call provider.ChatCall, 
 // portableUsage translates Anthropic's cache-exclusive token reporting into the
 // cache-inclusive subset convention the rest of the pipeline prices against.
 func portableUsage(usage anthropicapi.Usage) *openaiapi.Usage {
-	prompt := usage.PromptTokens()
-	portable := &openaiapi.Usage{
-		PromptTokens:     prompt,
-		CompletionTokens: usage.OutputTokens,
-		TotalTokens:      prompt + usage.OutputTokens,
-		CacheWriteTokens: usage.CacheCreationInputTokens,
-	}
-	portable.SetCachedPromptTokens(usage.CacheReadInputTokens)
-	portable.SetReasoningTokens(usage.ReasoningTokens())
-	return portable
+	decoded := anthropicwire.DecodeUsage(usage)
+	return openaiwire.RenderUsage(&decoded)
 }
 
-// semanticUsage applies the same translation as portableUsage for the streaming
-// bridge, which emits semantic events directly instead of an OpenAI-shaped body.
 func semanticUsage(usage anthropicapi.Usage) *semantic.Usage {
-	prompt := usage.PromptTokens()
-	return &semantic.Usage{
-		InputTokens:           prompt,
-		CachedInputTokens:     usage.CacheReadInputTokens,
-		CacheWriteInputTokens: usage.CacheCreationInputTokens,
-		OutputTokens:          usage.OutputTokens,
-		ReasoningTokens:       usage.ReasoningTokens(),
-		TotalTokens:           prompt + usage.OutputTokens,
-		Source:                semantic.UsageProviderReported,
-	}
+	decoded := anthropicwire.DecodeUsage(usage)
+	return &decoded
 }
 
 func (adapter *Adapter) Embed(context.Context, provider.EmbeddingCall) (openaiapi.EmbeddingResponse, error) {
@@ -913,21 +898,36 @@ func updateUsage(current *anthropicapi.Usage, event anthropicapi.RawStreamEvent)
 	}
 	if event.Type == "message_delta" {
 		var value struct {
-			Usage anthropicapi.Usage `json:"usage"`
+			Usage struct {
+				anthropicapi.Usage
+				Input              *int64 `json:"input_tokens"`
+				CacheRead          *int64 `json:"cache_read_input_tokens"`
+				CacheCreationTotal *int64 `json:"cache_creation_input_tokens"`
+			} `json:"usage"`
 		}
 		if json.Unmarshal(event.Data, &value) == nil {
-			if value.Usage.InputTokens != 0 {
-				current.InputTokens = value.Usage.InputTokens
+			if value.Usage.Input != nil {
+				current.InputTokens = *value.Usage.Input
 			}
 			// message_start carries the cache tiers today and the full-struct copy
 			// above captures them, but a delta that restates them must win rather
 			// than be dropped — losing either tier here silently under-prices the
 			// whole stream.
-			if value.Usage.CacheReadInputTokens != 0 {
-				current.CacheReadInputTokens = value.Usage.CacheReadInputTokens
+			if value.Usage.CacheRead != nil {
+				current.CacheReadInputTokens = *value.Usage.CacheRead
 			}
-			if value.Usage.CacheCreationInputTokens != 0 {
-				current.CacheCreationInputTokens = value.Usage.CacheCreationInputTokens
+			if total := value.Usage.CacheCreationTotal; total != nil && *total != current.CacheCreationInputTokens {
+				// Counts in message_delta are cumulative. Keep the long writes
+				// already reported when the total grows without a new split.
+				if *total < current.CacheCreationInputTokens {
+					current.CacheCreation = nil
+				}
+				current.CacheCreationInputTokens = *total
+				current.CacheCreationPartial = current.CacheCreation != nil
+			}
+			if value.Usage.CacheCreation != nil {
+				current.CacheCreation = value.Usage.CacheCreation
+				current.CacheCreationPartial = false
 			}
 			current.OutputTokens = value.Usage.OutputTokens
 			// The thinking span, in whichever of the two spellings the upstream
@@ -960,6 +960,7 @@ type portableStreamBridge struct {
 	created    int64
 	blocks     map[int]portableBlock
 	usage      *anthropicapi.Usage
+	finalUsage *semantic.Usage
 	terminated bool
 }
 
@@ -1034,7 +1035,8 @@ func (bridge *portableStreamBridge) Accept(event anthropicapi.RawStreamEvent) er
 			return err
 		}
 		if bridge.usage != nil {
-			return bridge.emit(semantic.Event{Kind: semantic.EventUsage, ID: bridge.id, Model: bridge.model, Usage: semanticUsage(*bridge.usage), Translation: semantic.TranslationNone, MappingRevision: anthropicwire.MappingRevision})
+			bridge.finalUsage = semanticUsage(*bridge.usage)
+			return bridge.emit(semantic.Event{Kind: semantic.EventUsage, ID: bridge.id, Model: bridge.model, Usage: bridge.finalUsage, Translation: semantic.TranslationNone, MappingRevision: anthropicwire.MappingRevision})
 		}
 	}
 	return nil

@@ -544,18 +544,24 @@ type Target struct {
 	// replaces a dead key advances it, and anything remembered against the old
 	// revision is stale by construction rather than by a second step somebody has
 	// to remember to take.
-	CredentialID                string
-	CredentialRevision          uint64
-	Region                      string
-	Adapter                     Adapter
-	InputMicrosPerMillion       int64
-	CachedInputMicrosPerMillion int64
-	OutputMicrosPerMillion      int64
-	FixedRequestMicrosUSD       int64
-	Priority                    int
-	Strategy                    string
-	Capabilities                Capabilities
-	CapabilityEvidence          domain.CapabilityEvidenceSet
+	CredentialID                   string
+	CredentialRevision             uint64
+	Region                         string
+	Adapter                        Adapter
+	InputMicrosPerMillion          int64
+	CachedInputMicrosPerMillion    int64
+	CacheWriteMicrosPerMillion     int64
+	CacheWriteLongMicrosPerMillion int64
+	OutputMicrosPerMillion         int64
+	FixedRequestMicrosUSD          int64
+	PriceScheduleTier              *domain.PriceScheduleTier
+	// OrdinaryInputEstimate applies to embedding inputs and synthetic
+	// resource units that have no generation cache split.
+	OrdinaryInputEstimate bool
+	Priority              int
+	Strategy              string
+	Capabilities          Capabilities
+	CapabilityEvidence    domain.CapabilityEvidenceSet
 	// ReasonsUnasked says this target returns reasoning on a request that never
 	// asked for it and cannot be told not to. It is read from the model
 	// catalogue when the registry is built, not stored on the deployment: it is
@@ -1199,4 +1205,19 @@ func (target Target) CapabilityModel() string {
 		return target.CanonicalModelRef
 	}
 	return target.ProviderModel
+}
+
+// PriceTier is the target's rates in the shape the usd_token_v1 arithmetic
+// reads, so that pricing an attempt against its target and against its frozen
+// snapshot go through the same code and cannot disagree by a micro-USD.
+func (t Target) PriceTier() domain.PriceTier {
+	return domain.PriceTier{
+		InputMicrosPerMillion:          t.InputMicrosPerMillion,
+		CachedInputMicrosPerMillion:    t.CachedInputMicrosPerMillion,
+		CacheWriteMicrosPerMillion:     t.CacheWriteMicrosPerMillion,
+		CacheWriteLongMicrosPerMillion: t.CacheWriteLongMicrosPerMillion,
+		OutputMicrosPerMillion:         t.OutputMicrosPerMillion,
+		FixedRequestMicrosUSD:          t.FixedRequestMicrosUSD,
+		Provenance:                     t.PriceScheduleTier,
+	}
 }

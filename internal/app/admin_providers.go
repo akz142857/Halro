@@ -2126,40 +2126,32 @@ func (r *Runtime) validateAdminRoute(request *http.Request, candidate domain.Rou
 	if err != nil {
 		return errors.New("routes are unavailable")
 	}
-	strategy := candidate.Strategy
-	if strategy == "" {
-		strategy = "ordered"
-	}
 	for _, route := range routes {
 		if route.ID == replacingID || route.DeletedAt != nil || !route.Enabled ||
 			!candidate.Enabled || route.PublicModel != candidate.PublicModel {
 			continue
 		}
-		// Two enabled routes on one alias pointing at the same deployment read
-		// as two targets and are not two: they share the deployment's price,
-		// probe, capability snapshot and concurrency limit. The circuit breaker
-		// keys on the route ID, so it does not merge them either — the second
-		// one is tried immediately after the first failed, against the thing
-		// that just failed. Refused here rather than explained in the console,
-		// because a console warning does not reach the Admin API.
-		//
-		// This dedupes the deployment, which is not the same as deduping the
-		// failure domain: nothing stops two deployment records naming one
-		// binding and one upstream model, and two routes onto those are still
-		// one credential and one quota. Closing that would mean uniqueness on
-		// (provider, binding, provider model), which is a rule about what a
-		// deployment is, not about what a route may point at — it belongs to
-		// the deployment write path and to a decision that has not been made.
-		if route.DeploymentID == candidate.DeploymentID {
-			return errors.New("another enabled route already points this public model at the same deployment")
+		if err := validateEnabledRoutePeer(candidate, route); err != nil {
+			return err
 		}
-		existingStrategy := route.Strategy
-		if existingStrategy == "" {
-			existingStrategy = "ordered"
+	}
+	return nil
+}
+
+// Routes in the same enabled alias group share a strategy. A repeated
+// deployment would retry the same target under a distinct circuit breaker.
+func validateEnabledRoutePeer(candidate, peer domain.Route) error {
+	if peer.DeploymentID == candidate.DeploymentID {
+		return errors.New("another enabled route already points this public model at the same deployment")
+	}
+	strategy := func(route domain.Route) string {
+		if route.Strategy == "" {
+			return "ordered"
 		}
-		if existingStrategy != strategy {
-			return errors.New("all enabled routes for a public model must use the same strategy")
-		}
+		return route.Strategy
+	}
+	if strategy(candidate) != strategy(peer) {
+		return errors.New("all enabled routes for a public model must use the same strategy")
 	}
 	return nil
 }

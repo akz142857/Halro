@@ -64,15 +64,12 @@ func rollupDimensions(event ledger.Event, requestLevel bool) []domain.RollupKey 
 // can never disagree with the total about the same attempt.
 func (a *Aggregate) addAttemptRollup(event ledger.Event, sequence uint64, committedCost int64, costKnown bool) error {
 	contribution := domain.DailyRollup{
-		Attempts:                      1,
-		InputTokens:                   event.ProviderInputTokens,
-		OutputTokens:                  event.ProviderOutputTokens,
-		CostMicrosUSD:                 committedCost,
-		LatencyMillis:                 event.LatencyMillis,
-		ProviderCachedInputTokens:     event.ProviderCachedInputTokens,
-		ProviderCacheWriteInputTokens: event.ProviderCacheWriteInputTokens,
-		ProviderReasoningTokens:       event.ProviderReasoningTokens,
-		AttemptLatencySamples:         1,
+		Attempts:              1,
+		InputTokens:           event.ProviderInputTokens,
+		OutputTokens:          event.ProviderOutputTokens,
+		CostMicrosUSD:         committedCost,
+		LatencyMillis:         event.LatencyMillis,
+		AttemptLatencySamples: 1,
 	}
 	contribution.Identity(event.PeriodID, event.PeriodTimezoneVersion, event.PeriodTimezone,
 		event.PeriodStartMicros, event.PeriodEndMicros)
@@ -89,6 +86,11 @@ func (a *Aggregate) addAttemptRollup(event ledger.Event, sequence uint64, commit
 	if event.TokenEstimated {
 		contribution.EstimatedInputTokens = event.ProviderInputTokens
 		contribution.EstimatedOutputTokens = event.ProviderOutputTokens
+	} else {
+		contribution.ProviderCachedInputTokens = event.ProviderCachedInputTokens
+		contribution.ProviderCacheWriteInputTokens = event.ProviderCacheWriteInputTokens
+		contribution.ProviderCacheWriteLongInputTokens = event.ProviderCacheWriteLongInputTokens
+		contribution.ProviderReasoningTokens = event.ProviderReasoningTokens
 	}
 	if event.CostEstimated && costKnown {
 		contribution.EstimatedCostMicrosUSD = committedCost

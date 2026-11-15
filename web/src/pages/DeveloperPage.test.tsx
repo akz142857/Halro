@@ -434,6 +434,20 @@ describe("DeveloperPage", () => {
     window.history.replaceState({}, "", "/admin/developer");
   });
 
+  it("opens the project chosen by onboarding when more than one project grants the model", async () => {
+    window.history.replaceState({}, "", "/admin/developer?onboarding=first-request&project_id=verify-project&model=support-chat");
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project, { ...project, id: "verify-project", name: "Verify project" }], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    try {
+      render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+      expect(await screen.findByRole("button", { name: "连接设置" })).toHaveTextContent("Verify project");
+      expect(screen.getByLabelText("模型")).toHaveValue("support-chat");
+    } finally {
+      window.history.replaceState({}, "", "/admin/developer");
+    }
+  });
+
   // Switching the tab is the other way into the JSON editor, and it had the
   // same overwrite the endpoint change did.
   it("does not overwrite a hand-written body when the mode is switched back", async () => {

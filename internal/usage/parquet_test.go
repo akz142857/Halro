@@ -219,7 +219,7 @@ func TestExporterUpgradesPreviousSchemaManifestRatherThanRejectingIt(t *testing.
 		snapshot := exportFixture{Attempts: []AttemptEvent{{
 			EventID: "tiered", Sequence: 1, AttemptID: "a", ProjectID: "p",
 			ProviderInputTokens: 100, ProviderOutputTokens: 10,
-			ProviderCachedInputTokens: 80, ProviderCacheWriteInputTokens: 5,
+			ProviderCachedInputTokens: 80, ProviderCacheWriteInputTokens: 5, ProviderCacheWriteLongInputTokens: 3,
 			ProviderReasoningTokens: 4, CostMicrosUSD: ledger.MicrosUSD(7),
 		}}}
 		upgraded, err := exporter.Export(snapshot)
@@ -246,7 +246,7 @@ func TestExportedRowsPreserveProviderTokenTiers(t *testing.T) {
 	snapshot := exportFixture{Attempts: []AttemptEvent{{
 		EventID: "tiered", Sequence: 1, AttemptID: "a", ProjectID: "p",
 		ProviderInputTokens: 100, ProviderOutputTokens: 10,
-		ProviderCachedInputTokens: 80, ProviderCacheWriteInputTokens: 5,
+		ProviderCachedInputTokens: 80, ProviderCacheWriteInputTokens: 5, ProviderCacheWriteLongInputTokens: 3,
 		ProviderReasoningTokens: 4, CostMicrosUSD: ledger.MicrosUSD(7),
 	}}}
 	manifest, err := exporter.Export(snapshot)
@@ -267,7 +267,7 @@ func TestExportedRowsPreserveProviderTokenTiers(t *testing.T) {
 		t.Fatalf("rows=%d", len(rows))
 	}
 	row := rows[0]
-	if row.ProviderCachedInputTokens != 80 || row.ProviderCacheWriteInputTokens != 5 || row.ProviderReasoningTokens != 4 {
+	if row.ProviderCachedInputTokens != 80 || row.ProviderCacheWriteInputTokens != 5 || row.ProviderCacheWriteLongInputTokens != 3 || row.ProviderReasoningTokens != 4 {
 		t.Fatalf("tiers were not round-tripped: %#v", row)
 	}
 	// The tiers partition the input total; a reader that summed them onto it
@@ -358,15 +358,15 @@ func TestVerifyAcceptsRowsWrittenAtThePreviousSchema(t *testing.T) {
 		EventID: "event_1", RequestID: "request_1", AttemptID: "attempt_1",
 		Sequence: 1, ProjectID: "project_1", StartedAt: time.Now().UTC(),
 		CompletedAt: time.Now().UTC(), Status: "success",
-		ProviderInputTokens: 100, ProviderOutputTokens: 10,
+		ProviderInputTokens: 100, ProviderOutputTokens: 10, ProviderCacheWriteInputTokens: 5,
 	}}}
 	manifest, err := exporter.Export(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Rewrite the partition with the physical schema-7 row type. This is not a
-	// current row carrying an old version stamp: the five schema-8 columns do not
+	// Rewrite the partition with the physical schema-8 row type. This is not a
+	// current row carrying an old version stamp: the schema-9 column does not
 	// exist in the Parquet file at all, which is what an upgraded installation
 	// actually opens.
 	path := filepath.Join(root, filepath.FromSlash(manifest.Files[0].Path))
@@ -379,7 +379,7 @@ func TestVerifyAcceptsRowsWrittenAtThePreviousSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var oldRow parquetAttemptSchema7
+	var oldRow parquetAttemptSchema8
 	if err := json.Unmarshal(encoded, &oldRow); err != nil {
 		t.Fatal(err)
 	}
@@ -387,8 +387,8 @@ func TestVerifyAcceptsRowsWrittenAtThePreviousSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writer := parquet.NewGenericWriter[parquetAttemptSchema7](file, parquet.Compression(&zstd.Codec{}))
-	if _, err := writer.Write([]parquetAttemptSchema7{oldRow}); err != nil {
+	writer := parquet.NewGenericWriter[parquetAttemptSchema8](file, parquet.Compression(&zstd.Codec{}))
+	if _, err := writer.Write([]parquetAttemptSchema8{oldRow}); err != nil {
 		file.Close()
 		t.Fatal(err)
 	}
@@ -409,15 +409,44 @@ func TestVerifyAcceptsRowsWrittenAtThePreviousSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	stored, err := readAttemptRows(path, manifest.Files[0].format())
+	if err != nil || len(stored) != 1 || stored[0].ProviderCacheWriteLongInputTokens != 0 {
+		t.Fatalf("read old row: len=%d err=%v", len(stored), err)
+	}
 	if err := exporter.Verify(&snapshot); err != nil {
 		t.Fatalf("rows written at schema %d must still verify: %v", parquetSchemaVersion-1, err)
 	}
+
+	// A crash may leave the same old partition on disk before committing the
+	// manifest. An upgraded exporter should reuse it and report its real schema.
+	if err := os.Remove(filepath.Join(root, "manifest.json")); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := exporter.Export(snapshot)
+	if err != nil || len(recovered.Files) != 1 || recovered.Files[0] != manifest.Files[0] {
+		t.Fatalf("resume with old orphan: manifest=%#v err=%v", recovered, err)
+	}
+	if err := exporter.Verify(snapshot); err != nil {
+		t.Fatalf("recovered orphan did not verify: %v", err)
+	}
+	snapshot.Attempts[0].ProviderCacheWriteLongInputTokens = 2
+	if err := exporter.Verify(snapshot); err == nil || !strings.Contains(err.Error(), "content mismatch") {
+		t.Fatalf("legacy partition lost a known long-write count: %v", err)
+	}
 }
 
-// parquetAttemptSchema7 is the actual predecessor layout. Keep it separate
+func TestOldOrphanCannotDiscardLongWriteTokens(t *testing.T) {
+	expected := parquetAttempt{SchemaVersion: parquetSchemaVersion, EventID: "event", ProviderCacheWriteInputTokens: 7, ProviderCacheWriteLongInputTokens: 2}
+	existing := narrowToSchema(expected, 8)
+	if _, ok := matchingOrphanSchema([]parquetAttempt{existing}, []parquetAttempt{expected}); ok {
+		t.Fatal("reused schema 8 orphan with missing long-write usage")
+	}
+}
+
+// parquetAttemptSchema8 is the actual predecessor layout. Keep it separate
 // from parquetAttempt so adding a field to the current row cannot silently make
 // the upgrade fixture current again.
-type parquetAttemptSchema7 struct {
+type parquetAttemptSchema8 struct {
 	SchemaVersion                 int32  `parquet:"schema_version" json:"schema_version"`
 	EventID                       string `parquet:"event_id,dict" json:"event_id"`
 	RequestID                     string `parquet:"request_id,dict" json:"request_id"`
@@ -433,6 +462,7 @@ type parquetAttemptSchema7 struct {
 	ProviderID                    string `parquet:"provider_id,dict" json:"provider_id"`
 	OfferingID                    string `parquet:"offering_id,dict" json:"offering_id"`
 	ProfileID                     string `parquet:"profile_id,dict" json:"profile_id"`
+	AccountRegionID               string `parquet:"account_region_id,dict" json:"account_region_id"`
 	RequestedModel                string `parquet:"requested_model,dict" json:"requested_model"`
 	ProviderModel                 string `parquet:"provider_model,dict" json:"provider_model"`
 	ProviderInputTokens           int64  `parquet:"provider_input_tokens" json:"provider_input_tokens"`
@@ -459,8 +489,12 @@ type parquetAttemptSchema7 struct {
 	ErrorClass                    string `parquet:"error_class,dict" json:"error_class"`
 	HTTPStatus                    int32  `parquet:"http_status" json:"http_status"`
 	ProviderCode                  string `parquet:"provider_code,dict" json:"provider_code"`
+	ProviderFailureReason         string `parquet:"provider_failure_reason,dict" json:"provider_failure_reason"`
 	ProviderRequestID             string `parquet:"provider_request_id" json:"provider_request_id"`
 	FailurePhase                  string `parquet:"failure_phase,dict" json:"failure_phase"`
+	Retryable                     bool   `parquet:"retryable" json:"retryable"`
+	Ambiguous                     bool   `parquet:"ambiguous" json:"ambiguous"`
+	FailureSemanticsRecorded      bool   `parquet:"failure_semantics_recorded" json:"failure_semantics_recorded"`
 	LatencyMillis                 int64  `parquet:"latency_millis" json:"latency_millis"`
 	RetryCount                    int32  `parquet:"retry_count" json:"retry_count"`
 	FallbackCount                 int32  `parquet:"fallback_count" json:"fallback_count"`

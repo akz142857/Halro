@@ -11,7 +11,7 @@ function metrics(overrides: Partial<SummaryMetrics> = {}): SummaryMetrics {
   return {
     attempts: 0, errors: 0, input_tokens: 0, output_tokens: 0,
     estimated_input_tokens: 0, estimated_output_tokens: 0,
-    provider_cached_input_tokens: 0, provider_cache_write_input_tokens: 0, provider_reasoning_tokens: 0,
+    provider_cached_input_tokens: 0, provider_cache_write_input_tokens: 0, provider_cache_write_long_input_tokens: 0, provider_reasoning_tokens: 0,
     cost_micros_usd: 0, estimated_cost_micros_usd: 0, unknown_attempts: 0, latency_millis: 0,
     attempt_latency_samples: 0, attempt_latency_p95_millis: 0, latency_approximate: true,
     ...overrides,

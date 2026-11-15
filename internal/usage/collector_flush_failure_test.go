@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/akz142857/Halro/internal/budget"
 	"github.com/akz142857/Halro/internal/ledger"
@@ -37,10 +36,6 @@ func TestAFailingHistoryWriteStopsApplyingAndCatchesUpOnceItSucceeds(t *testing.
 		t.Fatal(err)
 	}
 	accounting.AddObserver(collector.Observe)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { collector.Run(ctx); close(done) }()
-	defer func() { cancel(); <-done }()
 
 	// A request that is accepted and finalized leaves a summary row, which is
 	// what a batch holds.
@@ -73,28 +68,46 @@ func TestAFailingHistoryWriteStopsApplyingAndCatchesUpOnceItSucceeds(t *testing.
 		t.Fatal(err)
 	}
 
-	// Paced well below what a failing write can absorb, so the queue never
-	// overflows: the case that used to grow without bound.
-	peak := 0
-	for index := 10; index < 410; index++ {
+	// Force the first failed flush after one new request. A fixed number of
+	// rows before the periodic flush would depend on the speed of the WAL and
+	// the runner's scheduling.
+	begin(10)
+	collector.drainLocked()
+	collector.flush()
+	failedAt := aggregate.Watermark()
+	if pending := aggregate.PendingRecords(); pending != 1 {
+		t.Fatalf("failed flush retained %d summaries, want 1", pending)
+	}
+	if stats := collector.Stats(); stats.FlushFailures != 1 || !stats.Lagging {
+		t.Fatalf("first failed flush did not put the collector into lagging: %#v", stats)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { collector.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	for index := 11; index < 410; index++ {
 		begin(index)
-		time.Sleep(2 * time.Millisecond)
-		peak = max(peak, aggregate.PendingRecords())
 	}
-	time.Sleep(600 * time.Millisecond)
-	stats := collector.Stats()
-	if peak > 100 {
-		t.Fatalf("the pending batch kept growing while the write failed: peak %d records for 400 requests", peak)
+	// Drain any notifications the worker has not seen. The queue can hold the
+	// entire burst, so overflow cannot be what prevents further application.
+	collector.applyMu.Lock()
+	collector.drainLocked()
+	collector.applyMu.Unlock()
+	if stats := collector.Stats(); !stats.Lagging || stats.Dropped != 0 {
+		t.Fatalf("collector state after arrivals during the failed write: %#v", stats)
 	}
-	if stats.FlushFailures == 0 || !stats.Lagging || stats.Dropped != 0 {
-		t.Fatalf("a failing write did not put the collector into lagging: %#v", stats)
+	if applied := aggregate.Watermark(); applied != failedAt {
+		t.Fatalf("live records advanced the watermark from %#v to %#v while the write failed", failedAt, applied)
 	}
 	if err := collector.CatchUp(context.Background()); err == nil {
 		t.Fatal("catch-up succeeded while the write still fails")
 	}
-	if pending := aggregate.PendingRecords(); pending > 100 {
-		t.Fatalf("catch-up applied more records on top of a batch it cannot write: %d pending", pending)
+	if applied := aggregate.Watermark(); applied != failedAt {
+		t.Fatalf("catch-up advanced the watermark from %#v to %#v while the write failed", failedAt, applied)
 	}
+	cancel()
+	<-done
 
 	// The fault clears; the next catch-up writes the batch and replays the gap.
 	if err := aggregate.History().db.Update(func(tx *bbolt.Tx) error {

@@ -28,10 +28,19 @@ type PriceSnapshot struct {
 	// refused rather than read as free — the same fail-closed rule the other
 	// billing terms already follow.
 	CachedInputMicrosPerMillion *int64 `json:"cached_input_micros_per_million,omitempty"`
-	OutputMicrosPerMillion      *int64 `json:"output_micros_per_million,omitempty"`
-	FixedRequestMicrosUSD       *int64 `json:"fixed_request_micros_usd,omitempty"`
+	// CacheWriteMicrosPerMillion and CacheWriteLongMicrosPerMillion are the
+	// one exception to "a missing term is refused": a snapshot written before
+	// write rates existed has neither, and its attempt was settled — and is
+	// replayed — without them, so they decode as absent and read as zero.
+	// Nothing re-prices a settled attempt, which is what makes that safe; every
+	// snapshot taken since carries both, and only an absent pair is accepted,
+	// never one of the two.
+	CacheWriteMicrosPerMillion     *int64 `json:"cache_write_micros_per_million,omitempty"`
+	CacheWriteLongMicrosPerMillion *int64 `json:"cache_write_long_micros_per_million,omitempty"`
+	OutputMicrosPerMillion         *int64 `json:"output_micros_per_million,omitempty"`
+	FixedRequestMicrosUSD          *int64 `json:"fixed_request_micros_usd,omitempty"`
 	// ScheduleTier names the rung of the price version's time-of-day schedule
-	// that produced the four terms above, and is nil exactly when the version
+	// that produced the billing terms above, and is nil exactly when the version
 	// carries no schedule — so a fixed price's snapshot is byte-identical to
 	// what it was before schedules existed, digest included.
 	//
@@ -62,6 +71,8 @@ func (s PriceSnapshot) Clone() PriceSnapshot {
 		value := *s.CachedInputMicrosPerMillion
 		clone.CachedInputMicrosPerMillion = &value
 	}
+	clone.CacheWriteMicrosPerMillion = cloneInt64(s.CacheWriteMicrosPerMillion)
+	clone.CacheWriteLongMicrosPerMillion = cloneInt64(s.CacheWriteLongMicrosPerMillion)
 	if s.OutputMicrosPerMillion != nil {
 		value := *s.OutputMicrosPerMillion
 		clone.OutputMicrosPerMillion = &value
@@ -123,12 +134,14 @@ func NewVersionedPriceSnapshot(price DeploymentPriceVersion, selectedAt time.Tim
 	tier := price.TierAt(selectedAt)
 	version, effective := price.Version, price.EffectiveFrom
 	input, cached := tier.InputMicrosPerMillion, tier.CachedInputMicrosPerMillion
+	write, writeLong := tier.CacheWriteMicrosPerMillion, tier.CacheWriteLongMicrosPerMillion
 	output, fixed := tier.OutputMicrosPerMillion, tier.FixedRequestMicrosUSD
 	snapshot := PriceSnapshot{
 		PricingSelectedAt: selectedAt, PriceEvidenceStatus: PriceEvidenceVersioned, CostValueStatus: CostValueKnown,
 		PriceVersionID: price.ID, PriceVersion: &version, BillingMode: price.BillingMode,
 		Currency: price.Currency, FormulaVersion: price.FormulaVersion,
 		InputMicrosPerMillion: &input, CachedInputMicrosPerMillion: &cached,
+		CacheWriteMicrosPerMillion: &write, CacheWriteLongMicrosPerMillion: &writeLong,
 		OutputMicrosPerMillion: &output, FixedRequestMicrosUSD: &fixed, ScheduleTier: tier.Provenance,
 		EffectiveFrom: &effective, SourceType: price.Source.Type, SourceAssurance: price.Source.Assurance,
 		SourceContentSHA256: price.Source.ContentSHA256, SourceReference: price.Source.Reference,
@@ -152,6 +165,9 @@ func (s PriceSnapshot) Validate() error {
 			s.OutputMicrosPerMillion == nil || s.FixedRequestMicrosUSD == nil {
 			return errors.New("versioned price snapshot is incomplete")
 		}
+		if (s.CacheWriteMicrosPerMillion == nil) != (s.CacheWriteLongMicrosPerMillion == nil) {
+			return errors.New("versioned price snapshot carries only one cache write term")
+		}
 		if s.EffectiveFrom.IsZero() || !isUTC(*s.EffectiveFrom) || s.EffectiveFrom.After(s.PricingSelectedAt) {
 			return errors.New("price snapshot effective_from is invalid")
 		}
@@ -160,20 +176,10 @@ func (s PriceSnapshot) Validate() error {
 				return err
 			}
 		}
-		price := DeploymentPriceVersion{
-			ID: s.PriceVersionID, DeploymentID: "snapshot", Version: *s.PriceVersion, Revision: 1,
-			BillingMode: s.BillingMode, Currency: s.Currency, FormulaVersion: s.FormulaVersion,
-			InputMicrosPerMillion: *s.InputMicrosPerMillion, CachedInputMicrosPerMillion: *s.CachedInputMicrosPerMillion,
-			OutputMicrosPerMillion: *s.OutputMicrosPerMillion,
-			FixedRequestMicrosUSD:  *s.FixedRequestMicrosUSD, EffectiveFrom: *s.EffectiveFrom,
-			CreatedBy: "snapshot", CreatedAt: s.PricingSelectedAt,
-			Source: PriceSource{Type: s.SourceType, Assurance: s.SourceAssurance, ReceivedAt: s.PricingSelectedAt,
-				ContentSHA256: s.SourceContentSHA256, Reference: "snapshot", AssertedWithoutArchive: true},
-		}
 		// Source-type-specific optional evidence is intentionally not reconstructed;
 		// validate the immutable billing terms directly.
-		if price.InputMicrosPerMillion < 0 || price.CachedInputMicrosPerMillion < 0 ||
-			price.OutputMicrosPerMillion < 0 || price.FixedRequestMicrosUSD < 0 {
+		rates := s.Tier()
+		if rates.hasNegativeRate() {
 			return errors.New("price snapshot amounts cannot be negative")
 		}
 		manualWithoutArchive := s.SourceType == PriceSourceManual && s.SourceAssurance == PriceAssuranceAsserted &&
@@ -190,13 +196,11 @@ func (s PriceSnapshot) Validate() error {
 		}
 		switch s.BillingMode {
 		case BillingModeMetered:
-			if *s.InputMicrosPerMillion == 0 && *s.CachedInputMicrosPerMillion == 0 &&
-				*s.OutputMicrosPerMillion == 0 && *s.FixedRequestMicrosUSD == 0 {
+			if rates.isZero() {
 				return errors.New("metered snapshot requires a positive component")
 			}
 		case BillingModeFree:
-			if *s.InputMicrosPerMillion != 0 || *s.CachedInputMicrosPerMillion != 0 ||
-				*s.OutputMicrosPerMillion != 0 || *s.FixedRequestMicrosUSD != 0 {
+			if !rates.isZero() {
 				return errors.New("free snapshot components must be zero")
 			}
 		default:
@@ -205,6 +209,7 @@ func (s PriceSnapshot) Validate() error {
 	case PriceEvidenceUnknown:
 		if s.CostValueStatus != CostValueUnknown || s.PriceVersion != nil || s.PriceVersionID != "" ||
 			s.InputMicrosPerMillion != nil || s.CachedInputMicrosPerMillion != nil ||
+			s.CacheWriteMicrosPerMillion != nil || s.CacheWriteLongMicrosPerMillion != nil ||
 			s.OutputMicrosPerMillion != nil || s.FixedRequestMicrosUSD != nil || s.ScheduleTier != nil ||
 			s.SourceType != "" || s.SourceAssurance != "" || s.SourceContentSHA256 != "" || s.SourceReference != "" || s.SourceWithoutArchive {
 			return errors.New("unknown price snapshot must not contain known price terms")
@@ -215,11 +220,8 @@ func (s PriceSnapshot) Validate() error {
 	return nil
 }
 
-// Calculate prices one attempt against this frozen snapshot. cachedInputTokens
-// is the subset of inputTokens the provider served from cache; callers that
-// cannot know it yet pass zero and are charged the ordinary input rate for the
-// whole prompt.
-func (s PriceSnapshot) Calculate(inputTokens, cachedInputTokens, outputTokens int64) (PriceCostBreakdown, error) {
+// Calculate prices one attempt against this frozen snapshot.
+func (s PriceSnapshot) Calculate(tokens BilledTokens) (PriceCostBreakdown, error) {
 	if err := s.Validate(); err != nil {
 		return PriceCostBreakdown{}, err
 	}
@@ -227,17 +229,76 @@ func (s PriceSnapshot) Calculate(inputTokens, cachedInputTokens, outputTokens in
 		return PriceCostBreakdown{}, ErrPriceUnavailable
 	}
 	if s.BillingMode == BillingModeFree {
-		if inputTokens < 0 || cachedInputTokens < 0 || outputTokens < 0 || cachedInputTokens > inputTokens {
-			return PriceCostBreakdown{}, errors.New("token counts are invalid")
+		if err := tokens.Validate(); err != nil {
+			return PriceCostBreakdown{}, err
 		}
 		return PriceCostBreakdown{}, nil
 	}
-	// The snapshot's four terms are already the rung that was pinned at
+	if s.CacheWriteMicrosPerMillion == nil {
+		if err := tokens.Validate(); err != nil {
+			return PriceCostBreakdown{}, err
+		}
+		// Pre-schema-43 snapshots billed writes within ordinary input.
+		tokens.CacheWrite, tokens.CacheWriteLong = 0, 0
+	}
+	// The snapshot's terms are already the rung that was pinned at
 	// reservation, whether or not the version behind it bills by time of day.
 	// Pricing reads them; it never re-reads a clock.
+	return s.Tier().Calculate(tokens)
+}
+
+// ReservationCost applies the conservative cost bound to the frozen tier.
+func (s PriceSnapshot) ReservationCost(input, output int64) (int64, error) {
+	if err := s.Validate(); err != nil {
+		return 0, err
+	}
+	if s.CostValueStatus != CostValueKnown {
+		return 0, ErrPriceUnavailable
+	}
+	if s.CacheWriteMicrosPerMillion == nil {
+		cost, err := s.Tier().Calculate(s.ConservativeTokens(input, output))
+		return cost.TotalCostMicrosUSD, err
+	}
+	return s.Tier().ReservationCost(input, output)
+}
+
+// ConservativeTokens is PriceTier.ConservativeTokens against the frozen rung.
+// A snapshot with unknown cost has no rates, and every prompt token is then
+// ordinary input.
+func (s PriceSnapshot) ConservativeTokens(inputTokens, outputTokens int64) BilledTokens {
+	if s.CacheWriteMicrosPerMillion == nil {
+		// Recover an old reservation using its original all-ordinary estimate.
+		return BilledTokens{Input: inputTokens, Output: outputTokens}
+	}
+	return s.Tier().ConservativeTokens(inputTokens, outputTokens)
+}
+
+// Tier is the frozen rung's rates. A term the snapshot does not carry reads
+// as zero — only the cache-write pair of a snapshot written before it existed
+// can be absent on a snapshot that validates.
+func (s PriceSnapshot) Tier() PriceTier {
 	return PriceTier{
-		InputMicrosPerMillion: *s.InputMicrosPerMillion, CachedInputMicrosPerMillion: *s.CachedInputMicrosPerMillion,
-		OutputMicrosPerMillion: *s.OutputMicrosPerMillion, FixedRequestMicrosUSD: *s.FixedRequestMicrosUSD,
-		Provenance: s.ScheduleTier,
-	}.Calculate(inputTokens, cachedInputTokens, outputTokens)
+		InputMicrosPerMillion:          derefInt64(s.InputMicrosPerMillion),
+		CachedInputMicrosPerMillion:    derefInt64(s.CachedInputMicrosPerMillion),
+		CacheWriteMicrosPerMillion:     derefInt64(s.CacheWriteMicrosPerMillion),
+		CacheWriteLongMicrosPerMillion: derefInt64(s.CacheWriteLongMicrosPerMillion),
+		OutputMicrosPerMillion:         derefInt64(s.OutputMicrosPerMillion),
+		FixedRequestMicrosUSD:          derefInt64(s.FixedRequestMicrosUSD),
+		Provenance:                     s.ScheduleTier,
+	}
+}
+
+func derefInt64(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func cloneInt64(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }
