@@ -675,13 +675,34 @@ describe("UsagePage failure detail", () => {
     expect(await within(await screen.findByRole("table")).findByRole("cell", { name: /^成功/ })).toBeVisible();
     expect(screen.queryByRole("button", { name: "失败详情" })).not.toBeInTheDocument();
   });
+
+  it.each([true, false])("labels cache write evidence as estimated only when tokens_estimated is %s", async (tokensEstimated) => {
+    vi.spyOn(api, "usage").mockResolvedValue({
+      items: [failedAttempt({
+        status: "success", tokens_estimated: tokensEstimated, provider_input_tokens: 40,
+        provider_cache_write_input_tokens: 30, provider_cache_write_long_input_tokens: 10,
+      })] as never,
+      next_cursor: "",
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    const evidence = (await screen.findByText("计价证据")).closest("details");
+    const cacheWrites = "缓存写入 30（其中长时 10）";
+    expect(evidence).toHaveTextContent(cacheWrites);
+    if (tokensEstimated) {
+      expect(evidence).toHaveTextContent(`${cacheWrites} · 保守上限`);
+    } else {
+      expect(evidence).not.toHaveTextContent("保守上限");
+    }
+  });
 });
 
 function emptySummaryMetrics() {
   return {
     attempts: 0, errors: 0, input_tokens: 0, output_tokens: 0,
     estimated_input_tokens: 0, estimated_output_tokens: 0,
-    provider_cached_input_tokens: 0, provider_cache_write_input_tokens: 0, provider_reasoning_tokens: 0,
+    provider_cached_input_tokens: 0, provider_cache_write_input_tokens: 0, provider_cache_write_long_input_tokens: 0, provider_reasoning_tokens: 0,
     cost_micros_usd: 0, estimated_cost_micros_usd: 0, unknown_attempts: 0, latency_millis: 0,
     attempt_latency_samples: 0, attempt_latency_p95_millis: 0, latency_approximate: true,
   };

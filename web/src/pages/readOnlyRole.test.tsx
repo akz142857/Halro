@@ -83,6 +83,8 @@ describe("read-only role", () => {
   it("offers no write action a read-only session cannot complete", async () => {
     vi.spyOn(api, "projectsPage").mockResolvedValue({ items: [testProject()], next_cursor: "" });
     vi.spyOn(api, "keysPage").mockResolvedValue({ items: [], next_cursor: "" } as never);
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
     renderAs("read_only", <ProjectsPage />);
 
     const create = await screen.findByRole("button", { name: "＋ 新建项目" });
@@ -90,9 +92,10 @@ describe("read-only role", () => {
 
     // Disabling a project revokes every gateway key under it, which is exactly the
     // kind of control a read-only session must not be offered.
-    const disable = await screen.findByRole("button", { name: /^禁用/ });
-    expect(disable).toBeDisabled();
-    expect(disable).toHaveAttribute("title", readOnlyReason);
+    await screen.findByRole("region", { name: "调用状态" });
+    expect(screen.queryByLabelText("更多项目操作")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "禁用项目" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "创建第一枚网关密钥" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^编辑/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^编辑/ })).toHaveAttribute("title", readOnlyReason);
   });
@@ -100,10 +103,13 @@ describe("read-only role", () => {
   it("leaves the same action available to an administrator", async () => {
     vi.spyOn(api, "projectsPage").mockResolvedValue({ items: [testProject()], next_cursor: "" });
     vi.spyOn(api, "keysPage").mockResolvedValue({ items: [], next_cursor: "" } as never);
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
     renderAs("administrator", <ProjectsPage />);
 
     expect(await screen.findByRole("button", { name: "＋ 新建项目" })).toBeEnabled();
-    expect(await screen.findByRole("button", { name: /^禁用/ })).toBeEnabled();
+    fireEvent.click(await screen.findByLabelText("更多项目操作"));
+    expect(await screen.findByRole("button", { name: "禁用项目" })).toBeEnabled();
   });
 
   // The three status switches added with the policy console carried a `readOnly ||`
@@ -163,9 +169,10 @@ describe("read-only role", () => {
     expect(row).not.toBeNull();
     expect(within(row!).getByRole("button", { name: "删除" })).toBeDisabled();
     expect(within(row!).getByRole("button", { name: /^编辑/ })).toBeDisabled();
-    // Reading has to stay unimpeded — a read-only console that cannot test a
-    // route is not read-only, it is broken.
-    expect(within(row!).getByRole("button", { name: /^测试/ })).toBeEnabled();
+    const test = within(row!).getByRole("button", { name: "测试" });
+    expect(test).toBeDisabled();
+    expect(test).toHaveAttribute("title", readOnlyReason);
+    expect(within(row!).getByRole("status")).toBeVisible();
   });
 
   // Disabled with a stated reason, not hidden. Every other page tells a
@@ -391,7 +398,8 @@ describe("destructive step-up", () => {
     const activePrice = {
       id: "price_a", deployment_id: deployment.id, version: 1, revision: 1,
       billing_mode: "metered", currency: "USD", formula_version: "v1",
-      input_micros_per_million: 1_000_000, output_micros_per_million: 2_000_000,
+      input_micros_per_million: 1_000_000, cached_input_micros_per_million: 100_000, output_micros_per_million: 2_000_000,
+      cache_write_micros_per_million: 1_250_000, cache_write_long_micros_per_million: 1_500_000,
       fixed_request_micros_usd: 0, effective_from: "2026-08-10T00:00:00Z",
       source: { type: "manual", assurance: "asserted" }, status: "active",
     } as DeploymentPriceVersion;

@@ -457,7 +457,11 @@ describe("RoutesPage", () => {
     vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
     renderPage();
 
-    expect(await screen.findByText("通过 · 37ms")).toBeInTheDocument();
+    const result = await screen.findByText("通过 · 37ms");
+    const row = result.closest("tr")!;
+    const cells = within(row).getAllByRole("cell");
+    expect(cells[2]).toContainElement(result);
+    expect(within(cells[3]).getByRole("button", { name: "测试" })).toHaveAccessibleDescription("通过 · 37ms");
   });
 
   // Whether the alias answers requests is the state the save commits, so it

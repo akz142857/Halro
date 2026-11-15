@@ -695,3 +695,47 @@ func TestScheduledPricePinReDerivesThroughTheBackupValidator(t *testing.T) {
 		t.Fatalf("backup validation rejected the off-peak snapshot: %v", err)
 	}
 }
+
+func TestBackupValidatesHistoricalPriceSnapshotAfterWriteRateBackfill(t *testing.T) {
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	seedPricingDeployment(t, store, "dep_legacy_snapshot", 0, 0, 0)
+	now := time.Now().UTC()
+	price := newStoredPrice("price_legacy_snapshot", "dep_legacy_snapshot", now.Add(-time.Hour))
+	price.CacheWriteMicrosPerMillion = price.InputMicrosPerMillion
+	price.CacheWriteLongMicrosPerMillion = price.InputMicrosPerMillion
+	created, err := store.CreateDeploymentPriceVersion(ctx, price)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := domain.NewVersionedPriceSnapshot(created, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy.CacheWriteMicrosPerMillion, legacy.CacheWriteLongMicrosPerMillion = nil, nil
+	check := func(snapshot domain.PriceSnapshot) error {
+		return store.view(func(tx *Tx) error {
+			return validateSnapshotAgainstPrice(tx.Bucket(bucketDeploymentPriceVersions), snapshot)
+		})
+	}
+	if err := check(legacy); err != nil {
+		t.Fatalf("rejected old snapshot of a backfilled price: %v", err)
+	}
+	tampered := legacy.Clone()
+	*tampered.InputMicrosPerMillion++
+	if err := check(tampered); err == nil {
+		t.Fatal("legacy matching ignored a change to the ordinary input rate")
+	}
+	current, err := domain.NewVersionedPriceSnapshot(created, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	*current.CacheWriteLongMicrosPerMillion++
+	if err := check(current); err == nil {
+		t.Fatal("new snapshot matched after a change to its write rate")
+	}
+}

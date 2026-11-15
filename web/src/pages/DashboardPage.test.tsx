@@ -25,7 +25,10 @@ describe("DashboardPage", () => {
     expect(within(panel).getAllByRole("listitem")).toHaveLength(4);
     expect(within(panel).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "1");
     expect(panel.querySelector('li[aria-current="step"]')).toHaveTextContent("发布可调用模型");
-    expect(within(panel).getByRole("link", { name: "配置模型与路由" })).toHaveAttribute("href", "/admin/deployments?intent=create&onboarding=first-request");
+    expect(within(panel).getByRole("link", { name: "新建模型部署" })).toHaveAttribute("href", "/admin/deployments?intent=create&onboarding=first-request");
+    expect(within(panel).getByText("凭据和服务商已配置。测试模型部署时会验证连接。")).toBeVisible();
+    expect(within(panel).getByText("签发具备推理权限的网关密钥后，即可验证请求。")).toBeVisible();
+    expect(screen.getByText("网关可接收请求")).toBeVisible();
     expect(screen.queryByLabelText("今日关键指标")).not.toBeInTheDocument();
     // Before the first real request every runtime channel reads the same empty
     // instance the checklist is already describing, so the strip only competes
@@ -42,6 +45,17 @@ describe("DashboardPage", () => {
     expect(await screen.findByText("告警投递")).toBeVisible();
     expect(screen.queryByRole("heading", { name: "完成第一条真实请求" })).not.toBeInTheDocument();
     expect(api.onboardingReadiness).not.toHaveBeenCalled();
+  });
+
+  it("switches the header and content together when readiness sees the first success before the dashboard", async () => {
+    const dashboardRequest = vi.spyOn(api, "dashboard").mockResolvedValue(dashboard({ first_value_reached: false }));
+    vi.mocked(api.onboardingReadiness).mockResolvedValue(onboarding({ state: "first_value_reached", completed_goals: 4 }));
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "运行总览" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "开始使用 Halro" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("今日关键指标")).toBeVisible();
+    expect(dashboardRequest).toHaveBeenCalledTimes(2);
   });
 
   it("keeps a failed first request visible with recovery evidence", async () => {
@@ -210,10 +224,10 @@ function onboarding(overrides: Partial<OnboardingReadiness> = {}): OnboardingRea
     total_goals: 4,
     evaluated_at: "2026-08-08T10:00:00Z",
     goals: [
-      { key: "connect_provider", state: "complete", detail_code: "provider_ready", action_href: "/admin/providers" },
+      { key: "connect_provider", state: "complete", detail_code: "provider_configured", action_href: "/admin/providers" },
       { key: "publish_model", state: "current", detail_code: "deployment_missing", action_href: "/admin/deployments?intent=create&onboarding=first-request" },
-      { key: "grant_access", state: "blocked", detail_code: "model_not_verified", action_href: "/admin/projects" },
-      { key: "verify_request", state: "blocked", detail_code: "request_ready", action_href: "/admin/developer?onboarding=first-request" },
+      { key: "grant_access", state: "blocked", detail_code: "access_waiting_for_model", action_href: "/admin/projects" },
+      { key: "verify_request", state: "blocked", detail_code: "request_waiting_for_access", action_href: "/admin/developer?onboarding=first-request" },
     ],
     ...overrides,
   };

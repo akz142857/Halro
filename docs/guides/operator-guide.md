@@ -116,10 +116,13 @@ inference and discovery scopes for the intended project to list `/v1/models`.
 In the source console, open **Settings → Configuration transfer** and download
 the JSON bundle. Sign in to a fresh target instance, create target provider
 credentials and any required egress proxies, then upload the file in the same
-settings pane. Review the endpoints, select target credentials and check the
-import before confirming. Review any listed model capability declarations and
-changes to Bedrock Mantle regions. Download and save the newly issued gateway
-keys from the result, then validate and enable the deployments and their routes.
+settings pane. Import the whole configuration or select projects and model
+aliases. Halro includes the dependencies, including each alias's complete
+route group. Review the endpoints, select matching target credentials and check
+the import before confirming. Review any listed capability declarations and
+changes to Bedrock Mantle regions. If you opt in to issuing new gateway keys,
+download and save them from the result. Then validate and enable deployments
+and their routes.
 If the primary saves the import but replica confirmation is unavailable, use
 the displayed operation ID to check the import. After the cluster recovers,
 revoke and replace the listed keys from Projects.
@@ -1448,6 +1451,15 @@ readiness, and `halro doctor` after every restart or restore.
 Price changes create future-effective immutable versions; never edit old
 prices to correct history. Unknown cost remains null — there is no historical
 correction path.
+
+Metered prices have separate cache-write rates for the short and long tiers.
+Anthropic Messages uses 5-minute and 1-hour writes. OpenAI Responses uses
+30-minute and 12-hour writes. When a provider returns only the write total,
+Halro uses the short rate. Metadata schema 43 backfills both rates from each
+existing base price or time window's input rate. Set the published write prices
+on a new version to charge a provider's write premium. When both write rates
+equal the ordinary input rate, all three spans share one rounding step.
+Existing settlements retain their original costs. See [ADR 0028](../adr/0028-cache-write-input-pricing.md).
 
 Pricing Proposals are a separate review queue. The interactive Admin API accepts
 only asserted official-URL evidence; `verified_api` and `signed_import` are

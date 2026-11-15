@@ -90,7 +90,7 @@ func TestEveryDeclaredMetaKeyIsClassified(t *testing.T) {
 		keyInstanceUISettings, keyInstanceUsageSettings, keyInstanceAccountingSettings,
 		keyInstanceID, keyAdminBootstrapCompletion, keyMinimumLedgerReaderVersion,
 		keyLedgerFeatureEpoch, keyShutdownTruncatedAttempts,
-		keyMetadataHMACEnvelope, keyAppliedJournalSequence, keyMetadataJournalEpoch,
+		keyMetadataHMACEnvelope, keyAppliedJournalSequence, keyMetadataJournalEpoch, keyJournalEpochPending,
 	}
 	for _, key := range declared {
 		class, err := classify([]string{string(bucketMeta)}, key)

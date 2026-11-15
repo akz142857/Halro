@@ -21,6 +21,7 @@ import (
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/semantic"
+	"github.com/akz142857/Halro/internal/tokenguard"
 )
 
 type nativeMessagesFake struct {
@@ -674,6 +675,44 @@ func TestMessagesCountTokensRunsUnderEveryMeteredPriceShape(t *testing.T) {
 	}
 }
 
+func TestMessagesCountTokensQuotesOnlyTheFixedFeeToTokenGuard(t *testing.T) {
+	service, fake, plaintext, closeFixture := newNativeMessagesFixtureWithPrice(t, 1_000_000, 5)
+	defer closeFixture()
+	service.pricing.(*fakePricePinStore).price.CacheWriteLongMicrosPerMillion = 100_000_000
+	now := time.Now().UTC().Truncate(time.Minute).Add(30 * time.Second)
+	service.now = func() time.Time { return now }
+	principal, err := service.auth.Authenticate(plaintext, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := principal.Project
+	project.TokenGuardPolicyID = "guard_cost"
+	err = service.auth.Refresh(context.Background(), source{keys: []domain.GatewayKey{principal.Key}, projects: []domain.Project{project}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.tokenGuard, err = tokenguard.New([]domain.TokenGuardPolicy{{
+		ID: "guard_cost", Name: "cost", Enabled: true, Action: "temporary_block",
+		CostMicrosPerMinute: 50, MinimumSamples: 2, ViolationsBeforeBlock: 2,
+		BlockTTL: time.Minute, Cooldown: 30 * time.Second, Revision: 1,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(`{"model":"claude","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := service.MessagesCountTokens(context.Background(), plaintext, anthropicapi.SupportedVersion, nil, request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if fake.countCalls != 2 {
+		t.Fatalf("provider token count calls=%d, want 2", fake.countCalls)
+	}
+}
+
 // The Mantle profile shares the Messages wire format but its count_tokens
 // surface is not established, and guessing would send a prompt at an endpoint
 // nobody verified.
@@ -766,10 +805,15 @@ func TestNativeMessagesSettlesTheWholePromptAcrossCacheTiers(t *testing.T) {
 			name = "stream"
 		}
 		t.Run(name, func(t *testing.T) {
-			service, fake, key, closeFixture := newNativeMessagesFixture(t)
+			service, fake, key, closeFixture := newNativeMessagesFixtureWithPrice(t, 1_000_000, 2)
+			pricing := service.pricing.(*fakePricePinStore)
+			pricing.price.CachedInputMicrosPerMillion = 100_000
+			pricing.price.CacheWriteMicrosPerMillion = 2_000_000
+			pricing.price.CacheWriteLongMicrosPerMillion = 3_000_000
 			defer closeFixture()
-			fake.response = []byte(`{"id":"msg_provider","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-provider","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":5,"cache_read_input_tokens":90,"cache_creation_input_tokens":5,"output_tokens":1}}`)
-			fake.streamUsage = &anthropicapi.Usage{InputTokens: 5, CacheReadInputTokens: 90, CacheCreationInputTokens: 5, OutputTokens: 1}
+			fake.response = []byte(`{"id":"msg_provider","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-provider","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":5,"cache_read_input_tokens":90,"cache_creation_input_tokens":5,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":3},"output_tokens":1}}`)
+			fake.streamUsage = &anthropicapi.Usage{InputTokens: 5, CacheReadInputTokens: 90, CacheCreationInputTokens: 5, OutputTokens: 1,
+				CacheCreation: &anthropicapi.CacheCreationDetails{Ephemeral5mInputTokens: 2, Ephemeral1hInputTokens: 3}}
 			body := `{"model":"claude","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
 			if streaming {
 				body = `{"model":"claude","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hi"}]}`
@@ -788,8 +832,8 @@ func TestNativeMessagesSettlesTheWholePromptAcrossCacheTiers(t *testing.T) {
 			}
 			period := time.Now().UTC().Format("2006-01-02")
 			balance := fake.ledgerState.Balance("project_native", period, testTimezoneVersion)
-			// 5 + 90 + 5 prompt tokens, not the 5 Anthropic reports net of caching.
-			if balance.InputTokens != 100 || balance.OutputTokens != 1 {
+			// 5 ordinary + 9 read + 4 short writes + 9 long writes + 1 output + 2 fixed.
+			if balance.InputTokens != 100 || balance.OutputTokens != 1 || balance.CommittedMicrosUSD != 30 || balance.ReservedMicrosUSD != 0 {
 				t.Fatalf("balance=%#v", balance)
 			}
 		})
