@@ -573,6 +573,11 @@ The 2026-11-16 Node Anthropic contract-test update (#512) moves
 byte-identical, and the lock changes only this SDK. The Node black-box tests
 pass against the local compatibility server. The SDK remains test-only.
 
+The 2026-11-16 Node OpenAI contract-test update (#513) moves `openai` from
+7.47.0 to 7.54.0. Its installed Apache-2.0 LICENSE is byte-identical. Its
+lock entry changes without adding packages, and the merged lock keeps the
+Anthropic SDK at 1.7.0. Both SDKs pass the local Node black-box tests.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -590,8 +595,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `web/package-lock.json`: `6e08b4e385761c8207c25e286057ef7487caec8f`
 - `tests/compatibility/go/go.mod`: `773676f6449c95c2b9f3ea98d70003de7c4aa014`
 - `tests/compatibility/go/go.sum`: `504b5da47dd9e08145d2f8fcf0afc8f6a445d91c`
-- `tests/compatibility/node/package.json`: `028ab013dc0662e4641e723d16e60ee5a5618a0a`
-- `tests/compatibility/node/package-lock.json`: `9318e9042d151b0cec6a4c1a3053ed03cbdf513d`
+- `tests/compatibility/node/package.json`: `9ea13eaa9cbe048115e33eb6eb672e48025db057`
+- `tests/compatibility/node/package-lock.json`: `4e9519004b74a3696acaa9a9f1829e2dc5c31609`
 - `tests/compatibility/python/requirements.in`: `2f1d85bd1d30eaf3338abc05d1d5607bfec61622`
 - `tests/compatibility/python/requirements.txt`: `0c5e176a738702762b4c2b21c47d0d66e54051a7`
 
