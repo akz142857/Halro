@@ -134,14 +134,14 @@ is linked into the Go runtime.
 
 | Package | Version | License |
 |---|---:|---|
-| `@hookform/resolvers` | 6.0.0 | MIT |
-| `@tanstack/react-query` | 5.105.0 | MIT |
-| `i18next` | 26.5.11 | MIT |
+| `@hookform/resolvers` | 7.0.5 | MIT |
+| `@tanstack/react-query` | 5.107.1 | MIT |
+| `i18next` | 27.1.0 | MIT |
 | `qrcode` | 1.5.4 | MIT |
 | `react` | 19.3.1 | MIT |
 | `react-dom` | 19.3.1 | MIT |
 | `react-hook-form` | 7.91.0 | MIT |
-| `react-i18next` | 17.1.9 | MIT |
+| `react-i18next` | 18.0.1 | MIT |
 | `uplot` | 1.6.32 | MIT |
 | `zod` | 4.6.7 | MIT |
 
@@ -590,6 +590,15 @@ byte-identical. The combined lock keeps Anthropic 2.7.0 and `opentelemetry-api`
 1.45.2 with no transitive version changes. Both SDKs pass the local Python
 black-box tests.
 
+The 2026-11-16 Admin UI refresh (#516) upgrades `@hookform/resolvers` to
+7.0.5, `@tanstack/react-query` to 5.107.1, `i18next` to 27.1.0,
+`react-i18next` to 18.0.1, `@vitejs/plugin-react` to 6.3.0, and `vite` to
+8.3.7. These packages retain MIT licenses. The lock removes the
+`use-sync-external-store` shim and adds no package paths. Rolldown 1.2.18 and
+its optional binaries stay MIT build tooling under the unchanged upstream
+license. The console's translation helpers match the new i18next overloads,
+and the embedded assets are rebuilt from the reviewed Node 22 lock.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -603,8 +612,8 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `f5f9ef6631db7aa3e576388a1cd3306c67d9fae5`
 - `go.sum`: `c838c88b891fc02db2bc14cbe3017cfdf08e46cf`
-- `web/package.json`: `1b751f198e9e5c152cff8b6dc974667bcd3a2e37`
-- `web/package-lock.json`: `6e08b4e385761c8207c25e286057ef7487caec8f`
+- `web/package.json`: `dfe436bfb8cea30f76c399d8d4999575163db24a`
+- `web/package-lock.json`: `30cf3c5dbae878a2dd3b56ffcd639797b2dd4e2e`
 - `tests/compatibility/go/go.mod`: `773676f6449c95c2b9f3ea98d70003de7c4aa014`
 - `tests/compatibility/go/go.sum`: `504b5da47dd9e08145d2f8fcf0afc8f6a445d91c`
 - `tests/compatibility/node/package.json`: `9ea13eaa9cbe048115e33eb6eb672e48025db057`

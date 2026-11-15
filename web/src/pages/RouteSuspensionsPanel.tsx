@@ -14,6 +14,7 @@
 import { useTranslation } from "react-i18next";
 import { ConfirmButton, type ReauthValues } from "../components";
 import { useInstantFormatter } from "../format";
+import type { Translate } from "../i18n";
 import type { Credential, Deployment, Provider, RouteSuspension } from "../types";
 
 // suspensionReasonLabel turns a provider.FailureReason into a sentence.
@@ -31,7 +32,7 @@ const reusedProbeWording: Record<string, string> = {
 };
 
 export function suspensionReasonLabel(
-  t: (key: string, values?: Record<string, unknown>) => string,
+  t: Translate,
   reason: string,
 ): string {
   const reused = reusedProbeWording[reason];

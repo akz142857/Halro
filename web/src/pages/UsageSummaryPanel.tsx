@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { EmptyState, ErrorState, Loading, Metric, SegmentedChoice, SegmentedTabs } from "../components";
 import { compactNumber, money } from "../format";
+import type { Translate } from "../i18n";
 import { Link } from "../navigation";
 import { periodTrendPoints, type TrendMetric } from "../trend";
 import type { SummaryGroup, SummaryMetrics, UsageSummary } from "../types";
@@ -356,7 +357,7 @@ function failedRequestsHref(range: { start: string; end: string } | null) {
   })}`;
 }
 
-function summaryCostDetail(t: (key: string, options?: Record<string, unknown>) => string, totals: SummaryMetrics) {
+function summaryCostDetail(t: Translate, totals: SummaryMetrics) {
   const parts: string[] = [];
   if (totals.estimated_cost_micros_usd > 0) {
     parts.push(t("dashboard.estimatedCost", { cost: money(totals.estimated_cost_micros_usd) }));
