@@ -119,15 +119,22 @@ export type InlineTestState = "idle" | "running" | "success" | "failure" | "stal
 export function InlineTestControl({ state, latency, onTest, disabled = false, title }: { state: InlineTestState; latency?: number; onTest: () => void; disabled?: boolean; title?: string }) {
   const { t } = useTranslation();
   const statusID = useId();
+  return (
+    <div className="inline-test-control" aria-busy={state === "running"} title={title}>
+      <button className="button secondary" disabled={disabled || state === "running"} aria-describedby={statusID} onClick={onTest}>{t("common.test")}</button>
+      <InlineTestResult id={statusID} state={state} latency={latency} />
+    </div>
+  );
+}
+
+export function InlineTestResult({ id, state, latency }: { id: string; state: InlineTestState; latency?: number }) {
+  const { t } = useTranslation();
   // Without a measured latency the interpolated label would render "{{latency}}ms".
   const status = state === "success"
     ? latency === undefined ? t("testControl.successPlain") : t("testControl.success", { latency })
     : t(`testControl.${state}`);
   return (
-    <div className="inline-test-control" aria-busy={state === "running"} title={title}>
-      <button className="button secondary" disabled={disabled || state === "running"} aria-describedby={statusID} onClick={onTest}>{t("common.test")}</button>
-      <span id={statusID} className={`inline-test-result ${state}`} role="status" aria-live="polite" aria-atomic="true"><span aria-hidden="true" />{status}</span>
-    </div>
+    <span id={id} className={`inline-test-result ${state}`} role="status" aria-live="polite" aria-atomic="true"><span aria-hidden="true" />{status}</span>
   );
 }
 

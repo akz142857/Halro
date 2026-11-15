@@ -122,22 +122,30 @@ export function PoliciesPage() {
         {policies.isError && <ErrorState error={policies.error} />}
         {!policies.isPending && tokenItems.length === 0 && <EmptyState title={t("policies.emptyTitle")} action={<button className="button primary" disabled={readOnly} onClick={() => setEditing("new")}>{t("policies.baseline")}</button>}>{t("policies.emptyDescription")}</EmptyState>}
         {!!tokenItems.length && visible.length === 0 && <EmptyState title={t("common.noMatches")} action={<button className="button ghost" onClick={() => { setSearch(""); setStatus(""); setAction(""); }}>{t("policyManagement.clearFilters")}</button>} />}
-        {!!visible.length && <div className="table-shell policy-table-shell"><table className="policy-table"><thead><tr><th>{t("policyManagement.policy")}</th><th>{t("policyManagement.status")}</th><th>{t("policies.action")}</th><th>{t("policyManagement.summary")}</th><th>{t("policyManagement.bindings")}</th><th>{t("policyManagement.actions")}</th></tr></thead><tbody>{visible.map((policy) => {
+        {!!visible.length && <div className="table-shell policy-table-shell"><table className="policy-table" role="table">
+          <thead role="rowgroup"><tr role="row">
+            <th scope="col" role="columnheader">{t("policyManagement.policy")}</th>
+            <th scope="col" role="columnheader">{t("policyManagement.status")}</th>
+            <th scope="col" role="columnheader">{t("policies.action")}</th>
+            <th scope="col" role="columnheader">{t("policyManagement.summary")}</th>
+            <th scope="col" role="columnheader">{t("policyManagement.bindings")}</th>
+            <th scope="col" role="columnheader">{t("policyManagement.actions")}</th>
+          </tr></thead><tbody role="rowgroup">{visible.map((policy) => {
           // One row's mutation must not disable every other row's controls, and a
           // failure has to name the row it came from — a notice under the table
           // says only that "something" failed.
           const rowBusy = toggleStatus.isPending && toggleStatus.variables?.policy.id === policy.id;
           const rowFailed = toggleStatus.isError && !isStepUpPrompt(toggleStatus.error) && toggleStatus.variables?.policy.id === policy.id;
-          return <tr key={policy.id}>
-          <td><strong>{policy.name}</strong><code>{policy.id}</code></td>
-          <td><span className="inline-status"><StatusDot ok={policy.enabled} />{policy.enabled ? t("common.enabled") : t("common.disabled")}</span></td>
-          <td><span className={`badge ${policy.action === "temporary_block" ? "warning" : ""}`}>{policyActionLabel(t, policy.action)}</span></td>
-          <td><strong>{compactNumber(policy.request_tokens)} / {compactNumber(policy.tokens_per_minute)} TPM</strong><small>{money(policy.cost_micros_per_minute)} · {policy.concurrency} {t("policies.concurrency")} · {policy.ewma_enabled ? `${policy.ewma_multiplier}× EWMA` : t("policies.ewmaOff")}</small></td>
-          <td>{t("policyManagement.projectCount", { count: policy.bound_projects ?? 0 })}</td>
+          return <tr key={policy.id} role="row">
+          <td role="cell"><strong>{policy.name}</strong><code>{policy.id}</code></td>
+          <td role="cell"><span className="compact-table-label" aria-hidden="true">{t("policyManagement.status")}</span><span className="inline-status"><StatusDot ok={policy.enabled} />{policy.enabled ? t("common.enabled") : t("common.disabled")}</span></td>
+          <td role="cell"><span className="compact-table-label" aria-hidden="true">{t("policies.action")}</span><span className={`badge ${policy.action === "temporary_block" ? "warning" : ""}`}>{policyActionLabel(t, policy.action)}</span></td>
+          <td role="cell"><span className="compact-table-label" aria-hidden="true">{t("policyManagement.summary")}</span><strong>{compactNumber(policy.request_tokens)} / {compactNumber(policy.tokens_per_minute)} TPM</strong><small>{money(policy.cost_micros_per_minute)} · {policy.concurrency} {t("policies.concurrency")} · {policy.ewma_enabled ? `${policy.ewma_multiplier}× EWMA` : t("policies.ewmaOff")}</small></td>
+          <td role="cell"><span className="compact-table-label" aria-hidden="true">{t("policyManagement.bindings")}</span>{t("policyManagement.projectCount", { count: policy.bound_projects ?? 0 })}</td>
           {/* Switching a policy off stops enforcement for every Project bound to
               it, which is the same class of consequence as deleting it — so it
               asks first and states the blast radius. */}
-          <td><div className="row-actions policy-row-actions">{policy.enabled
+          <td role="cell"><div className="row-actions policy-row-actions">{policy.enabled
             ? <ConfirmButton className="button secondary policy-status-toggle" label={t("policies.disableAction")} title={t("policies.disableTitle")} confirmLabel={t("policies.disableConfirm", { name: policy.name, count: policy.bound_projects ?? 0 })} disabled={rowBusy} requireStepUp onConfirm={(reauth) => toggleStatus.mutateAsync({ policy, reauth })} />
             : <ConfirmButton className="button secondary policy-status-toggle" label={t("policies.enableAction")} confirmLabel={t("policies.enableConfirm", { name: policy.name })} disabled={rowBusy} requireStepUp onConfirm={(reauth) => toggleStatus.mutateAsync({ policy, reauth })} />}<button className="button ghost" onClick={() => setPreviewing(policy)}>{t("policies.simulate")}</button><button className="button ghost" disabled={readOnly || rowBusy} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setEditing(policy)}>{t("common.edit")}</button><ConfirmButton label={t("common.delete")} confirmLabel={t("policies.deleteConfirm", { name: policy.name })} disabled={remove.isPending || rowBusy} requireStepUp onConfirm={(reauth) => remove.mutateAsync({ policy, reauth })} /></div>{rowFailed && <ErrorState error={toggleStatus.error} />}</td>
         </tr>;

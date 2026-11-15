@@ -126,7 +126,11 @@ h3 { margin-bottom: 0; font-size: var(--type-card-title-size); }
 .account-action:disabled { color: var(--color-action-disabled); cursor: wait; }
 .account-action svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 
-.main { min-width: 0; padding: 0 var(--layout-page-inline) var(--layout-page-block-end); }
+.main {
+  min-width: 0;
+  padding: 0 var(--layout-page-inline) var(--layout-page-block-end);
+  container: console-content / inline-size;
+}
 .topline {
   display: flex; justify-content: space-between; padding: 15px 0;
   color: var(--muted-2); border-bottom: 1px solid var(--line);
@@ -159,12 +163,7 @@ h3 { margin-bottom: 0; font-size: var(--type-card-title-size); }
 .badge.muted { color: var(--color-status-neutral-text); border-color: var(--color-status-neutral-border); background: var(--color-status-neutral-surface); }
 .status-dot { display: inline-block; width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--danger); }
 .status-dot.ok { background: var(--color-status-success-icon); box-shadow: 0 0 7px var(--accent-glow); }
-/* flex-basis is auto, not 196px, because the basis lands on whichever axis the
-   parent runs. This control sits in a row of buttons on the provider and
-   deployment lists, where a 196px basis was the width -- and in the route
-   table it sits in .inline-test-cell, a column, where the same 196px became
-   the height and stretched every route row to 229px. The width below already
-   fixes the width, so the basis had nothing left to say. */
+/* Keep the test control at a stable width as its result changes. */
 .inline-test-control { display: grid; grid-template-columns: 56px 132px; align-items: center; width: 196px; flex: 0 0 auto; gap: 8px; contain: layout; }
 .inline-test-control > .button { width: 56px; min-height: 36px; padding: 0 6px; }
 .inline-test-result { display: flex; align-items: center; min-width: 0; gap: 7px; overflow: hidden; color: var(--muted); font: var(--font-size-xs)/1.25 var(--font-sans); text-overflow: ellipsis; white-space: nowrap; transition: color .15s, opacity .15s; }
@@ -468,6 +467,7 @@ h3 { margin-bottom: 0; font-size: var(--type-card-title-size); }
 .button.danger-text:hover:not(:disabled) { border-color: var(--color-status-danger-border); background: var(--color-status-danger-surface); }
 .button.wide { width: 100%; }
 .button-group { display: flex; gap: 8px; }
+:is(.button-group, .project-call-status) > a.button { display: inline-flex; align-items: center; justify-content: center; text-align: center; text-decoration: none; }
 .icon-button { width: 44px; height: 44px; color: var(--muted); background: transparent; border: 0; font-size: var(--font-size-xl); }
 
 .split-view { display: grid; align-items: start; grid-template-columns: minmax(250px, .72fr) minmax(0, 1.6fr); gap: 18px; }
@@ -517,6 +517,40 @@ h3 { margin-bottom: 0; font-size: var(--type-card-title-size); }
 .load-more { display: block; width: 100%; min-height: 44px; flex: 0 0 auto; color: var(--muted); background: var(--overlay-subtle); border: 1px solid var(--line); border-radius: 4px; font: var(--font-size-xs) var(--font-sans); letter-spacing: .04em; }
 .load-more:hover:not(:disabled) { color: var(--text); }
 .key-expiry.expired { color: var(--color-status-danger-text); }
+.project-detail .detail-title > div:first-child { min-width: 0; overflow-wrap: anywhere; }
+.project-detail .detail-title .row-actions { flex: 0 0 auto; align-items: center; }
+.project-call-status, .project-key-empty {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: var(--space-4); padding: var(--space-5) var(--card-inset);
+  background: var(--surface-inset); border-bottom: 1px solid var(--line);
+}
+.project-call-copy { flex: 1 1 18rem; min-width: 0; }
+.project-call-copy h3, .project-security h3 {
+  margin: 0 0 var(--space-2); color: var(--color-text-secondary); font-size: var(--font-size-sm);
+}
+.project-call-verdict { font-size: var(--font-size-md); }
+.project-call-verdict.ready { color: var(--color-status-success-text); }
+.project-call-copy p, .project-keys .section-header p, .project-guard-action p {
+  margin: var(--space-1) 0 0; color: var(--color-text-secondary);
+  font-size: var(--font-size-sm); line-height: var(--line-height-normal);
+}
+.project-call-counts {
+  display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4);
+  margin-top: var(--space-3); color: var(--color-text-tertiary); font-size: var(--font-size-xs);
+}
+.project-keys .section-header { flex-wrap: wrap; gap: var(--space-3); }
+.project-keys .section-header > div:first-child { flex: 1 1 14rem; min-width: 0; }
+.project-keys .section-header h3 { margin: 0; }
+.project-keys .row-actions { flex-wrap: wrap; }
+.project-key-empty { background: var(--surface); }
+.project-detail .policy-details > summary small { white-space: normal; overflow-wrap: anywhere; }
+.project-security { padding: var(--space-5) var(--card-inset); }
+.project-security .policy-grid { border: 1px solid var(--line); }
+.project-detail .policy-grid strong { overflow-wrap: anywhere; }
+.project-guard-action { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin-top: var(--space-4); }
+.project-guard-action p { flex: 1 1 16rem; margin-top: 0; }
+.project-keys .key-row > div:first-child { min-width: 0; overflow-wrap: anywhere; }
+.project-keys .key-row > div:first-child > span { flex-wrap: wrap; }
 /* A row that reads as static chrome will not be clicked. This one gets its own inset
    surface, a rotating chevron, and the same expand control the other resource rows use. */
 .policy-details > summary {
@@ -834,7 +868,7 @@ button.deployment-condition-text:hover { text-decoration-style: solid; }
 .price-schedule-window-head { display: flex; gap: var(--space-3); align-items: flex-end; justify-content: space-between; flex-wrap: wrap; }
 .price-schedule-window-head > .button { flex: 0 0 auto; }
 .price-schedule-range { display: grid; grid-template-columns: repeat(2, minmax(0, 7rem)); gap: var(--space-3); }
-.price-schedule-rates { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); }
+.price-schedule-rates { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
 .price-schedule-window label { display: grid; gap: var(--space-1); min-width: 0; }
 .price-schedule-window label > span { color: var(--color-text-secondary); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); }
 .price-schedule-window input { min-width: 0; font-variant-numeric: tabular-nums; }
@@ -1160,12 +1194,6 @@ button.deployment-condition-text:hover { text-decoration-style: solid; }
 /* Only the provider row places it on a grid; everywhere else it is a block that
    follows the control and reads from the left edge like the rest of the row. */
 .provider-row > .row-test-failure { grid-area: failure; justify-self: end; }
-/* The route table puts the control in a cell, so the sentence stacks under it
-   instead of joining the flex line of buttons beside it. The cell it sits in is
-   the actions cell, which is right-aligned for its row of buttons — inherited
-   by a sentence that wraps, that ragged the second line against the right
-   edge while the first started at the left. */
-.inline-test-cell { display: flex; flex-direction: column; align-items: flex-start; text-align: left; }
 .provider-expanded-content { grid-area: details; padding: 18px 0 6px; border-top: 1px solid var(--line); }
 .provider-row, .credential-row { overflow-anchor: none; }
 .provider-expanded-content .provider-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 0; }
@@ -1299,9 +1327,12 @@ th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sor
 .cost-evidence small { display: block; margin-top: 6px; color: inherit; font-size: inherit; white-space: normal; }
 .model-cell { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center; }
 .model-cell code { grid-column: 2; }
-.route-row-actions { width: 100%; min-width: 400px; align-items: center; }
-.route-row-actions > .inline-test-control, .route-row-actions > .inline-test-cell { margin-right: 18px; }
-.route-management-actions { margin-left: auto; justify-content: flex-end; }
+.route-row-actions, .policy-row-actions { align-items: center; justify-content: flex-end; }
+:is(.route-row-actions, .policy-row-actions) > .button {
+  flex: 0 0 auto; padding-inline: var(--space-3); white-space: nowrap;
+}
+.route-test-status { margin-block-start: var(--space-1); }
+.route-test-status .inline-test-result { overflow: visible; overflow-wrap: anywhere; white-space: normal; }
 .route-target { display: grid; gap: var(--space-1); min-width: 0; }
 .route-target-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
 .route-target-name { overflow: hidden; font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); text-overflow: ellipsis; white-space: nowrap; }
@@ -1365,21 +1396,17 @@ th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sor
 .route-join-target { overflow: hidden; color: var(--text); font-size: var(--font-size-sm); text-overflow: ellipsis; white-space: nowrap; }
 .route-join-meta { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
 .route-join-refusal { margin: var(--space-3) 0 0; padding-left: var(--space-3); color: var(--color-status-warning-text); border-left: 2px solid var(--color-status-warning-border); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
-.route-withheld-cell { display: flex; flex-direction: column; align-items: flex-start; }
+.route-withheld-cell { display: flex; flex-direction: column; align-items: flex-start; overflow-wrap: anywhere; white-space: normal; }
 /* The actions column, not the group band: a group heading is a single th that
    spans the table and is therefore also a last child. */
 /* Fixed, with the three right-hand columns sized in rem and the target column
    taking what is left: a row that gains a failure sentence then grows taller,
    never wider, and nothing beside it moves. */
-/* The three sized columns must leave the unsized one something to live on: in
-   fixed layout the target column gets only the leftover, so 6+22+38 against a
-   66rem floor left it exactly 0 and ellipsised the provider · model line to
-   nothing on any viewport under ~1700px. 5+15+29 = 49rem against a 62rem floor
-   keeps at least 13rem for the column the row is about. */
+/* The unsized target column receives the remaining width. */
 .route-table { table-layout: fixed; min-width: 62rem; }
 .route-col-priority { width: 5rem; }
-.route-col-status { width: 15rem; }
-.route-col-actions { width: 29rem; }
+.route-col-status { width: 13rem; }
+.route-col-actions { width: 19rem; }
 .route-table thead th:last-child, .route-table td:last-child { text-align: right; }
 .inline-status { display: inline-flex; align-items: center; gap: 7px; text-transform: uppercase; font: var(--font-size-xs) var(--mono); }
 
@@ -1635,7 +1662,6 @@ code.usage-request-id { color: var(--color-text-primary); }
 .policy-table td:first-child code { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .policy-table td:nth-child(4) small { max-width: 440px; overflow: hidden; text-overflow: ellipsis; }
 .policy-table th:last-child, .policy-table td:last-child { text-align: right; }
-.policy-row-actions { min-width: 290px; justify-content: flex-end; }
 .policy-status-toggle { min-width: 48px; }
 .policy-load-more { display: block; margin: 16px auto 0; }
 .policy-card { background: var(--surface-panel); border: 1px solid var(--line); }
@@ -2317,30 +2343,33 @@ textarea { resize: vertical; }
 .project-form > .notice { margin: 18px 24px 0; }
 .modal > .provider-credential-form { display: grid; gap: 0; margin: 0; padding: 0; }
 .provider-credential-form-body { padding: var(--space-5) var(--space-6); }
-.modal:has(> .provider-egress-proxy-form) { width: min(720px, 100%); }
-.provider-egress-proxy-form-body { padding: 0; }
-.proxy-form-section { min-width: 0; padding: var(--space-5) var(--space-6); border-bottom: 1px solid var(--line); }
-.proxy-form-section > header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-4); }
-.proxy-form-section > header h3 { margin: 0 0 var(--space-1); color: var(--text); font-size: var(--font-size-md); }
-.proxy-form-section > header p { max-width: 34rem; margin: 0; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.55; }
-.proxy-form-section > .field:last-child { margin-bottom: 0; }
-.proxy-boundary-section { background: color-mix(in srgb, var(--surface-deep) 68%, transparent); }
-.proxy-boundary-state { flex: 0 0 auto; padding: var(--space-1) var(--space-2); color: var(--color-status-success-text); background: var(--color-status-success-surface); border: 1px solid var(--color-status-success-border); border-radius: var(--radius-pill); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); white-space: nowrap; }
-.proxy-boundary-section.expanded .proxy-boundary-state { color: var(--color-status-warning-text); background: var(--color-status-warning-surface); border-color: var(--color-status-warning-border); }
-.proxy-boundary-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin: 0; padding: 0; border: 0; }
-.proxy-boundary-option { display: grid; grid-template-columns: 1.125rem minmax(0, 1fr) auto; align-items: start; gap: var(--space-3); min-width: 0; padding: var(--space-4); background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); cursor: pointer; transition: background-color var(--motion-duration-normal) var(--motion-easing-standard), border-color var(--motion-duration-normal) var(--motion-easing-standard); }
-.proxy-boundary-option:hover { background: var(--surface-2); border-color: var(--accent-border); }
-.proxy-boundary-option:has(input:focus-visible) { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
-.proxy-boundary-option.selected { background: var(--color-status-warning-surface); border-color: var(--color-status-warning-border); }
-.proxy-boundary-option input { width: 1.125rem; height: 1.125rem; min-height: 1.125rem; margin: .125rem 0 0; padding: 0; accent-color: var(--color-action-primary); }
+.modal:has(> .provider-egress-proxy-form) { width: min(37rem, 100%); border-color: var(--line); border-radius: calc(var(--radius-lg) * 1.6); }
+.modal:has(> .provider-egress-proxy-form) > header { position: sticky; top: 0; z-index: 4; gap: var(--space-4); padding: var(--space-5) var(--space-6) var(--space-2); background: var(--surface-overlay-solid); border: 0; }
+.modal:has(> .provider-egress-proxy-form) > header .icon-button { flex: none; border-radius: var(--radius-pill); background: var(--overlay-subtle); }
+.provider-egress-proxy-form-body { display: grid; gap: var(--space-4); padding-block: var(--space-3) var(--space-5); }
+.proxy-settings-group { min-width: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-panel); }
+.proxy-connection-fields > .field { display: grid; grid-template-columns: minmax(7.5rem, .52fr) minmax(0, 1fr); align-items: center; gap: var(--space-1) var(--space-4); margin: 0; padding: var(--space-3) var(--space-4); }
+.proxy-connection-fields > .field > span { margin: 0; }
+.proxy-connection-fields > .field + .field { border-top: 1px solid var(--line); }
+.proxy-connection-fields > .field > small { grid-column: 2; margin: 0; }
+.proxy-settings-group > .disclosure-section:first-child { border-block-start: 0; }
+.proxy-settings-group > .disclosure-section > summary,
+.proxy-settings-group > .disclosure-section > .disclosure-body { padding-inline: var(--space-4); }
+.proxy-settings-group > .disclosure-section > summary:hover { background: var(--overlay-subtle); border-radius: var(--radius-lg); }
+.proxy-settings-group > .disclosure-section > summary:focus-visible { outline-offset: -3px; border-radius: var(--radius-lg); }
+.proxy-settings-group .disclosure-body > .field-hint { margin: 0 0 var(--space-3); }
+.proxy-boundary-options { display: grid; min-width: 0; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.proxy-boundary-option { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); min-width: 0; padding: var(--space-3); cursor: pointer; }
+.proxy-boundary-option + .proxy-boundary-option { border-top: 1px solid var(--line); }
+.proxy-boundary-option:hover { background: var(--overlay-subtle); }
+.proxy-boundary-option.selected { background: var(--color-status-warning-surface); }
+.proxy-boundary-option:first-of-type { border-start-start-radius: var(--radius-lg); border-start-end-radius: var(--radius-lg); }
+.proxy-boundary-option:last-of-type { border-end-start-radius: var(--radius-lg); border-end-end-radius: var(--radius-lg); }
+.proxy-boundary-option input { width: 1.125rem; height: 1.125rem; min-height: 1.125rem; margin: 0; padding: 0; accent-color: var(--color-action-primary); }
 .proxy-boundary-option-copy { display: block; min-width: 0; }
 .proxy-boundary-option-copy strong, .proxy-boundary-option-copy small { display: block; }
 .proxy-boundary-option-copy strong { color: var(--text); font-size: var(--font-size-sm); }
 .proxy-boundary-option-copy small { margin-top: var(--space-1); color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; }
-.proxy-boundary-option-state { align-self: start; color: var(--muted-2); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); white-space: nowrap; }
-.proxy-boundary-option.selected .proxy-boundary-option-state { color: var(--color-status-warning-text); }
-.proxy-boundary-default { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-3) 0 0; color: var(--color-status-success-text); font-size: var(--font-size-xs); }
-.proxy-boundary-default > span { display: grid; width: 1.125rem; height: 1.125rem; flex: 0 0 auto; place-items: center; color: var(--color-status-success-surface); background: var(--color-status-success-text); border-radius: 50%; font-size: var(--font-size-xs); font-weight: var(--font-weight-bold); }
 .proxy-boundary-warning { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr); align-items: start; gap: var(--space-3); margin-top: var(--space-3); padding: var(--space-3) var(--space-4); color: var(--color-status-warning-text); background: var(--color-status-warning-surface); border: 1px solid var(--color-status-warning-border); border-radius: var(--radius-lg); }
 .proxy-boundary-warning-icon { display: grid; width: 1.75rem; height: 1.75rem; place-items: center; color: var(--color-status-warning-surface); background: var(--color-status-warning-text); border-radius: 50%; font-size: var(--font-size-sm); font-weight: var(--font-weight-bold); }
 .proxy-boundary-warning strong, .proxy-boundary-warning small { display: block; }
@@ -2348,9 +2377,13 @@ textarea { resize: vertical; }
 .proxy-boundary-warning small { margin-top: var(--space-1); color: var(--color-status-warning-text); font-size: var(--font-size-xs); line-height: 1.55; }
 .proxy-auth-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
 .proxy-auth-grid > .field { min-width: 0; margin-bottom: 0; }
-.proxy-auth-section > .form-inline-check { margin-top: var(--space-3); }
-.proxy-form-feedback { padding: var(--space-4) var(--space-6) 0; }
+.proxy-settings-group .form-inline-check { margin-top: var(--space-3); }
+.proxy-settings-group .form-inline-check > input { flex: none; }
+.proxy-form-feedback { min-width: 0; }
 .proxy-form-feedback > .notice { margin-bottom: 0; }
+.provider-egress-proxy-form > .sticky-form-actions { padding-block: var(--space-3) var(--space-4); }
+.provider-egress-proxy-form > .sticky-form-actions .button { min-height: var(--control-touch-block-size); border-radius: var(--radius-lg); }
+.provider-egress-proxy-form > .sticky-form-actions .button.ghost { background: var(--overlay-subtle); }
 .modal > .provider-form { display: grid; gap: 0; margin: 0; padding: 0; }
 .modal > .deployment-form { display: grid; gap: 0; margin: 0; padding: 0; }
 .modal:has(> .deployment-form) { width: min(900px, 100%); scrollbar-width: none; }
@@ -2904,9 +2937,10 @@ textarea { resize: vertical; }
   .sticky-form-actions { flex-wrap: wrap; padding: var(--space-3) var(--space-4); }
   .provider-form-section { padding: 20px; }
   .provider-form-section .form-grid > .field { grid-column: 1; }
-  .proxy-form-section { padding: var(--space-5); }
-  .proxy-form-section > header { flex-direction: column; }
-  .proxy-boundary-options, .proxy-auth-grid { grid-template-columns: minmax(0, 1fr); }
+  .provider-egress-proxy-form-body { padding-inline: var(--space-4); }
+  .modal:has(> .provider-egress-proxy-form) > header { padding-inline: var(--space-4); }
+  .proxy-connection-fields > .field, .proxy-auth-grid { grid-template-columns: minmax(0, 1fr); }
+  .proxy-connection-fields > .field > small { grid-column: 1; }
   .capability-grid { grid-template-columns: 1fr 1fr; }
   .settings-nav { margin-right: -20px; margin-left: -20px; padding-right: 20px; padding-left: 20px; border-right: 0; border-left: 0; border-radius: 0; }
   .settings-overview-facts { grid-template-columns: 1fr; }
@@ -3590,6 +3624,119 @@ textarea { resize: vertical; }
 .usage-tabs-shell { margin-bottom: var(--space-3); }
 .usage-tabs-shell > .provider-tabs { border-bottom: 1px solid var(--line); }
 
+@media (820px < width <= 1400px) {
+  .main { --layout-page-inline: clamp(20px, 2.5vw, 36px); }
+}
+
+/* The navigation and page gutters are outside this width. Reflow against the
+   actual workspace so the same layout works in a window or an embedded pane. */
+@container console-content (max-width: 64rem) {
+  .route-table { min-width: 0; white-space: normal; }
+  .route-table :is(th, td), .policy-table :is(th, td) { padding-inline: var(--space-3); }
+  .route-col-priority { width: 4.75rem; }
+  .route-col-status { width: 8.5rem; }
+  .route-target-head { flex-wrap: wrap; }
+  .route-target-name { flex: 1 1 8rem; }
+  .route-target-name, .route-target-meta, .route-group-alias {
+    overflow: visible; overflow-wrap: anywhere; white-space: normal;
+  }
+  .route-target-head > .status-dot { align-self: start; margin-top: .4em; }
+
+  .policy-table { table-layout: fixed; white-space: normal; }
+  .policy-table :is(th, td) { overflow-wrap: anywhere; }
+  .policy-table th:nth-child(2), .policy-table th:nth-child(5) { width: 9%; }
+  .policy-table th:nth-child(3) { width: 11%; }
+  .policy-table th:nth-child(4) { width: 19%; }
+  .policy-table th:last-child { width: 19rem; }
+  .policy-table .badge { white-space: normal; }
+
+  .usage-filter-primary, .usage-filter-failures, .usage-filter-summary {
+    grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
+  }
+  .usage-filter-row { flex-wrap: wrap; }
+  .usage-filter-row > .usage-filter-fields { flex-basis: 100%; }
+  .usage-filter-row > .usage-result-count { padding-bottom: 0; margin-left: auto; }
+}
+
+@container console-content (max-width: 58rem) {
+  .provider-tabs { display: flex; flex-wrap: wrap; }
+  .provider-tabs > button {
+    flex: 1 1 9rem; min-width: 0; min-height: var(--control-touch-block-size); white-space: normal;
+  }
+  .provider-tabs > button:last-child { border-inline-end: 0; }
+  .provider-row {
+    grid-template-areas:
+      "icon identity health"
+      ". trust actions"
+      ". failure failure"
+      ". details details";
+    grid-template-columns: 42px minmax(0, 1fr) minmax(0, auto);
+    grid-template-rows: auto;
+    row-gap: var(--space-2);
+  }
+  .provider-compact-icon, .provider-compact-identity { align-self: center; }
+  .provider-compact-status { justify-self: end; }
+  .provider-compact-actions { flex-wrap: wrap; }
+  .provider-compact-identity > strong, .provider-trust-value, .provider-trust-value > :is(.resource-link, .provider-egress-summary),
+  .provider-condition, .deployment-grid .resource-identity > :is(h3, small), .detail-title h2 {
+    overflow: visible; overflow-wrap: anywhere; white-space: normal;
+  }
+  .provider-trust-value { flex-wrap: wrap; }
+  .provider-egress-summary { flex: 0 1 auto; }
+  .deployment-grid .resource-card-head { align-items: start; }
+  .detail-title { flex-wrap: wrap; }
+  .detail-title > div:first-child { min-width: 0; }
+  .detail-title .row-actions { flex-wrap: wrap; }
+  .developer-workbench { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-grid, .governance-lower-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@container console-content (max-width: 47rem) {
+  .split-view, .settings-shell { grid-template-columns: minmax(0, 1fr); }
+  .resource-column { position: static; max-height: none; }
+  .resource-column > .resource-list { max-height: 52vh; }
+  .settings-nav { display: none; }
+  .settings-section-select { display: grid; gap: var(--space-2); color: var(--muted); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); }
+  .settings-section-select select { min-height: var(--control-touch-block-size); }
+  .provider-row {
+    grid-template-areas: "icon identity" "health trust" "actions actions" "failure failure" "details details";
+    grid-template-columns: minmax(5rem, auto) minmax(0, 1fr);
+  }
+  .provider-compact-status { justify-self: start; }
+  .provider-compact-actions { justify-content: flex-start; }
+}
+
+.compact-table-label { display: none; }
+
+@container console-content (max-width: 46rem) {
+  :is(.route-table, .policy-table) { display: block; }
+  :is(.route-table, .policy-table) :is(colgroup, thead) {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+  }
+  :is(.route-table, .policy-table) tbody { display: block; }
+  :is(.route-table, .policy-table) tbody tr {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3) var(--space-4); padding: var(--space-4); border-bottom: 1px solid var(--line);
+  }
+  :is(.route-table, .policy-table) tbody :is(th, td) { min-width: 0; padding: 0; border: 0; text-align: start; }
+  :is(.route-table, .policy-table) tbody :is(th, td:first-child, td:last-child) { grid-column: 1 / -1; }
+  :is(.route-table, .policy-table) .compact-table-label {
+    display: block; margin-block-end: var(--space-1); color: var(--color-text-tertiary); font-size: var(--font-size-xs);
+  }
+  .route-table tbody .route-group-heading { background: var(--surface-deep); }
+  .route-group-meta { min-width: 0; overflow-wrap: anywhere; }
+  .route-row-actions, .policy-row-actions { flex-wrap: wrap; justify-content: flex-start; }
+  .policy-filter-bar { flex-wrap: wrap; }
+  .policy-filter-bar > label { min-width: 0; flex: 1 1 9rem; }
+  .policy-filter-bar > label :is(input, select) { min-width: 0; width: 100%; }
+}
+
+@container console-content (max-width: 30rem) {
+  .provider-row { grid-template-areas: "identity" "health" "trust" "actions" "failure" "details"; grid-template-columns: minmax(0, 1fr); }
+  .provider-compact-icon { display: none; }
+  .usage-filter-row { align-items: start; }
+}
+
 .configuration-transfer {
   display: grid;
   gap: var(--space-4);
@@ -3701,6 +3848,12 @@ textarea { resize: vertical; }
 .configuration-binding-fields .field { min-inline-size: 0; margin: 0; }
 .configuration-binding-fields .field > span { margin-block-end: var(--space-1); font-size: var(--type-label-size); }
 .configuration-binding-fields :is(input, select) { min-inline-size: 0; border-radius: var(--radius-md); }
+.configuration-scope-modes { display: flex; flex-wrap: wrap; gap: 0 var(--space-5); }
+.configuration-scope-choices { margin-block: var(--space-3); }
+.configuration-scope-options { min-inline-size: 0; max-block-size: 15rem; overflow: auto; padding: var(--space-2) var(--space-3); border: 1px solid var(--color-border-default); border-radius: var(--radius-md); }
+.configuration-scope-options legend { padding-inline: var(--space-1); font-weight: var(--font-weight-semibold); }
+.configuration-scope-options .configuration-acknowledgement span { overflow-wrap: anywhere; }
+.configuration-scope-options .configuration-acknowledgement small { display: block; }
 .configuration-endpoint { grid-column: 1 / -1; }
 .configuration-transfer-card .check-row,
 .configuration-acknowledgement {
@@ -3710,7 +3863,7 @@ textarea { resize: vertical; }
   gap: var(--space-2);
   font-size: var(--type-body-size);
 }
-.configuration-acknowledgement input { inline-size: 1rem; min-block-size: 1rem; margin: 0; }
+.configuration-acknowledgement input { flex: none; inline-size: 1rem; min-block-size: 1rem; margin: 0; }
 .configuration-transfer-card .configuration-list { display: block; margin: 0; font-size: var(--type-label-size); overflow-wrap: anywhere; }
 .configuration-list :is(ol, ul) { margin: var(--space-1) 0 0; padding-inline-start: var(--space-5); }
 .configuration-list p + p { margin-block-start: var(--space-2); }

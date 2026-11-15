@@ -1,6 +1,6 @@
 # Halro 配置迁移方案
 
-配置迁移用于在一个新实例上重建源实例的模型拓扑和项目规则。管理员从源实例的「设置 → 配置迁移」下载带版本号的 JSON，在目标实例选择同一文件、绑定目标凭据、预览并确认。配置包 v1 支持最多 1,000 条配置和 2 MiB 文件。
+配置迁移用于在新实例上重建源实例的模型拓扑和项目规则。管理员从源实例的「设置 → 配置迁移」下载带版本号的 JSON，在目标实例选择同一文件、核对范围、绑定目标凭据并预览。配置包 v2 支持最多 1,000 条配置和 2 MiB 文件，并包含缓存写入费率。持有 v1 文件时先升级源实例并重新导出。
 
 | 配置 | 迁移内容 |
 | --- | --- |
@@ -17,14 +17,18 @@
 
 目标实例应先完成管理员初始化，并可预先创建测试凭据、代理和配置实例级策略。配置迁移会检查目标不存在待迁移类型的记录，包括已删除的记录，避免合并路由或项目权限。预览验证版本、引用、策略、模型能力、端点与凭据的匹配，以及目标环境的服务商使用条款。正式导入使用预览标识并重新验证，应用时要求管理员重新认证。所有配置和导入审计记录在同一事务提交。审计记录包含服务商条款和代理绑定，以及部署能力声明，并关联到本次导入。提交前的失败可以重新预览。成功后请先保存新密钥，再关闭结果。
 
+「全部配置」适合重建整个实例。「选择导入」可选择项目或模型别名。选择项目会保留其原有授权并带入所引用的安全策略和模型别名。每个别名会带入整组路由，以及对应部署、当前价格和服务商。只有选入的服务商需要绑定凭据。只有勾选重新签发网关密钥时，才会为所选项目签发新密钥。更改范围或绑定后需重新检查导入，两种模式均要求目标没有现有业务配置。
+
 部署与路由以停用状态写入。导入结果列出源实例原本启用的部署和路由。操作员先在目标实例测试并启用部署，再启用对应路由。没有有效价格的部署还需先配置价格。项目规则与新密钥随配置激活。如果 HA 主节点已写入但副本确认失败，导入结果会显示操作 ID 和待重签的密钥。先检查集群与该操作，待集群恢复后到项目页撤销这些密钥并重新签发。
 
 | Admin API | 用途 |
 | --- | --- |
 | `GET /admin/api/v1/configuration/export` | 下载配置包 JSON。 |
-| `POST /admin/api/v1/configuration/import/preview` | 接受 `{bundle, bindings}`，返回记录数量、绑定要求、验证问题、迁移提示、区域变化、待确认的能力声明、待启用资源和可应用的 `plan_id`。 |
-| `POST /admin/api/v1/configuration/import` | 接受相同的 `bundle`、`bindings`、`plan_id` 及 `current_password`，启用 MFA 时带 `totp_code`。有能力声明时带 `accept_operator_declarations: true`。成功返回 `201`、操作 ID 和新密钥。主节点已写入但副本确认失败时返回 `202`，状态为 `confirmation_unavailable`，并返回操作 ID 和待重签的密钥标识。 |
+| `POST /admin/api/v1/configuration/import/preview` | 接受 `{bundle, bindings, selection?}`，返回可选项目和别名、拟导入记录数量、绑定要求、验证问题、迁移提示、区域变化、待确认的能力声明、待启用资源和可应用的 `plan_id`。 |
+| `POST /admin/api/v1/configuration/import` | 接受相同的 `bundle`、`bindings`、`selection`、`plan_id` 及 `current_password`，启用 MFA 时带 `totp_code`。有能力声明时带 `accept_operator_declarations: true`。成功返回 `201`、操作 ID 和本次签发的密钥。主节点已写入但副本确认失败时返回 `202`，状态为 `confirmation_unavailable`，并返回操作 ID 和待重签的密钥标识。 |
 
 `bindings` 以配置包中的服务商 ID 为键，每项包含目标 `credential_id`，可覆盖 `base_url`、`bedrock_project_id` 或选择 `egress_proxy_id`，受限服务商带上目标条款的 `acknowledged_policy_revision`。
+
+`selection.mode` 接受 `all` 或 `selected`。`selected` 至少提供 `project_ids` 和 `route_aliases` 之一。`include_gateway_keys: true` 为此次选入的项目重签网关密钥。省略整个 `selection` 保留旧 API 的全量导入和重签行为。
 
 验收使用两个独立本地实例。验证文件排除源凭据和原密钥材料，未绑定或存在无效资源引用的导入不会写入，重复提交不会签发新密钥，源密钥无法访问目标网关，并用模拟服务商验证部署和路由可按现有流程恢复。

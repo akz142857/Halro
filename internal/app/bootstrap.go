@@ -38,7 +38,30 @@ type BootstrapOptions struct {
 	// single input price. A pointer rather than a sentinel so that omitting the
 	// field cannot mean "cached tokens are free".
 	CachedInputMicrosPerMillion *int64
-	OutputMicrosPerMillion      int64
+	// The cache-write rates follow the same rule: nil bills writes at the
+	// ordinary input rate, which is what they cost before write rates existed,
+	// and never at zero.
+	CacheWriteMicrosPerMillion     *int64
+	CacheWriteLongMicrosPerMillion *int64
+	OutputMicrosPerMillion         int64
+}
+
+// rates resolves the operator's stated prices into a full rate table, filling
+// every rate they did not state with the ordinary input rate.
+func (options BootstrapOptions) rates() domain.PriceTier {
+	stated := func(value *int64) int64 {
+		if value == nil {
+			return options.InputMicrosPerMillion
+		}
+		return *value
+	}
+	return domain.PriceTier{
+		InputMicrosPerMillion:          options.InputMicrosPerMillion,
+		CachedInputMicrosPerMillion:    stated(options.CachedInputMicrosPerMillion),
+		CacheWriteMicrosPerMillion:     stated(options.CacheWriteMicrosPerMillion),
+		CacheWriteLongMicrosPerMillion: stated(options.CacheWriteLongMicrosPerMillion),
+		OutputMicrosPerMillion:         options.OutputMicrosPerMillion,
+	}
 }
 
 type BootstrapResult struct {
@@ -146,11 +169,9 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 	}
 	now := time.Now().UTC()
 	billingMode := options.BillingMode
-	cachedInputMicrosPerMillion := options.InputMicrosPerMillion
-	if options.CachedInputMicrosPerMillion != nil {
-		cachedInputMicrosPerMillion = *options.CachedInputMicrosPerMillion
-	}
-	if billingMode == "" && (options.InputMicrosPerMillion > 0 || options.OutputMicrosPerMillion > 0) {
+	rates := options.rates()
+	if billingMode == "" && (rates.InputMicrosPerMillion > 0 || rates.OutputMicrosPerMillion > 0 ||
+		rates.CachedInputMicrosPerMillion > 0 || rates.CacheWriteMicrosPerMillion > 0 || rates.CacheWriteLongMicrosPerMillion > 0) {
 		billingMode = domain.BillingModeMetered
 	}
 	if billingMode == "" {
@@ -190,7 +211,7 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 			),
 			Enabled: true, CreatedAt: now, UpdatedAt: now,
 		},
-		Price: bootstrapPriceVersion(priceID, deploymentID, billingMode, options, cachedInputMicrosPerMillion, now),
+		Price: bootstrapPriceVersion(priceID, deploymentID, billingMode, rates, now),
 		Route: domain.Route{
 			ID: routeID, PublicModel: options.PublicModel, DeploymentID: deploymentID,
 			Enabled: true, CreatedAt: now, UpdatedAt: now,
@@ -215,13 +236,16 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 	}, nil
 }
 
-func bootstrapPriceVersion(priceID, deploymentID string, billingMode domain.BillingMode, options BootstrapOptions, cachedInputMicrosPerMillion int64, now time.Time) domain.DeploymentPriceVersion {
-	evidence := sha256.Sum256([]byte(fmt.Sprintf("halro:bootstrap-pricing:v1:%s:%d:%d:%d", billingMode, options.InputMicrosPerMillion, cachedInputMicrosPerMillion, options.OutputMicrosPerMillion)))
+func bootstrapPriceVersion(priceID, deploymentID string, billingMode domain.BillingMode, rates domain.PriceTier, now time.Time) domain.DeploymentPriceVersion {
+	evidence := sha256.Sum256([]byte(fmt.Sprintf("halro:bootstrap-pricing:v2:%s:%d:%d:%d:%d:%d", billingMode,
+		rates.InputMicrosPerMillion, rates.CachedInputMicrosPerMillion, rates.CacheWriteMicrosPerMillion,
+		rates.CacheWriteLongMicrosPerMillion, rates.OutputMicrosPerMillion)))
 	return domain.DeploymentPriceVersion{
 		ID: priceID, DeploymentID: deploymentID, Version: 1, Revision: 1,
 		BillingMode: billingMode, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
-		InputMicrosPerMillion: options.InputMicrosPerMillion, CachedInputMicrosPerMillion: cachedInputMicrosPerMillion,
-		OutputMicrosPerMillion: options.OutputMicrosPerMillion,
+		InputMicrosPerMillion: rates.InputMicrosPerMillion, CachedInputMicrosPerMillion: rates.CachedInputMicrosPerMillion,
+		CacheWriteMicrosPerMillion: rates.CacheWriteMicrosPerMillion, CacheWriteLongMicrosPerMillion: rates.CacheWriteLongMicrosPerMillion,
+		OutputMicrosPerMillion: rates.OutputMicrosPerMillion,
 		EffectiveFrom:          now, CreatedBy: "bootstrap", CreatedAt: now,
 		Source: domain.PriceSource{
 			Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted,

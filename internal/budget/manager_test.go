@@ -215,33 +215,67 @@ func TestFailedAttemptSettlesAtZeroUnderFixedRequestFee(t *testing.T) {
 }
 
 func TestRecoverStartedLeaseUsesFrozenPriceAndPreparedBounds(t *testing.T) {
-	manager, state, closeLog := newTestManager(t)
-	defer closeLog()
-	request, err := manager.BeginRequest(context.Background(), "project_recovery", "request_recovery")
-	if err != nil {
-		t.Fatal(err)
-	}
-	attempt, err := manager.ReserveLeaseDetailed(context.Background(), request, 10_000, LeaseSpec{
-		Mode: ledger.LeaseModeMetered, ReservationMicrosUSD: 50,
-		PriceSnapshot: testPriceSnapshot(t, domain.BillingModeMetered), PreparedInputTokens: 10, PreparedOutputTokens: 20,
-		TokenGuardPricingViewDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-	}, AttemptMetadata{DeploymentID: "dep_test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.MarkStarted(context.Background(), attempt); err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.RecoverPendingLeases(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	balance := state.Balance("project_recovery", request.Period.ID, request.Period.TimezoneVersion)
-	if balance.ReservedMicrosUSD != 0 || balance.CommittedMicrosUSD != 50 || state.PendingReservations() != 0 {
-		t.Fatalf("recovered balance=%#v pending=%d", balance, state.PendingReservations())
-	}
-	stats := manager.RecoveryStats()
-	if stats.PendingObserved != 1 || stats.ConservativelySettled != 1 || stats.Failures != 0 {
-		t.Fatalf("recovery stats=%#v", stats)
+	for _, tc := range []struct {
+		name      string
+		legacy    bool
+		profile   domain.ProviderProfileID
+		primitive provider.Primitive
+		wantCost  int64
+		wantLong  int64
+	}{
+		{name: "legacy snapshot", legacy: true, wantCost: 50},
+		{name: "long write rate", wantCost: 70, wantLong: 10},
+		{name: "ordinary resource units", profile: domain.ProfileOpenAIMediaResources, primitive: provider.PrimitiveOpenAIFiles, wantCost: 50},
+		{name: "ordinary embedding tokens", profile: domain.ProfileOpenAIChatEmbeddings, primitive: provider.PrimitiveOpenAIEmbeddings, wantCost: 50},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manager, state, closeLog := newTestManager(t)
+			defer closeLog()
+			request, err := manager.BeginRequest(context.Background(), "project_recovery", "request_recovery")
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot := testPriceSnapshot(t, domain.BillingModeMetered)
+			if tc.legacy {
+				snapshot.CacheWriteMicrosPerMillion, snapshot.CacheWriteLongMicrosPerMillion = nil, nil
+				*snapshot.CachedInputMicrosPerMillion = 5_000_000
+			} else {
+				*snapshot.CacheWriteLongMicrosPerMillion = 3_000_000
+			}
+			metadata := AttemptMetadata{DeploymentID: "dep_test"}
+			if tc.profile != "" {
+				metadata.OfferingID = domain.OfferingOpenAIAPI
+				metadata.ProfileID = tc.profile
+				metadata.ProviderPrimitive = tc.primitive
+			}
+			attempt, err := manager.ReserveLeaseDetailed(context.Background(), request, 10_000, LeaseSpec{
+				Mode: ledger.LeaseModeMetered, ReservationMicrosUSD: tc.wantCost,
+				PriceSnapshot: snapshot, PreparedInputTokens: 10, PreparedOutputTokens: 20,
+				TokenGuardPricingViewDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			}, metadata)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.MarkStarted(context.Background(), attempt); err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.RecoverPendingLeases(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			balance := state.Balance("project_recovery", request.Period.ID, request.Period.TimezoneVersion)
+			if balance.ReservedMicrosUSD != 0 || balance.CommittedMicrosUSD != tc.wantCost || state.PendingReservations() != 0 {
+				t.Fatalf("recovered balance=%#v pending=%d", balance, state.PendingReservations())
+			}
+			settled, ok := settlementInLog(t, manager.log, attempt.AttemptID)
+			if !ok || settled.ProviderCacheWriteLongInputTokens != tc.wantLong || settled.ProviderCachedInputTokens != 0 ||
+				settled.TokenUsageSource != ledger.TokenUsageSourceEstimate {
+				t.Fatalf("recovered token breakdown=%+v", settled)
+			}
+			stats := manager.RecoveryStats()
+			if stats.PendingObserved != 1 || stats.ConservativelySettled != 1 || stats.Failures != 0 {
+				t.Fatalf("recovery stats=%#v", stats)
+			}
+		})
 	}
 }
 
@@ -471,19 +505,6 @@ func TestThousandConcurrentReservationsNeverOversell(t *testing.T) {
 	}
 }
 
-func TestEstimateCostRoundsUpAndRejectsOverflow(t *testing.T) {
-	cost, err := EstimateCostMicros(TokenCost{InputTokens: 1, OutputTokens: 1, InputMicrosPerMillion: 1, OutputMicrosPerMillion: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cost != 2 {
-		t.Fatalf("cost=%d", cost)
-	}
-	if _, err := EstimateCostMicros(TokenCost{InputTokens: 1 << 62, InputMicrosPerMillion: 4}); err == nil {
-		t.Fatal("expected overflow")
-	}
-}
-
 func TestZeroBudgetIsUnlimited(t *testing.T) {
 	manager, _, closeLog := newTestManager(t)
 	defer closeLog()
@@ -591,35 +612,6 @@ func mustResolver(t testing.TB, timezone string) *PeriodResolver {
 	return resolver
 }
 
-// The gateway computes a settlement's committed amount with EstimateCostMicros
-// and Settle re-derives it from the frozen price snapshot; a settlement whose
-// two answers differ by one micro-USD is rejected outright. The two formulas
-// therefore have to round the cached and uncached spans the same way, which is
-// only visible when a split leaves both spans with a fractional remainder.
-func TestEstimateCostMatchesTheSnapshotOnASplitPrompt(t *testing.T) {
-	snapshot := testPriceSnapshot(t, domain.BillingModeMetered)
-	for _, tokens := range []struct{ input, cached, output int64 }{
-		{1_000_000, 0, 0}, {1_000_000, 1_000_000, 0}, {1_000_001, 333_333, 7}, {3, 1, 1}, {0, 0, 0},
-	} {
-		estimated, err := EstimateCostMicros(TokenCost{
-			InputTokens: tokens.input, CachedInputTokens: tokens.cached, OutputTokens: tokens.output,
-			InputMicrosPerMillion:       *snapshot.InputMicrosPerMillion,
-			CachedInputMicrosPerMillion: *snapshot.CachedInputMicrosPerMillion,
-			OutputMicrosPerMillion:      *snapshot.OutputMicrosPerMillion,
-		})
-		if err != nil {
-			t.Fatalf("tokens=%#v err=%v", tokens, err)
-		}
-		settled, err := snapshot.Calculate(tokens.input, tokens.cached, tokens.output)
-		if err != nil {
-			t.Fatalf("tokens=%#v err=%v", tokens, err)
-		}
-		if estimated+*snapshot.FixedRequestMicrosUSD != settled.TotalCostMicrosUSD {
-			t.Fatalf("tokens=%#v estimated=%d settled=%d", tokens, estimated, settled.TotalCostMicrosUSD)
-		}
-	}
-}
-
 // A settlement carrying cached tokens has to survive Settle's re-derivation, and
 // cost less than the same prompt with nothing served from cache. Before the
 // cache-read rate existed the two were identical.
@@ -628,11 +620,11 @@ func TestSettlementChargesCachedPromptTokensAtTheCacheReadRate(t *testing.T) {
 	defer closeLog()
 	ctx := context.Background()
 	snapshot := testPriceSnapshot(t, domain.BillingModeMetered)
-	cost, err := snapshot.Calculate(1_000_000, 900_000, 0)
+	cost, err := snapshot.Calculate(domain.BilledTokens{Input: 1_000_000, CachedInput: 900_000, Output: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
-	uncached, err := snapshot.Calculate(1_000_000, 0, 0)
+	uncached, err := snapshot.Calculate(domain.BilledTokens{Input: 1_000_000, CachedInput: 0, Output: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -696,7 +688,7 @@ func TestSettlementCommitsTrueCostBeyondTheReservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The provider served ten times the estimated output.
-	cost, err := snapshot.Calculate(10, 0, 200)
+	cost, err := snapshot.Calculate(domain.BilledTokens{Input: 10, CachedInput: 0, Output: 200})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -156,6 +156,13 @@ A three-member promotion also needs a peer's durable promise. A lagging candidat
 - **Whole-cluster restore:** Isolate all old members and client traffic. Restore a verified HA backup with a **new incarnation**, then seed every Replica. An old PVC retains the former incarnation and cannot simply rejoin; follow the [restore procedure](../runbooks/ha-operations.md#whole-cluster-restore).
 - **Upgrade:** Change one member at a time. Confirm it is not the active Primary; perform a `stepdown` first if necessary. Validate adjacent-version and schema compatibility using the [HA test guide](../verification/ha-test-guide.zh-CN.md). The example StatefulSet uses `OnDelete`; it does not choose the upgrade order for you.
 
+The cache-write pricing upgrade moves metadata from schema 42 to 43. HA peers
+require a matching schema, and the new Primary requires a schema 43 projection.
+Plan this upgrade as an offline whole-cluster restore. Quiesce writes, confirm
+that the Replica covers the final durable index, and report a verified HA backup.
+Restore it with the new binary and a new incarnation, then seed the Replicas.
+Follow the [whole-cluster restore procedure](../runbooks/ha-operations.md#whole-cluster-restore).
+
 ## 8. Validation checklist and common misreadings
 
 Three processes on one host can exercise configuration, mTLS, replication, the Admin status page, and planned handoff. They cannot replace tests with independent nodes, PVCs, network partitions, and Linux storage failures. Use synthetic requests and a mock Provider first. For each step, save every member's `cluster status`, readiness, replication metrics, and Audit/Ledger checks. Follow the [HA test guide](../verification/ha-test-guide.zh-CN.md) for normal replication, one-Replica loss, handoff with long requests, stale-index refusal, promotion after fencing, asymmetric partitions, PVC loss, whole-cluster restore, adjacent versions, ENOSPC/slow disks, and a 72-hour soak.
