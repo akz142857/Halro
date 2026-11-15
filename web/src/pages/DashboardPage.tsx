@@ -4,6 +4,7 @@ import { api } from "../api";
 import { ErrorState, Loading, Metric, PageHeader, SegmentedTabs, StatusDot } from "../components";
 import { FirstRunChecklist } from "./FirstRunChecklist";
 import { compactNumber, money, useInstantFormatter } from "../format";
+import type { Translate } from "../i18n";
 import { navigate } from "../navigation";
 import { adoptTimeContext, useAccountingTimeZone } from "../timezone";
 import { errorClassLabel } from "../failure";
@@ -31,6 +32,18 @@ export function DashboardPage() {
   const [dimension, setDimension] = useState<BreakdownDimension>("project");
   const [breakdownMetric, setBreakdownMetric] = useState<BreakdownMetric>("calls");
   const query = useQuery({ queryKey: ["dashboard"], queryFn: api.dashboard, refetchInterval: 15_000 });
+  const readiness = useQuery({
+    queryKey: ["onboarding-readiness"],
+    queryFn: api.onboardingReadiness,
+    enabled: Boolean(query.data && !query.data.first_value_reached),
+    refetchInterval: (query) => query.state.data?.state === "first_value_reached" ? false : 15_000,
+  });
+  const onboardingCompleted = readiness.data?.state === "first_value_reached";
+  const dashboardHasSuccess = query.data?.first_value_reached;
+  const refetchDashboard = query.refetch;
+  useEffect(() => {
+    if (onboardingCompleted && dashboardHasSuccess === false) void refetchDashboard();
+  }, [onboardingCompleted, dashboardHasSuccess, refetchDashboard]);
   const dashboardTimeContext = query.data?.time_context;
   useEffect(() => {
     if (dashboardTimeContext) adoptTimeContext(dashboardTimeContext);
@@ -77,7 +90,10 @@ export function DashboardPage() {
   const durablePathStatus = durablePathHealthy && dashboard.wal.queue_depth === 0
     ? t("dashboard.ready")
     : t("dashboard.walStatus", { queued: compactNumber(dashboard.wal.queue_depth), errors: compactNumber(dashboard.wal.errors) });
-  const firstValueReached = dashboard.first_value_reached ?? false;
+  const firstValueReached = dashboard.first_value_reached || onboardingCompleted;
+  const trafficLabel = firstValueReached
+    ? t(acceptingTraffic ? "dashboard.acceptingTraffic" : "dashboard.notAcceptingTraffic")
+    : t(acceptingTraffic ? "dashboard.firstRun.gatewayAccepting" : "dashboard.firstRun.gatewayUnavailable");
   const attention = buildAttention({
     acceptingTraffic, accountingHealthy, unknownAttempts: today.unknown_attempts ?? 0,
     budgetItems, capacityItems, pricingQuarantined: dashboard.governance.pricing?.quarantined ?? 0,
@@ -88,10 +104,10 @@ export function DashboardPage() {
     <>
       <PageHeader
         title={t(firstValueReached ? "dashboard.title" : "dashboard.firstRun.pageTitle")}
-        action={<div className={`health-pill ${acceptingTraffic ? "" : "warning"}`}><StatusDot ok={acceptingTraffic} />{acceptingTraffic ? t("dashboard.acceptingTraffic") : t("dashboard.notAcceptingTraffic")}</div>}
+        action={<div className={`health-pill ${acceptingTraffic ? "" : "warning"}`}><StatusDot ok={acceptingTraffic} />{trafficLabel}</div>}
       />
 
-      {!firstValueReached && <FirstRunChecklist />}
+      {!firstValueReached && <FirstRunChecklist readiness={readiness} />}
       {firstValueReached && (
         <>
           <p className="panel-note">{t("dashboard.periodScope", { timezone: timeZone })}</p>
@@ -245,12 +261,12 @@ function StatusRow({ label, ok, value }: { label: string; ok?: boolean; value: s
   return <div className="status-row"><span>{ok !== undefined && <StatusDot ok={ok} />}{label}</span><strong>{value}</strong></div>;
 }
 
-function costDetail(t: (key: string, options?: Record<string, unknown>) => string, estimated: number, unknown: number) {
+function costDetail(t: Translate, estimated: number, unknown: number) {
   if (unknown > 0) return t("dashboard.unknownCostExcluded", { count: unknown, estimated: estimated > 0 ? money(estimated) : "" });
   return estimated > 0 ? t("dashboard.estimatedCost", { cost: money(estimated) }) : t("dashboard.allCostKnown");
 }
 
-function buildAttention(input: { acceptingTraffic: boolean; accountingHealthy: boolean; unknownAttempts: number; budgetItems: GovernancePressureItem[]; capacityItems: GovernancePressureItem[]; pricingQuarantined: number; pricingUnknown: number; alertHealthy: boolean; walHealthy: boolean; recentAnomalies: UsageAnomaly[]; t: (key: string, options?: Record<string, unknown>) => string }): AttentionItem[] {
+function buildAttention(input: { acceptingTraffic: boolean; accountingHealthy: boolean; unknownAttempts: number; budgetItems: GovernancePressureItem[]; capacityItems: GovernancePressureItem[]; pricingQuarantined: number; pricingUnknown: number; alertHealthy: boolean; walHealthy: boolean; recentAnomalies: UsageAnomaly[]; t: Translate }): AttentionItem[] {
   const items: AttentionItem[] = [];
   if (!input.acceptingTraffic) items.push({ key: "traffic", title: input.t("dashboard.attention.traffic.title"), detail: input.t("dashboard.attention.traffic.detail"), href: "/admin/settings/diagnostics", danger: true });
   if (!input.accountingHealthy) items.push({ key: "ledger", title: input.t("dashboard.attention.ledger.title"), detail: input.t("dashboard.attention.ledger.detail"), href: "/admin/settings/diagnostics", danger: true });

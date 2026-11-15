@@ -1370,11 +1370,9 @@ describe("deployment card keeps what the row decided", () => {
     expect(within(card).queryByText("以上游为准")).not.toBeInTheDocument();
     // Provider and upstream model are one identity line now.
     expect(within(card).getByText(/OpenAI production/)).toHaveTextContent("gpt-chat");
-    // The bar is edit, the way into the drawer, the state change, and the test
-    // control at its far end. The menu is in the card's head and holds only
-    // what the bar does not.
+    // The pricing shortcut stays next to edit in the action bar.
     expect(Array.from(card.querySelectorAll(".deployment-compact-actions > .button")).map((button) => button.textContent))
-      .toEqual(["编辑", "查看详情", "禁用"]);
+      .toEqual(["编辑", "调整价格", "查看详情", "禁用"]);
     const head = card.querySelector(".resource-card-head") as HTMLElement;
     expect(within(head).getByLabelText(/^更多操作/)).toBeInTheDocument();
     // The bar ends with the control, not with a word about the state: where the
@@ -2028,7 +2026,7 @@ describe("deployment price panel", () => {
 
     await waitFor(() => expect(create).toHaveBeenCalled());
     expect(create.mock.calls[0][1]).toMatchObject({
-      schedule: { timezone: "Europe/Berlin", windows: [{ start: "09:00", end: "12:00" }] },
+      schedule: { timezone: "Europe/Berlin", windows: [{ start: "09:00", end: "12:00", cache_write_usd_per_million: "1.25", cache_write_long_usd_per_million: "1.5" }] },
     });
   });
 
@@ -2041,8 +2039,9 @@ describe("deployment price panel", () => {
     const create = vi.spyOn(api, "createDeploymentPrice").mockResolvedValue(activePriceVersion());
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "调整价格" }));
+    const adjust = await screen.findByRole("button", { name: "调整价格：Deployment dep_1" });
+    await waitFor(() => expect(adjust).toBeEnabled());
+    fireEvent.click(adjust);
     expect(await screen.findByLabelText(/^缓存输入 USD \/ 百万词元/)).toHaveValue("0.1");
     fireEvent.change(screen.getByLabelText(/^缓存输入 USD \/ 百万词元/), { target: { value: "0.5" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
@@ -2070,7 +2069,7 @@ describe("deployment price panel", () => {
   // default that would be wrong: it gives every cached prompt token away. The
   // field follows the input rate — what a cached token cost before the rate
   // existed — until the operator lowers it deliberately.
-  it("defaults an untouched cache-read rate to the input rate rather than zero", async () => {
+  it("tracks input for untouched cache rates and submits edited write rates", async () => {
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
     const create = vi.spyOn(api, "createDeploymentPrice").mockResolvedValue(activePriceVersion());
     renderPage();
@@ -2078,12 +2077,23 @@ describe("deployment price panel", () => {
     fireEvent.click(await screen.findByRole("button", { name: "未设置价格" }));
     fireEvent.change(await screen.findByLabelText("输入 USD / 百万词元"), { target: { value: "5" } });
     expect(screen.getByLabelText(/^缓存输入 USD \/ 百万词元/)).toHaveValue("5");
+    const shortWrite = screen.getByLabelText(/^缓存写入（短时） USD \/ 百万词元/);
+    const longWrite = screen.getByLabelText(/^缓存写入（长时） USD \/ 百万词元/);
+    expect(shortWrite).toHaveValue("5");
+    expect(longWrite).toHaveValue("5");
+    fireEvent.change(shortWrite, { target: { value: "6" } });
+    fireEvent.change(screen.getByLabelText("输入 USD / 百万词元"), { target: { value: "7" } });
+    expect(shortWrite).toHaveValue("6");
+    expect(longWrite).toHaveValue("7");
     fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
     fireEvent.change(await screen.findByLabelText("当前密码"), { target: { value: "pw" } });
     fireEvent.click(screen.getByRole("button", { name: "确认并创建价格版本" }));
 
     await waitFor(() => expect(create).toHaveBeenCalled());
-    expect(create.mock.calls[0][1]).toMatchObject({ input_usd_per_million: "5", cached_input_usd_per_million: "5" });
+    expect(create.mock.calls[0][1]).toMatchObject({
+      input_usd_per_million: "7", cached_input_usd_per_million: "7",
+      cache_write_usd_per_million: "6", cache_write_long_usd_per_million: "7",
+    });
   });
 
   // The server refuses any version that is not strictly later than every
@@ -2161,7 +2171,7 @@ describe("deployment price panel", () => {
     fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
     // Each scheduled row carries a cancel button, so its accessible name names
     // the version rather than being one of several identical "取消".
-    for (const name of ["调整价格", "确认恢复价格", "取消价格版本 v4"]) {
+    for (const name of ["调整价格：Deployment dep_1", "调整价格", "确认恢复价格", "取消价格版本 v4"]) {
       const control = await screen.findByRole("button", { name });
       expect(control).toBeDisabled();
       expect(control).toHaveAttribute("title", "只读账户无法执行此操作。");
@@ -2237,6 +2247,7 @@ function activePriceVersion(): DeploymentPriceVersion {
   return {
     id: "price_1", deployment_id: "dep_1", version: 3, revision: 1, billing_mode: "metered", currency: "USD",
     formula_version: "usd_tokens_v1", input_micros_per_million: 1_000_000, cached_input_micros_per_million: 100_000,
+    cache_write_micros_per_million: 1_250_000, cache_write_long_micros_per_million: 1_500_000,
     output_micros_per_million: 2_000_000,
     fixed_request_micros_usd: 0, effective_from: "2026-08-01T00:00:00Z",
     source: { type: "manual", assurance: "asserted", reference: "temporary_estimate" }, status: "active",
@@ -2317,7 +2328,7 @@ describe("capability grouping stays complete", () => {
 });
 
 describe("time-of-day price schedule editing", () => {
-  const window = (start: string, end: string) => ({ start, end, input: "0.4", cachedInput: "0.04", output: "1.6", fixed: "0" });
+  const window = (start: string, end: string) => ({ start, end, input: "0.4", cachedInput: "0.04", cacheWrite: null, cacheWriteLong: null, output: "1.6", fixed: "0" });
 
   it("reads and writes clock times only as whole HH:MM, with 24:00 as the end of the day", () => {
     expect(clockToMinute("09:00")).toBe(540);

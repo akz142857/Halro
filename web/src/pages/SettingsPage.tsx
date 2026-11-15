@@ -5,6 +5,7 @@ import { useNotify } from "../notifications";
 import { api } from "../api";
 import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
 import { useInstantFormatter } from "../format";
+import type { Translate } from "../i18n";
 import { navigate, usePathname } from "../navigation";
 import { useIsReadOnly, useSession } from "../session";
 import type { AdvisorFinding, ModelCatalogInfo, ReloadStatus, SystemConfigEntry, WritePathSummary } from "../types";
@@ -458,7 +459,7 @@ function ConfigEntryRow({ entry, english, search }: { entry: SystemConfigEntry; 
   </article>;
 }
 
-function formatConfigEntry(entry: SystemConfigEntry, t: (key: string, options?: Record<string, unknown>) => string) {
+function formatConfigEntry(entry: SystemConfigEntry, t: Translate) {
   if (!entry.value || entry.value === "[]") return t("settings.notConfigured");
   if (entry.kind === "boolean") return t(entry.value === "true" ? "settings.enabled" : "settings.disabled");
   return entry.value;

@@ -124,6 +124,13 @@ func TestAdminConfigurationTransferRoundTrip(t *testing.T) {
 		return preview
 	}
 	input := configurationImportInput{Bundle: bundle}
+	for version, code := range map[int]string{1: "reexport_required", configurationBundleVersion + 1: "unsupported_version"} {
+		versioned := input
+		versioned.Bundle.Version = version
+		if preview := previewImport(versioned); preview.PlanID != "" || len(preview.Issues) != 1 || preview.Issues[0].Code != code {
+			t.Fatalf("version %d reported an unexpected preview: %+v", version, preview)
+		}
+	}
 	if preview := previewImport(input); preview.PlanID != "" || len(preview.Providers) != 1 || len(preview.Issues) == 0 {
 		t.Fatalf("unbound import was accepted: %+v", preview)
 	}
@@ -132,8 +139,9 @@ func TestAdminConfigurationTransferRoundTrip(t *testing.T) {
 	}
 	mismatchedBaseURL := "https://another.example"
 	input.Bindings[bootstrap.ProviderID] = configurationProviderTarget{CredentialID: credential.ID, BaseURL: &mismatchedBaseURL}
-	if preview := previewImport(input); preview.PlanID != "" || len(preview.Issues) == 0 {
-		t.Fatal("credential audience mismatch was accepted")
+	if preview := previewImport(input); preview.PlanID != "" || len(preview.Issues) != 1 ||
+		preview.Issues[0].Code != "credential_base_url_mismatch" || preview.Issues[0].Fields["credential_base_url"] == "" {
+		t.Fatal("credential audience mismatch was not reported")
 	}
 	input.Bindings[bootstrap.ProviderID] = configurationProviderTarget{CredentialID: credential.ID, BaseURL: &targetBaseURL}
 	input.Bundle.Routes[0].DeploymentID = "missing_deployment"
@@ -146,8 +154,31 @@ func TestAdminConfigurationTransferRoundTrip(t *testing.T) {
 	}}); response.Code != http.StatusBadRequest {
 		t.Fatalf("unknown secret fields were accepted: %d", response.Code)
 	}
+	if response := request("/preview", map[string]any{"bundle": map[string]any{
+		"version": configurationBundleVersion, "projects": []map[string]string{{"name": strings.Repeat("x", configurationBundleLimit)}},
+	}}); response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversize bundle accepted: %d", response.Code)
+	}
+	duplicateRoute := input.Bundle.Routes[0]
+	duplicateRoute.ID = "duplicate_target_route"
+	input.Bundle.Routes = append(input.Bundle.Routes, duplicateRoute)
+	if preview := previewImport(input); preview.PlanID != "" || len(preview.Issues) != 1 || preview.Issues[0].Code != "invalid_route_group" {
+		t.Fatalf("duplicate enabled route target was accepted: %+v", preview)
+	}
+	input.Bundle.Routes = input.Bundle.Routes[:1]
+	input.Bundle.Providers = append(input.Bundle.Providers, configurationProvider{ID: "prv_unselected", Name: "Unselected"})
+	input.Bundle.Projects = append(input.Bundle.Projects, configurationProject{
+		ID: "prj_unselected", projectInput: projectInput{Name: "Unselected project"},
+	})
+	input.Selection = &configurationImportSelection{Mode: "selected", ProjectIDs: []string{bootstrap.ProjectID}}
+	withoutKeys := previewImport(input)
+	if withoutKeys.PlanID == "" || len(withoutKeys.SelectionOptions.Projects) != 2 || withoutKeys.Counts["gateway_keys"] != 0 {
+		t.Fatalf("selected import should exclude unselected records and keys by default: %+v", withoutKeys)
+	}
+	input.Selection.IncludeGatewayKeys = true
 	preview := previewImport(input)
 	if preview.PlanID == "" || len(preview.Issues) != 0 || len(preview.DeploymentsToEnable) != 1 || len(preview.RoutesToEnable) != 1 ||
+		preview.PlanID == withoutKeys.PlanID || preview.Counts["providers"] != 1 || preview.Counts["gateway_keys"] != 1 ||
 		len(preview.Declarations) != 1 || len(preview.Notices) != 1 || preview.Notices[0].Alias != "retired-alias" {
 		t.Fatalf("valid configuration did not produce a plan: %+v", preview)
 	}
@@ -158,7 +189,7 @@ func TestAdminConfigurationTransferRoundTrip(t *testing.T) {
 		}
 	}
 	apply.CurrentPassword = stepUpTestPassword
-	apply.PlanID = "outdated-plan"
+	apply.PlanID = withoutKeys.PlanID
 	if response := request("", apply); response.Code != http.StatusConflict {
 		t.Fatalf("import accepted an outdated preview: %d %s", response.Code, response.Body)
 	}
@@ -186,6 +217,10 @@ func TestAdminConfigurationTransferRoundTrip(t *testing.T) {
 	}
 	if response := request("", apply); response.Code != http.StatusConflict || strings.Contains(response.Body.String(), freshKey) {
 		t.Fatalf("replay did not refuse cleanly: %d", response.Code)
+	}
+	if blocked := previewImport(input); blocked.PlanID != "" || len(blocked.Providers) != 0 || blocked.SelectionOptions != nil ||
+		len(blocked.Issues) != 1 || blocked.Issues[0].Code != "target_not_empty" {
+		t.Fatalf("configured target asked for bindings: %+v", blocked)
 	}
 	if err := target.drainAdminAuditIntents(ctx); err != nil {
 		t.Fatal(err)
@@ -266,12 +301,12 @@ func TestConfigurationImportKeepsMappedModelWhenEnabled(t *testing.T) {
 		t.Fatalf("credential status=%d body=%s", credentialResponse.Code, credentialResponse.Body)
 	}
 	caps := domain.ProviderCapabilities{Chat: true, Streaming: true}
-	bundle := configurationBundle{Version: 1,
+	bundle := configurationBundle{Version: configurationBundleVersion,
 		Providers: []configurationProvider{{ID: "azure_review", Name: "Azure", Type: domain.ProviderAzureOpenAI, BaseURL: endpoint, APIVersion: "2024-10-21", Enabled: true,
 			Bindings: []configurationBinding{{ProfileID: domain.ProfileAzureChatEmbeddings, Capabilities: caps, Enabled: true}}}},
 		Deployments: []configurationDeployment{{ID: "dep_review", Name: "Review", ProviderID: "azure_review", ProviderModel: "review-tenant-alias",
 			CapabilityModel: "gpt-5", TargetKind: domain.TargetAzureDeployment, ProfileID: domain.ProfileAzureChatEmbeddings, Capabilities: caps, Enabled: true,
-			Price: &configurationPrice{BillingMode: domain.BillingModeFree}}},
+			Price: exportConfigurationPrice(domain.DeploymentPriceVersion{BillingMode: domain.BillingModeFree})}},
 	}
 	input := configurationImportInput{Bundle: bundle, Bindings: map[string]configurationProviderTarget{"azure_review": {CredentialID: credential.ID}}}
 	response := performAdminMutation(t, runtime, session.cookie, session.csrf, http.MethodPost, "/admin/api/v1/configuration/import/preview", "", input)
@@ -316,7 +351,7 @@ func TestConfigurationImportReportsLocalCommitWhenConfirmationFails(t *testing.T
 		t.Fatal(err)
 	}
 	input := configurationImportInput{Bundle: configurationBundle{
-		Version:     1,
+		Version:     configurationBundleVersion,
 		Projects:    []configurationProject{{ID: "project_fixture", projectInput: projectInput{Name: "Disabled project"}}},
 		GatewayKeys: []configurationKey{{ID: "key_fixture", ProjectID: "project_fixture", Name: "Fixture key", Enabled: true, Scopes: []domain.GatewayScope{domain.GatewayScopeInference}}},
 	}}
@@ -377,6 +412,40 @@ func TestConfigurationExportOmitsRetiredDependents(t *testing.T) {
 	}
 }
 
+func TestConfigurationImportSelectionClosesAliasGroupsAndPreservesEmptyProjectGrants(t *testing.T) {
+	bundle := configurationBundle{
+		Projects: []configurationProject{
+			{ID: "empty", projectInput: projectInput{Name: "No model grants"}},
+			{ID: "chat", projectInput: projectInput{AllowedModels: []string{"chat"}}},
+		},
+		Routes: []configurationRoute{
+			{ID: "chat_one", routeInput: routeInput{PublicModel: "chat", DeploymentID: "dep_one"}},
+			{ID: "chat_two", routeInput: routeInput{PublicModel: "chat", DeploymentID: "dep_two"}},
+			{ID: "other", routeInput: routeInput{PublicModel: "other", DeploymentID: "dep_other"}},
+		},
+		Deployments: []configurationDeployment{
+			{ID: "dep_one", ProviderID: "prv_one"}, {ID: "dep_two", ProviderID: "prv_one"},
+			{ID: "dep_other", ProviderID: "prv_other"},
+		},
+		Providers:   []configurationProvider{{ID: "prv_one"}, {ID: "prv_other"}},
+		GatewayKeys: []configurationKey{{ID: "one", ProjectID: "chat"}},
+	}
+	var preview configurationImportPreview
+	first, ok := preview.selectConfiguration(bundle, configurationImportSelection{Mode: "selected", ProjectIDs: []string{"empty"}})
+	if !ok || first.recordCount() != 1 || len(first.Projects) != 1 || len(first.Projects[0].AllowedModels) != 0 {
+		t.Fatalf("empty allowlist pulled in unrelated routes: %v, %+v", ok, first.counts())
+	}
+	selected, ok := preview.selectConfiguration(bundle, configurationImportSelection{Mode: "selected", RouteAliases: []string{"chat"}, IncludeGatewayKeys: true})
+	if !ok || len(selected.Routes) != 2 || len(selected.Deployments) != 2 || len(selected.Providers) != 1 ||
+		len(selected.Projects) != 0 || len(selected.GatewayKeys) != 0 {
+		t.Fatalf("alias selection did not preserve its complete group: %v, %+v", ok, selected.counts())
+	}
+	if _, ok := preview.selectConfiguration(bundle, configurationImportSelection{Mode: "selected", ProjectIDs: []string{"not_in_file"}}); ok ||
+		len(preview.Issues) != 1 || preview.Issues[0].Code != "unknown_selected_project" {
+		t.Fatalf("unknown project selection accepted: %+v", preview.Issues)
+	}
+}
+
 func TestConfigurationImportDerivesMantleDeploymentRegionFromTarget(t *testing.T) {
 	profile := domain.ProfileBedrockMantleOpenAIChat
 	providerID := "prv_mantle_fixture"
@@ -398,5 +467,39 @@ func TestConfigurationImportDerivesMantleDeploymentRegionFromTarget(t *testing.T
 	deployment, err := (&Runtime{}).prepareConfigurationDeployment(request, instance, item, time.Now().UTC())
 	if err != nil || deployment.Region != "us-west-2" {
 		t.Fatalf("target deployment region=%q err=%v", deployment.Region, err)
+	}
+}
+
+func TestConfigurationPriceRequiresWriteRatesForBaseAndEachWindow(t *testing.T) {
+	price := domain.DeploymentPriceVersion{
+		BillingMode: domain.BillingModeMetered, InputMicrosPerMillion: 1_000_000,
+		CacheWriteMicrosPerMillion: 0, CacheWriteLongMicrosPerMillion: 1_500_000,
+		Schedule: &domain.PriceSchedule{Timezone: "UTC", Windows: []domain.PriceWindow{{
+			StartMinute: 60, EndMinute: 120, InputMicrosPerMillion: 2_000_000,
+			CacheWriteMicrosPerMillion: 2_500_000, CacheWriteLongMicrosPerMillion: 0,
+		}}},
+	}
+	wire, err := json.Marshal(exportConfigurationPrice(price))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var imported configurationPrice
+	if err := json.Unmarshal(wire, &imported); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	got, err := imported.version("dep_pricing", "admin", now)
+	if err != nil || got.BaseTier() != price.BaseTier() || got.Schedule.Windows[0] != price.Schedule.Windows[0] {
+		t.Fatalf("price=%+v err=%v", got, err)
+	}
+
+	missingBase := imported
+	missingBase.CacheWriteMicrosPerMillion = nil
+	if _, err := missingBase.version("dep_pricing", "admin", now); err == nil {
+		t.Fatal("accepted an omitted short write rate")
+	}
+	imported.Schedule.Windows[0].CacheWriteLongMicrosPerMillion = nil
+	if _, err := imported.version("dep_pricing", "admin", now); err == nil || !strings.Contains(err.Error(), "window 1") {
+		t.Fatalf("accepted an omitted long write rate in a window: %v", err)
 	}
 }

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api } from "../api";
 import { EmptyState, ErrorState, Loading, LoadMore, Modal, PageHeader, StatusDot } from "../components";
 import { compactNumber, money, useInstantFormatter } from "../format";
+import type { Translate } from "../i18n";
 import { Link, navigate } from "../navigation";
 import { useTranslation } from "react-i18next";
 import { isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
@@ -538,7 +539,7 @@ function clockOf(minute: number) {
 // called out rather than smoothed over: it means the attempt was billed at the
 // dearest rate the version could express because its zone could not be
 // resolved, and that is worth someone looking into.
-export function billedTierLabel(tier: PriceScheduleTier, t: (key: string, values?: Record<string, unknown>) => string) {
+export function billedTierLabel(tier: PriceScheduleTier, t: Translate) {
   if (tier.source === "window" && tier.start_minute != null && tier.end_minute != null) {
     return t("usage.billedWindow", { start: clockOf(tier.start_minute), end: clockOf(tier.end_minute), timezone: tier.timezone });
   }
@@ -577,6 +578,10 @@ function CostEvidence({ attempt }: { attempt: UsageAttempt }) {
               amounts once a price bills by time of day. Without the rung, that
               difference has no explanation anywhere the operator can reach. */}
           {attempt.price_snapshot?.schedule_tier && <>{billedTierLabel(attempt.price_snapshot.schedule_tier, t)}<br /></>}
+          {!!attempt.provider_cache_write_input_tokens && <>{t("usage.cacheWrites", {
+            total: compactNumber(attempt.provider_cache_write_input_tokens),
+            long: compactNumber(attempt.provider_cache_write_long_input_tokens ?? 0),
+          })}{attempt.tokens_estimated && <> · {t("usage.conservative")}</>}<br /></>}
           {attempt.input_cost_micros_usd == null ? "" : t("usage.formulaComponents", { input: money(attempt.input_cost_micros_usd), output: money(attempt.output_cost_micros_usd ?? 0), fixed: money(attempt.fixed_cost_micros_usd ?? 0) })}
         </small>
       </details>

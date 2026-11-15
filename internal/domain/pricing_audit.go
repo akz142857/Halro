@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+// A pricing change can audit 24 windows with six 19-digit rates each, plus
+// the base rates and pricing identifiers.
+const maxPricingChangeSummaryBytes = 4 << 10
+
 type PricingAuditIntent struct {
 	EventID              string               `json:"event_id"`
 	OccurredAt           time.Time            `json:"occurred_at"`
@@ -79,7 +83,7 @@ func (i PricingAuditIntent) Validate() error {
 	if len(i.CorrelationID) > 256 {
 		return errors.New("pricing audit intent correlation id exceeds maximum size")
 	}
-	if len(i.ChangeSummary) > 2048 || len(i.SourceReference) > 256 ||
+	if len(i.ChangeSummary) > maxPricingChangeSummaryBytes || len(i.SourceReference) > 256 ||
 		(i.SourceContentSHA256 != "" && !validSHA256Label(i.SourceContentSHA256)) {
 		return errors.New("pricing audit evidence is invalid")
 	}

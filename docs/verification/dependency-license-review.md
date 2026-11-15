@@ -1,6 +1,6 @@
 # Dependency and License Review
 
-Date: 2026-11-11
+Date: 2026-11-16
 
 Halro is distributed under Apache-2.0. The source tree includes the project
 license in `LICENSE`, required attribution in `NOTICE`, and the runtime
@@ -134,14 +134,14 @@ is linked into the Go runtime.
 
 | Package | Version | License |
 |---|---:|---|
-| `@hookform/resolvers` | 6.0.0 | MIT |
-| `@tanstack/react-query` | 5.105.0 | MIT |
-| `i18next` | 26.5.11 | MIT |
+| `@hookform/resolvers` | 7.0.5 | MIT |
+| `@tanstack/react-query` | 5.107.1 | MIT |
+| `i18next` | 27.1.0 | MIT |
 | `qrcode` | 1.5.4 | MIT |
 | `react` | 19.3.1 | MIT |
 | `react-dom` | 19.3.1 | MIT |
 | `react-hook-form` | 7.91.0 | MIT |
-| `react-i18next` | 17.1.9 | MIT |
+| `react-i18next` | 18.0.1 | MIT |
 | `uplot` | 1.6.32 | MIT |
 | `zod` | 4.6.7 | MIT |
 
@@ -554,6 +554,51 @@ The 2026-11-11 toolchain refresh raises the `go` directive from 1.26.10 to
 are unchanged. The refresh leaves the dependency inventory, licenses, and
 distribution notices unchanged.
 
+The 2026-11-15 Python compatibility lock update moves `opentelemetry-api`
+from 1.45.1 to 1.45.2 for CVE-2026-126360. PyPI confirms the Apache-2.0
+license and the existing `typing-extensions` dependency. The update is
+limited to the Python SDK compatibility tests. Existing notices remain
+applicable. See the [upstream release](https://github.com/open-telemetry/opentelemetry-python/releases/tag/v1.45.2)
+and the [PyPI release](https://pypi.org/project/opentelemetry-api/1.45.2/).
+
+The 2026-11-16 Go SDK contract-test update (#510) upgrades `openai-go/v3`
+from 3.91.1 to 3.98.0 and `tidwall/gjson` from 1.19.0 to 1.20.0. The existing
+AWS and Azure modules also move in the checksums. The module path set is
+unchanged, and all 18 changed modules retain byte-identical LICENSE and, where
+present, NOTICE files. The Go SDK black-box tests pass against the local
+compatibility server. These modules stay outside the distributed Halro binary.
+
+The 2026-11-16 Node Anthropic contract-test update (#512) moves
+`@anthropic-ai/sdk` from 1.4.0 to 1.7.0. The installed Apache-2.0 license is
+byte-identical, and the lock changes only this SDK. The Node black-box tests
+pass against the local compatibility server. The SDK remains test-only.
+
+The 2026-11-16 Node OpenAI contract-test update (#513) moves `openai` from
+7.47.0 to 7.54.0. Its installed Apache-2.0 LICENSE is byte-identical. Its
+lock entry changes without adding packages, and the merged lock keeps the
+Anthropic SDK at 1.7.0. Both SDKs pass the local Node black-box tests.
+
+The 2026-11-16 Python Anthropic contract-test update (#514) moves `anthropic`
+from 2.4.0 to 2.7.0. The installed Apache-2.0 LICENSE, additional MIT license,
+and vendored httpx-aiohttp license and notice are byte-identical. The lock
+keeps `opentelemetry-api` 1.45.2 and changes no transitive versions. The SDK
+remains confined to compatibility tests.
+
+The 2026-11-16 Python OpenAI contract-test update (#515) moves `openai` from
+3.42.1 to 3.48.0. Its Apache-2.0 LICENSE and vendored httpx-aiohttp license are
+byte-identical. The combined lock keeps Anthropic 2.7.0 and `opentelemetry-api`
+1.45.2 with no transitive version changes. Both SDKs pass the local Python
+black-box tests.
+
+The 2026-11-16 Admin UI refresh (#516) upgrades `@hookform/resolvers` to
+7.0.5, `@tanstack/react-query` to 5.107.1, `i18next` to 27.1.0,
+`react-i18next` to 18.0.1, `@vitejs/plugin-react` to 6.3.0, and `vite` to
+8.3.7. These packages retain MIT licenses. The lock removes the
+`use-sync-external-store` shim and adds no package paths. Rolldown 1.2.18 and
+its optional binaries stay MIT build tooling under the unchanged upstream
+license. The console's translation helpers match the new i18next overloads,
+and the embedded assets are rebuilt from the reviewed Node 22 lock.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -567,17 +612,17 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `f5f9ef6631db7aa3e576388a1cd3306c67d9fae5`
 - `go.sum`: `c838c88b891fc02db2bc14cbe3017cfdf08e46cf`
-- `web/package.json`: `1b751f198e9e5c152cff8b6dc974667bcd3a2e37`
-- `web/package-lock.json`: `6e08b4e385761c8207c25e286057ef7487caec8f`
-- `tests/compatibility/go/go.mod`: `2ae800a3be32f0a292f5687bb19cfefdc5a3d997`
-- `tests/compatibility/go/go.sum`: `143e853813d133ca51a3072792146408073101e9`
-- `tests/compatibility/node/package.json`: `5d6d3511925689da5e8b2d05ef20f31685321b8a`
-- `tests/compatibility/node/package-lock.json`: `b2fcb4114be5f3d83069da1f50f0115f6bfa14bd`
-- `tests/compatibility/python/requirements.in`: `2f1d85bd1d30eaf3338abc05d1d5607bfec61622`
-- `tests/compatibility/python/requirements.txt`: `7ece297549dc5ac570ab879bd9a26398d2d128e5`
+- `web/package.json`: `dfe436bfb8cea30f76c399d8d4999575163db24a`
+- `web/package-lock.json`: `30cf3c5dbae878a2dd3b56ffcd639797b2dd4e2e`
+- `tests/compatibility/go/go.mod`: `773676f6449c95c2b9f3ea98d70003de7c4aa014`
+- `tests/compatibility/go/go.sum`: `504b5da47dd9e08145d2f8fcf0afc8f6a445d91c`
+- `tests/compatibility/node/package.json`: `9ea13eaa9cbe048115e33eb6eb672e48025db057`
+- `tests/compatibility/node/package-lock.json`: `4e9519004b74a3696acaa9a9f1829e2dc5c31609`
+- `tests/compatibility/python/requirements.in`: `7a97cfab0a029086015babb6ee01fd00cf4428a7`
+- `tests/compatibility/python/requirements.txt`: `c1b7932c641ad2109ebd105e4b87b335bfd38656`
 
-The Python lock hash last moved for the 2026-10-24 `filelock` refresh. All ten
-hashes moved before that for the 2026-10-23 refreshes recorded above, and
+The Python lock hash records the 2026-11-15 OpenTelemetry patch above.
+All ten hashes moved for the 2026-10-23 refreshes recorded above, and
 before that for the 2026-10-17 refreshes. Before
 that the Go hashes moved for the 2026-09-18 Go refresh, and the two web hashes
 for the 2026-09-18 Admin UI refresh, before

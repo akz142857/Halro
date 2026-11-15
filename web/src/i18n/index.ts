@@ -5,6 +5,12 @@ export const supportedLocales = ["zh-CN", "en-US"] as const;
 export type SupportedLocale = (typeof supportedLocales)[number];
 export type LocalePreference = SupportedLocale | "system";
 
+// i18next declares one-argument and two-argument calls separately.
+export interface Translate {
+  (key: string): string;
+  (key: string, options: Record<string, unknown>): string;
+}
+
 export function supportedLocale(value?: string | null): SupportedLocale | undefined {
   if (!value) return undefined;
   const normalized = value.replace("_", "-").toLowerCase();

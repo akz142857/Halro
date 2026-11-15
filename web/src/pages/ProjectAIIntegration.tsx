@@ -9,7 +9,7 @@ import "./ProjectAIIntegration.css";
 
 type Feedback = "" | "pending" | "success" | "failure";
 
-export function ProjectAIIntegration({ project, onClose }: { project: Project; onClose: () => void }) {
+export function ProjectAIIntegration({ project, preferredModel, onClose }: { project: Project; preferredModel?: string; onClose: () => void }) {
   const { t, i18n } = useTranslation();
   // This read stays available when execution in the developer workbench is off.
   // Never derive a Gateway address from the browser's Admin origin.
@@ -18,8 +18,8 @@ export function ProjectAIIntegration({ project, onClose }: { project: Project; o
   const [addressEdited, setAddressEdited] = useState(false);
   const baseURL = addressEdited ? address : config.data?.gateway_base_url ?? "";
   const models = Array.from(new Set((project.allowed_models ?? []).filter((value) => typeof value === "string" && value.trim())));
-  const [model, setModel] = useState(models[0] ?? "");
-  const selectedModel = models.includes(model) ? model : models[0] ?? "";
+  const [model, setModel] = useState("");
+  const selectedModel = models.includes(model) ? model : preferredModel && models.includes(preferredModel) ? preferredModel : models[0] ?? "";
   const [endpoint, setEndpoint] = useState<IntegrationEndpoint>("responses");
   const locale = i18n.resolvedLanguage === "en-US" ? "en-US" : "zh-CN";
   const validURL = validGatewayBaseURL(baseURL);

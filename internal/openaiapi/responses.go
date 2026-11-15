@@ -311,11 +311,17 @@ type ResponseUsage struct {
 	TotalTokens         int64                `json:"total_tokens"`
 }
 
+type CacheWriteTokenDetails struct {
+	TTL30mTokens int64 `json:"ttl_30m_tokens"`
+	TTL12hTokens int64 `json:"ttl_12h_tokens"`
+}
+
 type ResponseTokenDetails struct {
-	CachedTokens     int64 `json:"cached_tokens,omitempty"`
-	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
-	ReasoningTokens  int64 `json:"reasoning_tokens,omitempty"`
-	AudioTokens      int64 `json:"audio_tokens,omitempty"`
+	CachedTokens            int64                   `json:"cached_tokens,omitempty"`
+	CacheWriteTokens        int64                   `json:"cache_write_tokens,omitempty"`
+	CacheWriteTokensDetails *CacheWriteTokenDetails `json:"cache_write_tokens_details,omitempty"`
+	ReasoningTokens         int64                   `json:"reasoning_tokens,omitempty"`
+	AudioTokens             int64                   `json:"audio_tokens,omitempty"`
 }
 
 type ResponseStreamEvent struct {

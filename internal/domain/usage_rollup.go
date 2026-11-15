@@ -211,9 +211,10 @@ type DailyRollup struct {
 	UnknownAttempts        int64 `json:"unknown_attempts"`
 	LatencyMillis          int64 `json:"latency_millis"`
 
-	ProviderCachedInputTokens     int64 `json:"provider_cached_input_tokens"`
-	ProviderCacheWriteInputTokens int64 `json:"provider_cache_write_input_tokens"`
-	ProviderReasoningTokens       int64 `json:"provider_reasoning_tokens"`
+	ProviderCachedInputTokens         int64 `json:"provider_cached_input_tokens"`
+	ProviderCacheWriteInputTokens     int64 `json:"provider_cache_write_input_tokens"`
+	ProviderCacheWriteLongInputTokens int64 `json:"provider_cache_write_long_input_tokens"`
+	ProviderReasoningTokens           int64 `json:"provider_reasoning_tokens"`
 
 	RequestLatencyBuckets  [RollupLatencyBuckets]uint64 `json:"request_latency_buckets"`
 	RequestLatencyOverflow uint64                       `json:"request_latency_overflow"`
@@ -288,6 +289,7 @@ func (d *DailyRollup) Add(other DailyRollup) error {
 		{&d.LatencyMillis, other.LatencyMillis},
 		{&d.ProviderCachedInputTokens, other.ProviderCachedInputTokens},
 		{&d.ProviderCacheWriteInputTokens, other.ProviderCacheWriteInputTokens},
+		{&d.ProviderCacheWriteLongInputTokens, other.ProviderCacheWriteLongInputTokens},
 		{&d.ProviderReasoningTokens, other.ProviderReasoningTokens},
 		{&d.RequestLatencySamples, other.RequestLatencySamples},
 		{&d.RequestLatencyMillis, other.RequestLatencyMillis},

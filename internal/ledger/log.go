@@ -896,15 +896,13 @@ func (l *Log) writerLoop() {
 			// derived ceiling optimistic.
 			started := time.Now()
 			batch := l.collectBatch(first)
-			l.writeBatch(batch)
-			l.batchNanos.Add(int64(time.Since(started)))
+			l.writeBatch(batch, started)
 		case <-l.closeSignal:
 			for {
 				select {
 				case request := <-l.appendQueue:
 					started := time.Now()
-					l.writeBatch(l.collectBatch(request))
-					l.batchNanos.Add(int64(time.Since(started)))
+					l.writeBatch(l.collectBatch(request), started)
 				default:
 					return
 				}
@@ -942,19 +940,32 @@ func (l *Log) collectBatch(first appendRequest) []appendRequest {
 	return batch
 }
 
-func (l *Log) writeBatch(batch []appendRequest) {
+func (l *Log) writeBatch(batch []appendRequest, started time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	var syncDuration time.Duration
+	var syncAttempted bool
+	finish := func(watermarks []Watermark, replicationIndex uint64, err error) {
+		// Publish the containing duration first. Stats reads sync duration
+		// before batch duration, so it can never see the barrier alone.
+		// Complete both updates before waking any append caller.
+		l.batchNanos.Add(int64(time.Since(started)))
+		if syncAttempted {
+			l.syncNanos.Add(int64(syncDuration))
+			l.syncs.Add(1)
+		}
+		respondBatchWithReplication(batch, watermarks, replicationIndex, err)
+	}
 	if l.file == nil {
-		respondBatch(batch, nil, errors.New("ledger is closed"))
+		finish(nil, 0, errors.New("ledger is closed"))
 		return
 	}
 	if l.status.Load() != AccountingHealthy {
-		respondBatch(batch, nil, errors.New("accounting is not healthy"))
+		finish(nil, 0, errors.New("accounting is not healthy"))
 		return
 	}
 	if len(l.chainKey) != 32 {
-		respondBatch(batch, nil, errors.New("ledger requires a chain key to append authenticated frames"))
+		finish(nil, 0, errors.New("ledger requires a chain key to append authenticated frames"))
 		return
 	}
 	sequence := l.sequence
@@ -970,7 +981,7 @@ func (l *Log) writeBatch(batch []appendRequest) {
 		sequence++
 		frame, nextHash := encodeChainFrameVersion(frameVersionRunAttribution, l.chainKey, sequence, request.event.Kind, request.payload, previousHash)
 		if _, err := encoded.Write(frame); err != nil {
-			respondBatch(batch, nil, fmt.Errorf("encode ledger batch: %w", err))
+			finish(nil, 0, fmt.Errorf("encode ledger batch: %w", err))
 			return
 		}
 		offset += int64(len(frame))
@@ -985,13 +996,13 @@ func (l *Log) writeBatch(batch []appendRequest) {
 	if _, err := l.file.Seek(l.offset, io.SeekStart); err != nil {
 		l.status.MarkUnavailable()
 		l.appendErrors.Add(uint64(len(batch)))
-		respondBatch(batch, nil, fmt.Errorf("seek ledger tail: %w", err))
+		finish(nil, 0, fmt.Errorf("seek ledger tail: %w", err))
 		return
 	}
 	if err := writeFull(l.durability, encoded.Bytes()); err != nil {
 		l.status.MarkUnavailable()
 		l.appendErrors.Add(uint64(len(batch)))
-		respondBatch(batch, nil, fmt.Errorf("append ledger: %w", err))
+		finish(nil, 0, fmt.Errorf("append ledger: %w", err))
 		return
 	}
 	// Timed on both paths: a failing fsync is usually a slow one first, and a
@@ -999,12 +1010,12 @@ func (l *Log) writeBatch(batch []appendRequest) {
 	// an operator is trying to see.
 	syncStarted := time.Now()
 	syncErr := l.durability.Sync()
-	l.syncNanos.Add(int64(time.Since(syncStarted)))
-	l.syncs.Add(1)
+	syncDuration = time.Since(syncStarted)
+	syncAttempted = true
 	if syncErr != nil {
 		l.status.MarkUnavailable()
 		l.appendErrors.Add(uint64(len(batch)))
-		respondBatch(batch, nil, fmt.Errorf("sync ledger: %w", syncErr))
+		finish(nil, 0, fmt.Errorf("sync ledger: %w", syncErr))
 		return
 	}
 	// Past the barrier: these bytes are committed, so they join the generation's
@@ -1032,21 +1043,17 @@ func (l *Log) writeBatch(batch []appendRequest) {
 		if err != nil {
 			l.status.MarkUnavailable()
 			l.appendErrors.Add(uint64(len(batch)))
-			respondBatch(batch, nil, fmt.Errorf("record durable ledger batch for replication: %w", err))
+			finish(nil, 0, fmt.Errorf("record durable ledger batch for replication: %w", err))
 			return
 		}
 		if replicationIndex == 0 {
 			l.status.MarkUnavailable()
 			l.appendErrors.Add(uint64(len(batch)))
-			respondBatch(batch, nil, errors.New("record durable ledger batch for replication: callback returned index zero"))
+			finish(nil, 0, errors.New("record durable ledger batch for replication: callback returned index zero"))
 			return
 		}
 	}
-	respondBatchWithReplication(batch, watermarks, replicationIndex, nil)
-}
-
-func respondBatch(batch []appendRequest, watermarks []Watermark, err error) {
-	respondBatchWithReplication(batch, watermarks, 0, err)
+	finish(watermarks, replicationIndex, nil)
 }
 
 func respondBatchWithReplication(batch []appendRequest, watermarks []Watermark, replicationIndex uint64, err error) {
