@@ -184,7 +184,7 @@ func TestResponsesAdapterValidatesStreamLifecycleAndUsage(t *testing.T) {
 		body := strings.Join([]string{
 			`event: response.created`, `data: {"type":"response.created","response":{"id":"resp_1","object":"response","created_at":7,"status":"in_progress","model":"amazon.nova-pro","output":[]}}`, ``,
 			`event: response.output_text.delta`, `data: {"type":"response.output_text.delta","delta":"hello"}`, ``,
-			`event: response.completed`, `data: {"type":"response.completed","response":{"id":"resp_1","object":"response","created_at":7,"status":"completed","model":"amazon.nova-pro","output":[],"usage":{"input_tokens":2,"input_tokens_details":{},"output_tokens":1,"output_tokens_details":{},"total_tokens":3}}}`, ``, ``,
+			`event: response.completed`, `data: {"type":"response.completed","response":{"id":"resp_1","object":"response","created_at":7,"status":"completed","model":"amazon.nova-pro","output":[],"usage":{"input_tokens":2,"input_tokens_details":{"cache_write_tokens":2,"cache_write_tokens_details":{"ttl_30m_tokens":1,"ttl_12h_tokens":1}},"output_tokens":1,"output_tokens_details":{},"total_tokens":3}}}`, ``, ``,
 		}, "\n")
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 	}))
@@ -196,7 +196,7 @@ func TestResponsesAdapterValidatesStreamLifecycleAndUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 3 || events[0].Outputs[0].Content[0].Text != "hello" || events[1].Outputs[0].Termination != "complete" || events[2].Kind != semantic.EventUsage || usage == nil || usage.TotalTokens != 3 {
+	if len(events) != 3 || events[0].Outputs[0].Content[0].Text != "hello" || events[1].Outputs[0].Termination != "complete" || events[2].Kind != semantic.EventUsage || usage == nil || usage.TotalTokens != 3 || usage.CacheWritePromptTokens() != 2 || usage.CacheWriteLongTokens != 1 {
 		t.Fatalf("unexpected stream events=%#v usage=%#v", events, usage)
 	}
 }

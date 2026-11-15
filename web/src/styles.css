@@ -834,7 +834,7 @@ button.deployment-condition-text:hover { text-decoration-style: solid; }
 .price-schedule-window-head { display: flex; gap: var(--space-3); align-items: flex-end; justify-content: space-between; flex-wrap: wrap; }
 .price-schedule-window-head > .button { flex: 0 0 auto; }
 .price-schedule-range { display: grid; grid-template-columns: repeat(2, minmax(0, 7rem)); gap: var(--space-3); }
-.price-schedule-rates { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3); }
+.price-schedule-rates { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
 .price-schedule-window label { display: grid; gap: var(--space-1); min-width: 0; }
 .price-schedule-window label > span { color: var(--color-text-secondary); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); }
 .price-schedule-window input { min-width: 0; font-variant-numeric: tabular-nums; }

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 // What a profile serves, declared once.
@@ -226,6 +227,24 @@ func profileAllowsPrimitiveDerived(profileID domain.ProviderProfileID, operation
 	for _, binding := range row.Bindings {
 		if binding.Operation == operation {
 			return binding.Primitive == primitive
+		}
+	}
+	return false
+}
+
+// ResourcePrimitiveUsesOrdinaryInputEstimate identifies the resource
+// operations that account for synthetic units. Pending leases already pin
+// the provider profile and primitive, so recovery can recover the estimate
+// rule without storing a second copy of their operation.
+func ResourcePrimitiveUsesOrdinaryInputEstimate(profileID domain.ProviderProfileID, primitive Primitive) bool {
+	for _, binding := range profileOperationTable[profileID].Bindings {
+		if binding.Primitive == primitive {
+			switch semanticOperationFor(binding.Operation) {
+			case semantic.OperationGenerate, semantic.OperationEmbed, "":
+				return false
+			default:
+				return true
+			}
 		}
 	}
 	return false

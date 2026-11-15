@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -2621,5 +2622,27 @@ func TestProjectMaxStreamDurationEndsAStreamThatOutlivesIt(t *testing.T) {
 	took, err = stream(0, 300*time.Millisecond)
 	if err == nil || took < 300*time.Millisecond {
 		t.Fatalf("a Project with no limit of its own ended its stream at %s (%v), before the caller's deadline", took, err)
+	}
+}
+
+func TestCacheWriteSettlementUsesPreparedBoundsOnPriceOverflow(t *testing.T) {
+	target := provider.Target{CacheWriteLongMicrosPerMillion: math.MaxInt64}
+	const preparedInput = 10
+	const reportedLong = 1_000_001
+	tier := target.PriceTier()
+	reservation, err := tier.ReservationCost(preparedInput, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := settlementForResult(semantic.GenerateResult{Usage: &semantic.Usage{
+		InputTokens: reportedLong, CacheWriteInputTokens: reportedLong, CacheWriteLongInputTokens: reportedLong,
+		TotalTokens: reportedLong, Source: semantic.UsageProviderReported,
+	}}, nil, preparedInput, 0, target, reservation)
+	cost, err := tier.Calculate(domain.BilledTokens{Input: result.ProviderInputTokens, CachedInput: result.ProviderCachedInputTokens,
+		CacheWrite: result.ProviderCacheWriteInputTokens, CacheWriteLong: result.ProviderCacheWriteLongInputTokens, Output: result.ProviderOutputTokens})
+	if err != nil || !result.TokenEstimated || !result.CostEstimated || result.ProviderInputTokens != preparedInput ||
+		result.ProviderCacheWriteLongInputTokens != preparedInput || result.CommittedMicrosUSD != cost.TotalCostMicrosUSD ||
+		result.CommittedMicrosUSD > reservation {
+		t.Fatalf("settlement=%+v cost=%+v reservation=%d err=%v", result, cost, reservation, err)
 	}
 }

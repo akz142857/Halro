@@ -314,8 +314,12 @@ func (r *Runtime) prepareConfigurationImport(request *http.Request, input config
 		Notices: append([]configurationNotice(nil), b.Omissions...),
 	}
 	config := boltstore.PortableConfiguration{Prices: make(map[string]domain.DeploymentPriceVersion)}
+	if b.Version == 1 {
+		preview.issue("bundle", "", "reexport_required", errors.New("configuration bundle version 1 lacks cache write prices. Upgrade the source instance and export the configuration again"))
+		return preview, config, nil
+	}
 	if b.Version != configurationBundleVersion {
-		preview.issue("bundle", "", "unsupported_version", errors.New("unsupported configuration bundle version"))
+		preview.issue("bundle", "", "unsupported_version", fmt.Errorf("unsupported configuration bundle version %d, expected version %d", b.Version, configurationBundleVersion))
 		return preview, config, nil
 	}
 	if b.recordCount() == 0 || b.recordCount() > configurationRecordLimit {
@@ -377,8 +381,8 @@ func (r *Runtime) prepareConfigurationImport(request *http.Request, input config
 		}
 		if item.Price != nil {
 			admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
-			price := item.Price.version(item.ID, admin.session.Username, now)
-			if err := price.Validate(); err != nil {
+			price, err := item.Price.version(item.ID, admin.session.Username, now)
+			if err != nil {
 				preview.issue("deployments", item.ID, "invalid_price", err)
 				continue
 			}
@@ -543,18 +547,46 @@ func (r *Runtime) prepareConfigurationDeployment(request *http.Request, instance
 	return deployment, nil
 }
 
-func (p configurationPrice) version(deploymentID, actor string, now time.Time) domain.DeploymentPriceVersion {
-	return domain.DeploymentPriceVersion{
+func (p configurationPrice) version(deploymentID, actor string, now time.Time) (domain.DeploymentPriceVersion, error) {
+	if err := p.configurationPriceRates.requireWriteRates(); err != nil {
+		return domain.DeploymentPriceVersion{}, err
+	}
+	price := domain.DeploymentPriceVersion{
 		ID: "price_import_" + deploymentID, DeploymentID: deploymentID, Version: 1, Revision: 1,
 		BillingMode: p.BillingMode, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
 		InputMicrosPerMillion: p.InputMicrosPerMillion, CachedInputMicrosPerMillion: p.CachedInputMicrosPerMillion,
-		OutputMicrosPerMillion: p.OutputMicrosPerMillion, FixedRequestMicrosUSD: p.FixedRequestMicrosUSD, Schedule: p.Schedule,
+		CacheWriteMicrosPerMillion: *p.CacheWriteMicrosPerMillion, CacheWriteLongMicrosPerMillion: *p.CacheWriteLongMicrosPerMillion,
+		OutputMicrosPerMillion: p.OutputMicrosPerMillion, FixedRequestMicrosUSD: p.FixedRequestMicrosUSD,
 		CreatedBy: actor, CreatedAt: now, EffectiveFrom: now,
 		Source: domain.PriceSource{
 			Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted, Reference: "Configuration import",
 			AssertedWithoutArchive: true, ReceivedAt: now,
 		},
 	}
+	if p.Schedule != nil {
+		price.Schedule = &domain.PriceSchedule{
+			Timezone: p.Schedule.Timezone, Windows: make([]domain.PriceWindow, 0, len(p.Schedule.Windows)),
+		}
+		for i, window := range p.Schedule.Windows {
+			if err := window.configurationPriceRates.requireWriteRates(); err != nil {
+				return domain.DeploymentPriceVersion{}, fmt.Errorf("price schedule window %d: %w", i+1, err)
+			}
+			price.Schedule.Windows = append(price.Schedule.Windows, domain.PriceWindow{
+				StartMinute: window.StartMinute, EndMinute: window.EndMinute,
+				InputMicrosPerMillion: window.InputMicrosPerMillion, CachedInputMicrosPerMillion: window.CachedInputMicrosPerMillion,
+				CacheWriteMicrosPerMillion: *window.CacheWriteMicrosPerMillion, CacheWriteLongMicrosPerMillion: *window.CacheWriteLongMicrosPerMillion,
+				OutputMicrosPerMillion: window.OutputMicrosPerMillion, FixedRequestMicrosUSD: window.FixedRequestMicrosUSD,
+			})
+		}
+	}
+	return price, price.Validate()
+}
+
+func (rates configurationPriceRates) requireWriteRates() error {
+	if rates.CacheWriteMicrosPerMillion == nil || rates.CacheWriteLongMicrosPerMillion == nil {
+		return errors.New("price must specify both cache_write_micros_per_million and cache_write_long_micros_per_million")
+	}
+	return nil
 }
 
 func (p *configurationImportPreview) prepareProjects(b configurationBundle, aliases map[string]struct{}, now time.Time, config *boltstore.PortableConfiguration) {

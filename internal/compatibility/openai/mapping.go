@@ -482,14 +482,15 @@ func decodeUsage(usage *openaiapi.Usage) *semantic.Usage {
 	// PromptTokens already counts the cached span on this wire shape, so the
 	// tiers map straight onto the subset convention semantic.Usage documents.
 	decoded := &semantic.Usage{
-		InputTokens:           usage.PromptTokens,
-		CachedInputTokens:     usage.CachedPromptTokens(),
-		CacheWriteInputTokens: usage.CacheWritePromptTokens(),
-		OutputTokens:          usage.CompletionTokens,
-		ReasoningTokens:       usage.ReasoningTokens(),
-		AudioTokens:           usage.AudioTokens(),
-		TotalTokens:           usage.TotalTokens,
-		Source:                semantic.UsageProviderReported,
+		InputTokens:               usage.PromptTokens,
+		CachedInputTokens:         usage.CachedPromptTokens(),
+		CacheWriteInputTokens:     usage.CacheWritePromptTokens(),
+		CacheWriteLongInputTokens: usage.CacheWriteLongTokens,
+		OutputTokens:              usage.CompletionTokens,
+		ReasoningTokens:           usage.ReasoningTokens(),
+		AudioTokens:               usage.AudioTokens(),
+		TotalTokens:               usage.TotalTokens,
+		Source:                    semantic.UsageProviderReported,
 	}
 	// DeepSeek partitions the prompt into hit and miss counters instead of
 	// nesting the read tier in prompt_tokens_details, and documents
@@ -524,10 +525,11 @@ func renderUsage(usage *semantic.Usage) *openaiapi.Usage {
 		return nil
 	}
 	rendered := &openaiapi.Usage{
-		PromptTokens:     usage.InputTokens,
-		CompletionTokens: usage.OutputTokens,
-		TotalTokens:      usage.TotalTokens,
-		CacheWriteTokens: usage.CacheWriteInputTokens,
+		PromptTokens:         usage.InputTokens,
+		CompletionTokens:     usage.OutputTokens,
+		TotalTokens:          usage.TotalTokens,
+		CacheWriteTokens:     usage.CacheWriteInputTokens,
+		CacheWriteLongTokens: usage.CacheWriteLongInputTokens,
 	}
 	rendered.SetCachedPromptTokens(usage.CachedInputTokens)
 	if usage.CacheWriteInputTokens != 0 {

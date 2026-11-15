@@ -42,7 +42,7 @@ func TestAdminDeploymentPriceLifecycleUsesVersionedTimelineAndAuditIntent(t *tes
 	body := map[string]any{
 		"billing_mode": "metered", "currency": "USD",
 		"current_password":      "correct horse battery staple",
-		"input_usd_per_million": "0.40", "cached_input_usd_per_million": "0.04", "output_usd_per_million": "1.60", "fixed_request_usd": "0",
+		"input_usd_per_million": "0.40", "cached_input_usd_per_million": "0.04", "cache_write_usd_per_million": "0.40", "cache_write_long_usd_per_million": "0.40", "output_usd_per_million": "1.60", "fixed_request_usd": "0",
 		"effective_from": effective.Format(time.RFC3339),
 		"source": map[string]any{
 			"type": "manual", "reference": "official_public_price", "asserted_without_archive": true,
@@ -156,7 +156,7 @@ func TestImmediateFreePriceUsesServerTimeAndIsImmediatelySelectable(t *testing.T
 	now := time.Date(2026, 8, 10, 6, 0, 0, 0, time.UTC)
 	price, err := priceVersionFromInput("price_immediate", "deployment_immediate", "admin", now, createPriceInput{
 		BillingMode: domain.BillingModeFree, Currency: "USD",
-		InputUSDPerMillion: "0", CachedInputUSDPerMillion: "0", OutputUSDPerMillion: "0", FixedRequestUSD: "0",
+		priceRatesInput:      priceRatesInput{InputUSDPerMillion: "0", CachedInputUSDPerMillion: "0", CacheWriteUSDPerMillion: "0", CacheWriteLongUSDPerMillion: "0", OutputUSDPerMillion: "0", FixedRequestUSD: "0"},
 		EffectiveImmediately: true,
 		Source:               priceSourceInput{Type: domain.PriceSourceManual, Reference: "temporary_estimate", AssertedWithoutArchive: true},
 	})
@@ -173,6 +173,17 @@ func TestImmediateFreePriceUsesServerTimeAndIsImmediatelySelectable(t *testing.T
 	}
 	if selected.ID != price.ID || selected.BillingMode != domain.BillingModeFree {
 		t.Fatalf("selected price=%#v", selected)
+	}
+}
+
+func TestPriceWriteRatesMustBeExplicit(t *testing.T) {
+	for _, rates := range []priceRatesInput{
+		{InputUSDPerMillion: "1", CachedInputUSDPerMillion: "0", CacheWriteUSDPerMillion: "1.25", OutputUSDPerMillion: "0", FixedRequestUSD: "0"},
+		{InputUSDPerMillion: "1", CachedInputUSDPerMillion: "0", CacheWriteLongUSDPerMillion: "2", OutputUSDPerMillion: "0", FixedRequestUSD: "0"},
+	} {
+		if _, err := rates.parse(); err == nil {
+			t.Fatalf("price input accepted with a missing write rate: %+v", rates)
+		}
 	}
 }
 
@@ -200,7 +211,7 @@ func TestAdminImmediateFreePriceIsActiveAndIdempotent(t *testing.T) {
 	cookie, csrf := loginAdminForTest(t, runtime)
 	body := map[string]any{
 		"billing_mode": "free", "currency": "USD",
-		"input_usd_per_million": "0", "cached_input_usd_per_million": "0", "output_usd_per_million": "0", "fixed_request_usd": "0",
+		"input_usd_per_million": "0", "cached_input_usd_per_million": "0", "cache_write_usd_per_million": "0", "cache_write_long_usd_per_million": "0", "output_usd_per_million": "0", "fixed_request_usd": "0",
 		"effective_immediately": true, "current_password": "correct horse battery staple",
 		"source": map[string]any{"type": "manual", "reference": "temporary_estimate", "asserted_without_archive": true},
 	}
@@ -308,7 +319,7 @@ func TestPriceCreationAuditCarriesTheSameSourceEvidenceWhicheverWayItTakesEffect
 	price := func(extra map[string]any) map[string]any {
 		body := map[string]any{
 			"billing_mode": "metered", "currency": "USD", "current_password": "correct horse battery staple",
-			"input_usd_per_million": "0.40", "cached_input_usd_per_million": "0.04", "output_usd_per_million": "1.60", "fixed_request_usd": "0",
+			"input_usd_per_million": "0.40", "cached_input_usd_per_million": "0.04", "cache_write_usd_per_million": "0.40", "cache_write_long_usd_per_million": "0.40", "output_usd_per_million": "1.60", "fixed_request_usd": "0",
 			"source": source,
 		}
 		for key, value := range extra {
@@ -378,7 +389,7 @@ func TestPriceCreationRequiresExactlyOneWayOfTakingEffect(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			body := map[string]any{
 				"billing_mode": "metered", "currency": "USD", "current_password": "correct horse battery staple",
-				"input_usd_per_million": "0.40", "cached_input_usd_per_million": "0.04", "output_usd_per_million": "1.60", "fixed_request_usd": "0",
+				"input_usd_per_million": "0.40", "cached_input_usd_per_million": "0.04", "cache_write_usd_per_million": "0.40", "cache_write_long_usd_per_million": "0.40", "output_usd_per_million": "1.60", "fixed_request_usd": "0",
 				"source": map[string]any{"type": "manual", "reference": "official_public_price", "asserted_without_archive": true},
 			}
 			for key, value := range testCase.when {
@@ -425,7 +436,7 @@ func TestAdminFreePriceRequiresReauthentication(t *testing.T) {
 	defer runtime.Close()
 	cookie, csrf := loginAdminForTest(t, runtime)
 	request := adminRequest(t, http.MethodPost, "/admin/api/v1/deployments/missing/prices", map[string]any{
-		"billing_mode": "free", "currency": "USD", "input_usd_per_million": "0", "cached_input_usd_per_million": "0", "output_usd_per_million": "0", "fixed_request_usd": "0",
+		"billing_mode": "free", "currency": "USD", "input_usd_per_million": "0", "cached_input_usd_per_million": "0", "cache_write_usd_per_million": "0", "cache_write_long_usd_per_million": "0", "output_usd_per_million": "0", "fixed_request_usd": "0",
 		"effective_from": time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
 		"source":         map[string]any{"type": "manual", "reference": "free tier", "asserted_without_archive": true},
 	})
@@ -462,7 +473,7 @@ func TestAdminPriceProposalNeverActivatesUntilReviewedAndAdopted(t *testing.T) {
 	cookie, csrf := loginAdminForTest(t, runtime)
 	now := time.Now().UTC()
 	body := map[string]any{
-		"billing_mode": "metered", "currency": "USD", "input_usd_per_million": "0.50", "cached_input_usd_per_million": "0.05",
+		"billing_mode": "metered", "currency": "USD", "input_usd_per_million": "0.50", "cached_input_usd_per_million": "0.05", "cache_write_usd_per_million": "0.50", "cache_write_long_usd_per_million": "0.50",
 		"output_usd_per_million": "2.00", "fixed_request_usd": "0", "match": "exact",
 		"expires_at": now.Add(24 * time.Hour).Format(time.RFC3339), "warnings": []string{"LLM-extracted; verify source before adoption"},
 		"source": map[string]any{
@@ -537,7 +548,7 @@ func TestAdoptingAPriceProposalTakesEffectOnTheSameTermsAsCreatingOne(t *testing
 	runtime, bootstrap, cookie, csrf := openPricingRuntimeForTest(t, "Proposal adoption")
 	now := time.Now().UTC()
 	proposalRequest := adminRequest(t, http.MethodPost, "/admin/api/v1/deployments/"+bootstrap.DeploymentID+"/price-proposals", map[string]any{
-		"billing_mode": "metered", "currency": "USD", "input_usd_per_million": "0.50", "cached_input_usd_per_million": "0.05",
+		"billing_mode": "metered", "currency": "USD", "input_usd_per_million": "0.50", "cached_input_usd_per_million": "0.05", "cache_write_usd_per_million": "0.50", "cache_write_long_usd_per_million": "0.50",
 		"output_usd_per_million": "2.00", "fixed_request_usd": "0", "match": "exact",
 		"expires_at": now.Add(24 * time.Hour).Format(time.RFC3339),
 		"source": map[string]any{
@@ -632,12 +643,12 @@ func TestScheduledPriceRoundTripsThroughTheAdminAPIAndPricesEveryTier(t *testing
 	body := map[string]any{
 		"billing_mode": "metered", "currency": "USD",
 		"current_password":      "correct horse battery staple",
-		"input_usd_per_million": "0.20", "cached_input_usd_per_million": "0.02", "output_usd_per_million": "0.80", "fixed_request_usd": "0",
+		"input_usd_per_million": "0.20", "cached_input_usd_per_million": "0.02", "cache_write_usd_per_million": "0.25", "cache_write_long_usd_per_million": "0.40", "output_usd_per_million": "0.80", "fixed_request_usd": "0",
 		"schedule": map[string]any{
 			"timezone": "Asia/Shanghai",
 			"windows": []map[string]any{
-				{"start": "09:00", "end": "12:00", "input_usd_per_million": "0.40", "cached_input_usd_per_million": "0.04", "output_usd_per_million": "1.60", "fixed_request_usd": "0"},
-				{"start": "14:00", "end": "18:00", "input_usd_per_million": "0.40", "cached_input_usd_per_million": "0.04", "output_usd_per_million": "1.60", "fixed_request_usd": "0"},
+				{"start": "09:00", "end": "12:00", "input_usd_per_million": "0.40", "cached_input_usd_per_million": "0.04", "cache_write_usd_per_million": "0.50", "cache_write_long_usd_per_million": "0.80", "output_usd_per_million": "1.60", "fixed_request_usd": "0"},
+				{"start": "14:00", "end": "18:00", "input_usd_per_million": "0.40", "cached_input_usd_per_million": "0.04", "cache_write_usd_per_million": "0.50", "cache_write_long_usd_per_million": "0.80", "output_usd_per_million": "1.60", "fixed_request_usd": "0"},
 			},
 		},
 		"effective_from": effective.Format(time.RFC3339),
@@ -674,6 +685,7 @@ func TestScheduledPriceRoundTripsThroughTheAdminAPIAndPricesEveryTier(t *testing
 			previewBody[key] = value
 		}
 		previewBody["input_tokens"], previewBody["output_tokens"], previewBody["at"] = 1_000_000, 0, instant
+		previewBody["cache_write_input_tokens"], previewBody["cache_write_long_input_tokens"] = 500_000, 200_000
 		response := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost,
 			"/admin/api/v1/deployments/"+bootstrap.DeploymentID+"/prices/preview", "", previewBody)
 		if response.Code != http.StatusOK {
@@ -702,12 +714,12 @@ func TestScheduledPriceRoundTripsThroughTheAdminAPIAndPricesEveryTier(t *testing
 	}
 	// 02:00Z is 10:00 in Shanghai and inside the morning peak.
 	peak := previewAt("2026-08-18T02:00:00Z")
-	if peak["cost"] != int64(400_000) || peak["selected"] != "window09:00" || peak["tiers"] != 3 {
+	if peak["cost"] != int64(510_000) || peak["selected"] != "window09:00" || peak["tiers"] != 3 {
 		t.Fatalf("peak preview=%#v", peak)
 	}
 	// 05:00Z is 13:00, the gap between the two peaks, billed at the base rate.
 	gap := previewAt("2026-08-18T05:00:00Z")
-	if gap["cost"] != int64(200_000) || gap["selected"] != "base" {
+	if gap["cost"] != int64(255_000) || gap["selected"] != "base" {
 		t.Fatalf("gap preview=%#v", gap)
 	}
 }

@@ -43,12 +43,46 @@ type priceSourceInput struct {
 // it: local clock strings the operator typed, and USD-per-million decimals in
 // the same shape as the base rates beside them.
 type priceWindowInput struct {
-	Start                    string `json:"start"`
-	End                      string `json:"end"`
-	InputUSDPerMillion       string `json:"input_usd_per_million"`
-	CachedInputUSDPerMillion string `json:"cached_input_usd_per_million"`
-	OutputUSDPerMillion      string `json:"output_usd_per_million"`
-	FixedRequestUSD          string `json:"fixed_request_usd"`
+	Start string `json:"start"`
+	End   string `json:"end"`
+	priceRatesInput
+}
+
+// priceRatesInput is one rate table as the console sends it, shared by a price
+// version, a proposal and each window of a schedule so that a term added to one
+// cannot be left out of another. Every term is required: an omitted rate parses
+// as an error rather than zero, because zero would silently make that span free
+// for the life of the price — the cache-read and cache-write rates especially,
+// whose spans an operator rarely thinks about.
+type priceRatesInput struct {
+	InputUSDPerMillion          string `json:"input_usd_per_million"`
+	CachedInputUSDPerMillion    string `json:"cached_input_usd_per_million"`
+	CacheWriteUSDPerMillion     string `json:"cache_write_usd_per_million"`
+	CacheWriteLongUSDPerMillion string `json:"cache_write_long_usd_per_million"`
+	OutputUSDPerMillion         string `json:"output_usd_per_million"`
+	FixedRequestUSD             string `json:"fixed_request_usd"`
+}
+
+func (input priceRatesInput) parse() (domain.PriceTier, error) {
+	var tier domain.PriceTier
+	for _, field := range []struct {
+		value  string
+		target *int64
+	}{
+		{input.InputUSDPerMillion, &tier.InputMicrosPerMillion},
+		{input.CachedInputUSDPerMillion, &tier.CachedInputMicrosPerMillion},
+		{input.CacheWriteUSDPerMillion, &tier.CacheWriteMicrosPerMillion},
+		{input.CacheWriteLongUSDPerMillion, &tier.CacheWriteLongMicrosPerMillion},
+		{input.OutputUSDPerMillion, &tier.OutputMicrosPerMillion},
+		{input.FixedRequestUSD, &tier.FixedRequestMicrosUSD},
+	} {
+		micros, err := domain.ParseUSDMicros(field.value)
+		if err != nil {
+			return domain.PriceTier{}, err
+		}
+		*field.target = micros
+	}
+	return tier, nil
 }
 
 type priceScheduleInput struct {
@@ -57,18 +91,15 @@ type priceScheduleInput struct {
 }
 
 type createPriceInput struct {
-	BillingMode              domain.BillingMode  `json:"billing_mode"`
-	Currency                 string              `json:"currency"`
-	InputUSDPerMillion       string              `json:"input_usd_per_million"`
-	CachedInputUSDPerMillion string              `json:"cached_input_usd_per_million"`
-	OutputUSDPerMillion      string              `json:"output_usd_per_million"`
-	FixedRequestUSD          string              `json:"fixed_request_usd"`
-	Schedule                 *priceScheduleInput `json:"schedule,omitempty"`
-	EffectiveFrom            time.Time           `json:"effective_from"`
-	EffectiveImmediately     bool                `json:"effective_immediately,omitempty"`
-	Source                   priceSourceInput    `json:"source"`
-	CurrentPassword          string              `json:"current_password,omitempty"`
-	TOTPCode                 string              `json:"totp_code,omitempty"`
+	BillingMode domain.BillingMode `json:"billing_mode"`
+	Currency    string             `json:"currency"`
+	priceRatesInput
+	Schedule             *priceScheduleInput `json:"schedule,omitempty"`
+	EffectiveFrom        time.Time           `json:"effective_from"`
+	EffectiveImmediately bool                `json:"effective_immediately,omitempty"`
+	Source               priceSourceInput    `json:"source"`
+	CurrentPassword      string              `json:"current_password,omitempty"`
+	TOTPCode             string              `json:"totp_code,omitempty"`
 }
 
 // priceScheduleFromInput parses the operator's window table. The clock strings
@@ -89,18 +120,15 @@ func priceScheduleFromInput(input *priceScheduleInput) (*domain.PriceSchedule, e
 		if err != nil {
 			return nil, fmt.Errorf("schedule window %d end: %w", index, err)
 		}
-		rates := [4]int64{}
-		for position, value := range []string{window.InputUSDPerMillion, window.CachedInputUSDPerMillion, window.OutputUSDPerMillion, window.FixedRequestUSD} {
-			micros, err := domain.ParseUSDMicros(value)
-			if err != nil {
-				return nil, fmt.Errorf("schedule window %d: %w", index, err)
-			}
-			rates[position] = micros
+		rates, err := window.parse()
+		if err != nil {
+			return nil, fmt.Errorf("schedule window %d: %w", index, err)
 		}
 		schedule.Windows = append(schedule.Windows, domain.PriceWindow{
 			StartMinute: start, EndMinute: end,
-			InputMicrosPerMillion: rates[0], CachedInputMicrosPerMillion: rates[1],
-			OutputMicrosPerMillion: rates[2], FixedRequestMicrosUSD: rates[3],
+			InputMicrosPerMillion: rates.InputMicrosPerMillion, CachedInputMicrosPerMillion: rates.CachedInputMicrosPerMillion,
+			CacheWriteMicrosPerMillion: rates.CacheWriteMicrosPerMillion, CacheWriteLongMicrosPerMillion: rates.CacheWriteLongMicrosPerMillion,
+			OutputMicrosPerMillion: rates.OutputMicrosPerMillion, FixedRequestMicrosUSD: rates.FixedRequestMicrosUSD,
 		})
 	}
 	return &schedule, nil
@@ -295,9 +323,11 @@ type priceTierPreview struct {
 func (r *Runtime) previewAdminDeploymentPrice(writer http.ResponseWriter, request *http.Request) {
 	var input struct {
 		createPriceInput
-		InputTokens       int64 `json:"input_tokens"`
-		CachedInputTokens int64 `json:"cached_input_tokens"`
-		OutputTokens      int64 `json:"output_tokens"`
+		InputTokens               int64 `json:"input_tokens"`
+		CachedInputTokens         int64 `json:"cached_input_tokens"`
+		CacheWriteInputTokens     int64 `json:"cache_write_input_tokens"`
+		CacheWriteLongInputTokens int64 `json:"cache_write_long_input_tokens"`
+		OutputTokens              int64 `json:"output_tokens"`
 		// At is the instant to price at. A price that bills by time of day has
 		// no single cost, so the answer is meaningless without one; an omitted
 		// At is read as "now" rather than as "any time".
@@ -319,12 +349,17 @@ func (r *Runtime) previewAdminDeploymentPrice(writer http.ResponseWriter, reques
 	if !input.At.IsZero() {
 		at = input.At.UTC()
 	}
-	cost, err := domain.CalculateUSDTokensV1(input.InputTokens, input.CachedInputTokens, input.OutputTokens, price, at)
+	tokens := domain.BilledTokens{
+		Input: input.InputTokens, CachedInput: input.CachedInputTokens,
+		CacheWrite: input.CacheWriteInputTokens, CacheWriteLong: input.CacheWriteLongInputTokens,
+		Output: input.OutputTokens,
+	}
+	cost, err := domain.CalculateUSDTokensV1(tokens, price, at)
 	if err != nil {
 		writePriceError(writer, err)
 		return
 	}
-	tiers, err := previewPriceTiers(price, at, input.InputTokens, input.CachedInputTokens, input.OutputTokens)
+	tiers, err := previewPriceTiers(price, at, tokens)
 	if err != nil {
 		writePriceError(writer, err)
 		return
@@ -335,7 +370,7 @@ func (r *Runtime) previewAdminDeploymentPrice(writer http.ResponseWriter, reques
 // previewPriceTiers prices every rung the version can select, marking the one
 // that answers `at`. A version with no schedule has exactly one rung, which is
 // what the console showed before schedules existed.
-func previewPriceTiers(price domain.DeploymentPriceVersion, at time.Time, inputTokens, cachedInputTokens, outputTokens int64) ([]priceTierPreview, error) {
+func previewPriceTiers(price domain.DeploymentPriceVersion, at time.Time, tokens domain.BilledTokens) ([]priceTierPreview, error) {
 	selected := price.TierAt(at)
 	selectedStart := -1
 	if selected.Provenance != nil && selected.Provenance.StartMinute != nil {
@@ -346,11 +381,7 @@ func previewPriceTiers(price domain.DeploymentPriceVersion, at time.Time, inputT
 		timezone = price.Schedule.Timezone
 	}
 	previews := make([]priceTierPreview, 0, 1)
-	base := domain.PriceTier{
-		InputMicrosPerMillion: price.InputMicrosPerMillion, CachedInputMicrosPerMillion: price.CachedInputMicrosPerMillion,
-		OutputMicrosPerMillion: price.OutputMicrosPerMillion, FixedRequestMicrosUSD: price.FixedRequestMicrosUSD,
-	}
-	baseCost, err := priceTierCost(price.BillingMode, base, inputTokens, cachedInputTokens, outputTokens)
+	baseCost, err := priceTierCost(price.BillingMode, price.BaseTier(), tokens)
 	if err != nil {
 		return nil, err
 	}
@@ -362,11 +393,7 @@ func previewPriceTiers(price domain.DeploymentPriceVersion, at time.Time, inputT
 		return previews, nil
 	}
 	for _, window := range price.Schedule.Windows {
-		tier := domain.PriceTier{
-			InputMicrosPerMillion: window.InputMicrosPerMillion, CachedInputMicrosPerMillion: window.CachedInputMicrosPerMillion,
-			OutputMicrosPerMillion: window.OutputMicrosPerMillion, FixedRequestMicrosUSD: window.FixedRequestMicrosUSD,
-		}
-		windowCost, err := priceTierCost(price.BillingMode, tier, inputTokens, cachedInputTokens, outputTokens)
+		windowCost, err := priceTierCost(price.BillingMode, window.Tier(), tokens)
 		if err != nil {
 			return nil, err
 		}
@@ -379,11 +406,11 @@ func previewPriceTiers(price domain.DeploymentPriceVersion, at time.Time, inputT
 	return previews, nil
 }
 
-func priceTierCost(mode domain.BillingMode, tier domain.PriceTier, inputTokens, cachedInputTokens, outputTokens int64) (domain.PriceCostBreakdown, error) {
+func priceTierCost(mode domain.BillingMode, tier domain.PriceTier, tokens domain.BilledTokens) (domain.PriceCostBreakdown, error) {
 	if mode == domain.BillingModeFree {
 		return domain.PriceCostBreakdown{}, nil
 	}
-	return tier.Calculate(inputTokens, cachedInputTokens, outputTokens)
+	return tier.Calculate(tokens)
 }
 
 func formatClockMinute(minute int) string {
@@ -433,18 +460,15 @@ func (r *Runtime) confirmRestoredDeploymentPricing(writer http.ResponseWriter, r
 }
 
 type createPriceProposalInput struct {
-	BillingMode              domain.BillingMode        `json:"billing_mode"`
-	Currency                 string                    `json:"currency"`
-	InputUSDPerMillion       string                    `json:"input_usd_per_million"`
-	CachedInputUSDPerMillion string                    `json:"cached_input_usd_per_million"`
-	OutputUSDPerMillion      string                    `json:"output_usd_per_million"`
-	FixedRequestUSD          string                    `json:"fixed_request_usd"`
-	Schedule                 *priceScheduleInput       `json:"schedule,omitempty"`
-	Tier                     string                    `json:"tier,omitempty"`
-	Warnings                 []string                  `json:"warnings,omitempty"`
-	Match                    domain.PriceProposalMatch `json:"match"`
-	ExpiresAt                time.Time                 `json:"expires_at"`
-	Source                   priceSourceInput          `json:"source"`
+	BillingMode domain.BillingMode `json:"billing_mode"`
+	Currency    string             `json:"currency"`
+	priceRatesInput
+	Schedule  *priceScheduleInput       `json:"schedule,omitempty"`
+	Tier      string                    `json:"tier,omitempty"`
+	Warnings  []string                  `json:"warnings,omitempty"`
+	Match     domain.PriceProposalMatch `json:"match"`
+	ExpiresAt time.Time                 `json:"expires_at"`
+	Source    priceSourceInput          `json:"source"`
 }
 
 func (r *Runtime) listAdminDeploymentPriceProposals(writer http.ResponseWriter, request *http.Request) {
@@ -479,25 +503,7 @@ func (r *Runtime) createAdminDeploymentPriceProposal(writer http.ResponseWriter,
 		writePriceError(writer, errors.New("proposal expiry must be within the next 30 days"))
 		return
 	}
-	inputMicros, err := domain.ParseUSDMicros(input.InputUSDPerMillion)
-	if err != nil {
-		writePriceError(writer, err)
-		return
-	}
-	// The cache-read rate has no default. An omitted field parses as an error
-	// rather than zero, because zero would silently make every cached prompt
-	// token free for the life of this price version.
-	cachedInputMicros, err := domain.ParseUSDMicros(input.CachedInputUSDPerMillion)
-	if err != nil {
-		writePriceError(writer, err)
-		return
-	}
-	outputMicros, err := domain.ParseUSDMicros(input.OutputUSDPerMillion)
-	if err != nil {
-		writePriceError(writer, err)
-		return
-	}
-	fixedMicros, err := domain.ParseUSDMicros(input.FixedRequestUSD)
+	rates, err := input.parse()
 	if err != nil {
 		writePriceError(writer, err)
 		return
@@ -519,8 +525,9 @@ func (r *Runtime) createAdminDeploymentPriceProposal(writer http.ResponseWriter,
 		ID: proposalID, DeploymentID: deployment.ID, ProviderID: deployment.ProviderID, ProviderModel: deployment.ProviderModel,
 		Region: deployment.Region, Tier: strings.TrimSpace(input.Tier), BillingMode: input.BillingMode,
 		Currency: strings.ToUpper(strings.TrimSpace(input.Currency)), FormulaVersion: domain.PriceFormulaUSDTokensV1,
-		InputMicrosPerMillion: inputMicros, CachedInputMicrosPerMillion: cachedInputMicros,
-		OutputMicrosPerMillion: outputMicros, FixedRequestMicrosUSD: fixedMicros, Schedule: schedule,
+		InputMicrosPerMillion: rates.InputMicrosPerMillion, CachedInputMicrosPerMillion: rates.CachedInputMicrosPerMillion,
+		CacheWriteMicrosPerMillion: rates.CacheWriteMicrosPerMillion, CacheWriteLongMicrosPerMillion: rates.CacheWriteLongMicrosPerMillion,
+		OutputMicrosPerMillion: rates.OutputMicrosPerMillion, FixedRequestMicrosUSD: rates.FixedRequestMicrosUSD, Schedule: schedule,
 		Source: source, FetchedAt: now, Warnings: input.Warnings, Match: input.Match, ExpiresAt: input.ExpiresAt.UTC(),
 		Status: domain.PriceProposalPending, CreatedBy: admin.session.Username, CreatedAt: now, Revision: 1,
 	}
@@ -539,7 +546,7 @@ func (r *Runtime) createAdminDeploymentPriceProposal(writer http.ResponseWriter,
 		return
 	}
 	intent.DeploymentID = proposal.DeploymentID
-	intent.ChangeSummary = fmt.Sprintf("proposal=%s match=%s tier=%s billing=%s input=%d cached_input=%d output=%d fixed=%d", proposal.ID, proposal.Match, proposal.Tier, proposal.BillingMode, proposal.InputMicrosPerMillion, proposal.CachedInputMicrosPerMillion, proposal.OutputMicrosPerMillion, proposal.FixedRequestMicrosUSD) + proposal.Schedule.AuditSummary()
+	intent.ChangeSummary = fmt.Sprintf("proposal=%s match=%s tier=%s billing=%s input=%d cached_input=%d cache_write=%d cache_write_long=%d output=%d fixed=%d", proposal.ID, proposal.Match, proposal.Tier, proposal.BillingMode, proposal.InputMicrosPerMillion, proposal.CachedInputMicrosPerMillion, proposal.CacheWriteMicrosPerMillion, proposal.CacheWriteLongMicrosPerMillion, proposal.OutputMicrosPerMillion, proposal.FixedRequestMicrosUSD) + proposal.Schedule.AuditSummary()
 	proposal, effectiveIntent, replayed, err := r.store.CreateDeploymentPriceProposal(request.Context(), proposal, intent, keyDigest)
 	if err != nil {
 		writePriceError(writer, err)
@@ -713,20 +720,7 @@ func resolvePriceEffectiveFrom(effectiveFrom time.Time, immediately bool, now ti
 }
 
 func priceVersionFromInput(priceID, deploymentID, actor string, now time.Time, input createPriceInput) (domain.DeploymentPriceVersion, error) {
-	inputMicros, err := domain.ParseUSDMicros(input.InputUSDPerMillion)
-	if err != nil {
-		return domain.DeploymentPriceVersion{}, err
-	}
-	// An omitted cache-read rate is a rejected request, not a free cached span.
-	cachedInputMicros, err := domain.ParseUSDMicros(input.CachedInputUSDPerMillion)
-	if err != nil {
-		return domain.DeploymentPriceVersion{}, err
-	}
-	outputMicros, err := domain.ParseUSDMicros(input.OutputUSDPerMillion)
-	if err != nil {
-		return domain.DeploymentPriceVersion{}, err
-	}
-	fixedMicros, err := domain.ParseUSDMicros(input.FixedRequestUSD)
+	rates, err := input.parse()
 	if err != nil {
 		return domain.DeploymentPriceVersion{}, err
 	}
@@ -759,8 +753,9 @@ func priceVersionFromInput(priceID, deploymentID, actor string, now time.Time, i
 	price := domain.DeploymentPriceVersion{
 		ID: priceID, DeploymentID: deploymentID, BillingMode: input.BillingMode,
 		Currency: strings.ToUpper(strings.TrimSpace(input.Currency)), FormulaVersion: domain.PriceFormulaUSDTokensV1,
-		InputMicrosPerMillion: inputMicros, CachedInputMicrosPerMillion: cachedInputMicros,
-		OutputMicrosPerMillion: outputMicros, FixedRequestMicrosUSD: fixedMicros, Schedule: schedule,
+		InputMicrosPerMillion: rates.InputMicrosPerMillion, CachedInputMicrosPerMillion: rates.CachedInputMicrosPerMillion,
+		CacheWriteMicrosPerMillion: rates.CacheWriteMicrosPerMillion, CacheWriteLongMicrosPerMillion: rates.CacheWriteLongMicrosPerMillion,
+		OutputMicrosPerMillion: rates.OutputMicrosPerMillion, FixedRequestMicrosUSD: rates.FixedRequestMicrosUSD, Schedule: schedule,
 		EffectiveFrom: effectiveFrom, Source: source, CreatedBy: actor, CreatedAt: now,
 	}
 	validation := price

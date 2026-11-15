@@ -124,6 +124,13 @@ func TestAdminConfigurationTransferRoundTrip(t *testing.T) {
 		return preview
 	}
 	input := configurationImportInput{Bundle: bundle}
+	for version, code := range map[int]string{1: "reexport_required", configurationBundleVersion + 1: "unsupported_version"} {
+		versioned := input
+		versioned.Bundle.Version = version
+		if preview := previewImport(versioned); preview.PlanID != "" || len(preview.Issues) != 1 || preview.Issues[0].Code != code {
+			t.Fatalf("version %d reported an unexpected preview: %+v", version, preview)
+		}
+	}
 	if preview := previewImport(input); preview.PlanID != "" || len(preview.Providers) != 1 || len(preview.Issues) == 0 {
 		t.Fatalf("unbound import was accepted: %+v", preview)
 	}
@@ -266,12 +273,12 @@ func TestConfigurationImportKeepsMappedModelWhenEnabled(t *testing.T) {
 		t.Fatalf("credential status=%d body=%s", credentialResponse.Code, credentialResponse.Body)
 	}
 	caps := domain.ProviderCapabilities{Chat: true, Streaming: true}
-	bundle := configurationBundle{Version: 1,
+	bundle := configurationBundle{Version: configurationBundleVersion,
 		Providers: []configurationProvider{{ID: "azure_review", Name: "Azure", Type: domain.ProviderAzureOpenAI, BaseURL: endpoint, APIVersion: "2024-10-21", Enabled: true,
 			Bindings: []configurationBinding{{ProfileID: domain.ProfileAzureChatEmbeddings, Capabilities: caps, Enabled: true}}}},
 		Deployments: []configurationDeployment{{ID: "dep_review", Name: "Review", ProviderID: "azure_review", ProviderModel: "review-tenant-alias",
 			CapabilityModel: "gpt-5", TargetKind: domain.TargetAzureDeployment, ProfileID: domain.ProfileAzureChatEmbeddings, Capabilities: caps, Enabled: true,
-			Price: &configurationPrice{BillingMode: domain.BillingModeFree}}},
+			Price: exportConfigurationPrice(domain.DeploymentPriceVersion{BillingMode: domain.BillingModeFree})}},
 	}
 	input := configurationImportInput{Bundle: bundle, Bindings: map[string]configurationProviderTarget{"azure_review": {CredentialID: credential.ID}}}
 	response := performAdminMutation(t, runtime, session.cookie, session.csrf, http.MethodPost, "/admin/api/v1/configuration/import/preview", "", input)
@@ -316,7 +323,7 @@ func TestConfigurationImportReportsLocalCommitWhenConfirmationFails(t *testing.T
 		t.Fatal(err)
 	}
 	input := configurationImportInput{Bundle: configurationBundle{
-		Version:     1,
+		Version:     configurationBundleVersion,
 		Projects:    []configurationProject{{ID: "project_fixture", projectInput: projectInput{Name: "Disabled project"}}},
 		GatewayKeys: []configurationKey{{ID: "key_fixture", ProjectID: "project_fixture", Name: "Fixture key", Enabled: true, Scopes: []domain.GatewayScope{domain.GatewayScopeInference}}},
 	}}
@@ -398,5 +405,39 @@ func TestConfigurationImportDerivesMantleDeploymentRegionFromTarget(t *testing.T
 	deployment, err := (&Runtime{}).prepareConfigurationDeployment(request, instance, item, time.Now().UTC())
 	if err != nil || deployment.Region != "us-west-2" {
 		t.Fatalf("target deployment region=%q err=%v", deployment.Region, err)
+	}
+}
+
+func TestConfigurationPriceRequiresWriteRatesForBaseAndEachWindow(t *testing.T) {
+	price := domain.DeploymentPriceVersion{
+		BillingMode: domain.BillingModeMetered, InputMicrosPerMillion: 1_000_000,
+		CacheWriteMicrosPerMillion: 0, CacheWriteLongMicrosPerMillion: 1_500_000,
+		Schedule: &domain.PriceSchedule{Timezone: "UTC", Windows: []domain.PriceWindow{{
+			StartMinute: 60, EndMinute: 120, InputMicrosPerMillion: 2_000_000,
+			CacheWriteMicrosPerMillion: 2_500_000, CacheWriteLongMicrosPerMillion: 0,
+		}}},
+	}
+	wire, err := json.Marshal(exportConfigurationPrice(price))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var imported configurationPrice
+	if err := json.Unmarshal(wire, &imported); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	got, err := imported.version("dep_pricing", "admin", now)
+	if err != nil || got.BaseTier() != price.BaseTier() || got.Schedule.Windows[0] != price.Schedule.Windows[0] {
+		t.Fatalf("price=%+v err=%v", got, err)
+	}
+
+	missingBase := imported
+	missingBase.CacheWriteMicrosPerMillion = nil
+	if _, err := missingBase.version("dep_pricing", "admin", now); err == nil {
+		t.Fatal("accepted an omitted short write rate")
+	}
+	imported.Schedule.Windows[0].CacheWriteLongMicrosPerMillion = nil
+	if _, err := imported.version("dep_pricing", "admin", now); err == nil || !strings.Contains(err.Error(), "window 1") {
+		t.Fatalf("accepted an omitted long write rate in a window: %v", err)
 	}
 }

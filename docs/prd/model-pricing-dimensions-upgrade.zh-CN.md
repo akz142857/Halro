@@ -1,9 +1,9 @@
 # 模型计价维度升级方案
 
-- 状态：提案，未实施
+- 状态：P1 已实施；P2、P3 待评审
 - 日期：2026-11-13
 - 承接：[ADR 0022](../adr/0022-cache-read-input-pricing.md)（缓存读取计价，文中把缓存写入列为未计价缺口）、[ADR 0023](../adr/0023-time-of-day-pricing.md)（分时价位）
-- 落地后新增：ADR 0028（缓存写入计价），见 §6 任务 T0
+- 实施决策：[ADR 0028 缓存写入计价](../adr/0028-cache-write-input-pricing.md)
 
 ## 1. 背景
 
@@ -74,13 +74,13 @@ OpenAI 官方价格表已经是 Input / Cached input / Cache writes / Output 四
    的阶梯（`internal/usage/parquet.go` 的 `version < 4` 分支），沿用同一做法。
 2. **生效中的价格版本不补 0，补输入价。** bbolt 里的 `DeploymentPriceVersion`、`PriceWindow`、
    `DeploymentPriceProposal` 如果补 0，升级后缓存写入变成免费，比现在还少收。迁移用该版本（或该时段）
-   的输入价填两档写入价，升级当天计费结果不变，由管理员按需调高。理由与 ADR 0022 的 schema 30 迁移相同。
+   的输入价填两档写入价，升级后相同上游用量的结算金额不变，由管理员按需调高。理由与 ADR 0022 的 schema 30 迁移相同。
 3. **两档而不是三档或按供应商命名。** Anthropic 是 5m/1h，OpenAI 是 30m/12h，结构相同：一档短时、一档长时，
    长时更贵。字段命名用 short / long，具体时长写在前端提示与文档里。
 4. **写入总数保留，长时档作为它的子集。** 与"缓存读是输入的子集"的约定一致：
    `CacheWriteInputTokens` 仍是写入总数，新增 `CacheWriteLongInputTokens` 为其子集，
    短时 = 总数 − 长时。这样 Ledger/Parquet 只加一列，不改已有列的含义。
-   上游只报总数、不报拆分时（如老模型、Bedrock Converse），全部记为短时。
+   上游只报总数、不报拆分时，全部记为短时。
 
 ## 4. 数据模型
 
@@ -128,13 +128,13 @@ Admin API 入参对应 `cache_write_usd_per_million`、`cache_write_long_usd_per
 + fixed_request
 ```
 
-每个 token 分量独立向上取整到 1 微美元（与现状一致）。`PriceCostBreakdown.InputCostMicrosUSD`
+每个计价分量独立向上取整到 1 微美元。两档写入价均等于普通输入价时，三段合并后按普通输入价取整，保留旧价格的结算金额。`PriceCostBreakdown.InputCostMicrosUSD`
 继续表示整段 prompt 的费用，不新增列；拆分可由快照和 token 数还原（ADR 0022 的同一理由）。
 
 ### 4.4 预留与保守计价
 
 凡是还不知道 token 拆分的地方，整段 prompt 按
-`max(input_rate, cache_write_rate, cache_write_long_rate)` 计价：
+`max(input_rate, cached_input_rate, cache_write_rate, cache_write_long_rate)` 计价。预留及 Token Guard 上限还覆盖各档独立取整：
 
 - `estimateReservation`（`internal/gateway/service.go`）
 - `accountingTermsFromSnapshot`（`internal/gateway/service.go`）
@@ -191,7 +191,7 @@ Admin API 入参对应 `cache_write_usd_per_million`、`cache_write_long_usd_per
 - OpenAI Chat Completions：**先核实** `prompt_tokens_details` 是否带同样的拆分（读官方文档或用真实账号跑一次）。
   不带就全部记为短时，并在 ADR 里写明。
 - Bedrock Mantle：Anthropic 面复用 Anthropic 解析；OpenAI 面复用 Responses 解析；Mantle 自有 Chat 面先核实。
-- Bedrock Converse（withheld）：只有总数，全记短时。
+- Bedrock Converse（withheld）：[AWS TokenUsage](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html) 已定义 `cacheDetails`。Halro 的 withheld profile 本期维持原有总数映射。
 - 拆分之和与总数不一致时：以总数为准，长时截断到不超过总数，并记录一次 warning（不含任何请求内容）。
 - 对外回写（Halro 作为 OpenAI / Anthropic 兼容面返回 usage 给客户端）时，同样输出拆分字段，保持与上游形状一致。
 
@@ -295,14 +295,13 @@ Admin API 入参对应 `cache_write_usd_per_million`、`cache_write_long_usd_per
 
 ## 9. 开放问题
 
-- **Q1 旧版配置包导入。** 不带写入价的旧配置包：A. 拒绝，提示重新导出（符合 pre-1.0 不留兼容读路径的原则）；
-  B. 按输入价补齐（与迁移口径一致）。建议 A。
-- **Q2 OpenAI Chat Completions 是否返回写入时长拆分。** T2 开发时核实。
+- **Q1 旧版配置包导入（已定）。** 导入要求 v2。v1 需升级源实例后重新导出。
+- **Q2 OpenAI Chat Completions 写入用量（已核实）。** 官方契约只列总数，Halro 按短时计费。
 - **Q3 Batch 计价。** OpenAI、Anthropic 的 Batch 都是五折，Halro 目前 Batch 结果按什么价格结算未核实。
   如果按标准价，属于多收，需另开任务。
 - **Q4 国内平台官方价格。** MiniMax、Kimi、智谱、火山方舟的官方价格页本次未读到原文，P2 设计前需要从控制台确认
   是否有长度分档、缓存写入或存储费。
-- **Q5 两份计价算术是否本期合并**（§5）。
+- **Q5 两份计价算术（已定）。** 网关与结算统一使用 domain 计价公式（§5）。
 
 ## 10. 参考
 

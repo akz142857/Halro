@@ -233,11 +233,10 @@ func (s *responsesStreamState) accept(e openaiapi.ResponseStreamEvent, includeUs
 		if e.Response == nil || e.Response.Status != strings.TrimPrefix(e.Type, "response.") {
 			return false, errors.New("invalid Responses terminal event")
 		}
-		result, err := openaiwire.DecodeOpenAIProviderResponse(*e.Response)
+		result, err := openaiwire.DecodeOpenAIProviderResponseWithUsage(*e.Response, s.usage)
 		if err != nil {
 			return false, err
 		}
-		s.usage = result.Usage
 		for index, item := range e.Response.Output {
 			seen := s.items[index]
 			if seen == nil || seen.item.ID != item.ID || seen.item.Type != item.Type {

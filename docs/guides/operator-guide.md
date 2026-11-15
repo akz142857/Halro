@@ -1449,6 +1449,15 @@ Price changes create future-effective immutable versions; never edit old
 prices to correct history. Unknown cost remains null — there is no historical
 correction path.
 
+Metered prices have separate cache-write rates for the short and long tiers.
+Anthropic Messages uses 5-minute and 1-hour writes. OpenAI Responses uses
+30-minute and 12-hour writes. When a provider returns only the write total,
+Halro uses the short rate. Metadata schema 43 backfills both rates from each
+existing base price or time window's input rate. Set the published write prices
+on a new version to charge a provider's write premium. When both write rates
+equal the ordinary input rate, all three spans share one rounding step.
+Existing settlements retain their original costs. See [ADR 0028](../adr/0028-cache-write-input-pricing.md).
+
 Pricing Proposals are a separate review queue. The interactive Admin API accepts
 only asserted official-URL evidence; `verified_api` and `signed_import` are
 reserved for trusted adapters that verify transport or signatures before

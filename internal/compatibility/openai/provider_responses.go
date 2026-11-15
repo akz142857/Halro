@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/akz142857/Halro/internal/compatibility"
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/semantic"
 )
@@ -177,14 +178,20 @@ func renderProviderResponseToolChoice(choice *semantic.ToolChoice) (json.RawMess
 }
 
 func DecodeProviderResponse(response openaiapi.Response) (semantic.GenerateResult, error) {
-	return decodeProviderResponse(response, false)
+	return decodeProviderResponse(response, false, DecodeResponseUsage(response.Usage))
 }
 
 func DecodeOpenAIProviderResponse(response openaiapi.Response) (semantic.GenerateResult, error) {
-	return decodeProviderResponse(response, true)
+	return DecodeOpenAIProviderResponseWithUsage(response, DecodeResponseUsage(response.Usage))
 }
 
-func decodeProviderResponse(response openaiapi.Response, reasoning bool) (semantic.GenerateResult, error) {
+// DecodeOpenAIProviderResponseWithUsage also accepts the usage a stream has
+// already normalized for settlement, even if the output fails validation.
+func DecodeOpenAIProviderResponseWithUsage(response openaiapi.Response, usage *semantic.Usage) (semantic.GenerateResult, error) {
+	return decodeProviderResponse(response, true, usage)
+}
+
+func decodeProviderResponse(response openaiapi.Response, reasoning bool, usage *semantic.Usage) (semantic.GenerateResult, error) {
 	if response.ID == "" || response.Model == "" || (response.Status != "completed" && response.Status != "incomplete") {
 		return semantic.GenerateResult{}, errors.New("provider Responses result identity is invalid")
 	}
@@ -277,7 +284,6 @@ func decodeProviderResponse(response openaiapi.Response, reasoning bool) (semant
 	if response.Status == "incomplete" {
 		termination = "max_output"
 	}
-	usage := decodeProviderResponseUsage(response.Usage)
 	result := semantic.GenerateResult{ID: response.ID, Created: response.CreatedAt, Model: response.Model, Choices: []semantic.GenerateChoice{{Index: 0, Message: message, Termination: termination, NativeTermination: response.Status}}, Usage: usage, Translation: semantic.TranslationNone, MappingRevision: MappingRevision}
 	return result, result.Validate()
 }
@@ -310,7 +316,9 @@ func decodeProviderAnnotations(content openaiapi.ResponseOutputContent) ([]seman
 	return citations, nil
 }
 
-func decodeProviderResponseUsage(usage *openaiapi.ResponseUsage) *semantic.Usage {
+// DecodeResponseUsage retains provider-reported tiers even when a later stream
+// validation fails, so accounting need not estimate a known bill.
+func DecodeResponseUsage(usage *openaiapi.ResponseUsage) *semantic.Usage {
 	if usage == nil {
 		return nil
 	}
@@ -326,14 +334,11 @@ func decodeProviderResponseUsage(usage *openaiapi.ResponseUsage) *semantic.Usage
 		TotalTokens:           usage.TotalTokens,
 		Source:                semantic.UsageProviderReported,
 	}
+	if detail := usage.InputTokensDetails.CacheWriteTokensDetails; detail != nil {
+		decoded.CacheWriteLongInputTokens = compatibility.NormalizeCacheWriteLong(decoded.CacheWriteInputTokens, detail.TTL30mTokens, detail.TTL12hTokens)
+	}
 	if sum := decoded.InputTokens + decoded.OutputTokens; decoded.TotalTokens < sum {
 		decoded.TotalTokens = sum
 	}
 	return decoded
-}
-
-// DecodeResponseUsage retains provider-reported tiers even when a later stream
-// validation fails, so accounting need not estimate a known bill.
-func DecodeResponseUsage(usage *openaiapi.ResponseUsage) *semantic.Usage {
-	return decodeProviderResponseUsage(usage)
 }

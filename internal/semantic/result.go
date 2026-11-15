@@ -25,18 +25,25 @@ const (
 // the ordinary input rate. Adapters translate into this shape; everything
 // downstream may assume it.
 //
+// CacheWriteLongInputTokens is in turn a subset of CacheWriteInputTokens: the
+// span written with the provider's longer cache lifetime (Anthropic's 1h,
+// OpenAI's 12h), which is billed above the shorter one. An upstream that
+// reports only a write total leaves it zero, and the whole write is billed at
+// the shorter lifetime's rate.
+//
 // ReasoningTokens is likewise a subset of OutputTokens wherever the provider
 // bills reasoning at the output rate, so it is reported for observability and
 // must not be added to OutputTokens when pricing.
 type Usage struct {
-	InputTokens           int64       `json:"input_tokens"`
-	CachedInputTokens     int64       `json:"cached_input_tokens,omitempty"`
-	CacheWriteInputTokens int64       `json:"cache_write_input_tokens,omitempty"`
-	OutputTokens          int64       `json:"output_tokens"`
-	ReasoningTokens       int64       `json:"reasoning_tokens,omitempty"`
-	AudioTokens           int64       `json:"audio_tokens,omitempty"`
-	TotalTokens           int64       `json:"total_tokens"`
-	Source                UsageSource `json:"source,omitempty"`
+	InputTokens               int64       `json:"input_tokens"`
+	CachedInputTokens         int64       `json:"cached_input_tokens,omitempty"`
+	CacheWriteInputTokens     int64       `json:"cache_write_input_tokens,omitempty"`
+	CacheWriteLongInputTokens int64       `json:"cache_write_long_input_tokens,omitempty"`
+	OutputTokens              int64       `json:"output_tokens"`
+	ReasoningTokens           int64       `json:"reasoning_tokens,omitempty"`
+	AudioTokens               int64       `json:"audio_tokens,omitempty"`
+	TotalTokens               int64       `json:"total_tokens"`
+	Source                    UsageSource `json:"source,omitempty"`
 }
 
 // UncachedInputTokens is the prompt span billed at the ordinary input rate.
@@ -45,16 +52,18 @@ func (usage Usage) UncachedInputTokens() int64 {
 }
 
 func (usage Usage) Validate() error {
-	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ReasoningTokens < 0 || usage.AudioTokens < 0 || usage.TotalTokens < usage.InputTokens+usage.OutputTokens {
+	if usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.ReasoningTokens < 0 || usage.AudioTokens < 0 ||
+		usage.TotalTokens < usage.InputTokens || usage.OutputTokens > usage.TotalTokens-usage.InputTokens {
 		return errors.New("semantic usage is invalid")
 	}
-	if usage.CachedInputTokens < 0 || usage.CacheWriteInputTokens < 0 {
+	if usage.CachedInputTokens < 0 || usage.CacheWriteInputTokens < 0 ||
+		usage.CacheWriteLongInputTokens < 0 || usage.CacheWriteLongInputTokens > usage.CacheWriteInputTokens {
 		return errors.New("semantic usage cache tokens are invalid")
 	}
 	// The cache tiers partition InputTokens. A sum that overruns it means an
 	// adapter added the tiers on top instead of translating into the subset
 	// convention, which would double-count the cached span when pricing.
-	if usage.CachedInputTokens+usage.CacheWriteInputTokens > usage.InputTokens {
+	if usage.CachedInputTokens > usage.InputTokens || usage.CacheWriteInputTokens > usage.InputTokens-usage.CachedInputTokens {
 		return errors.New("semantic usage cache tokens exceed input tokens")
 	}
 	if usage.Source != UsageProviderReported && usage.Source != UsageLocallyEstimated {

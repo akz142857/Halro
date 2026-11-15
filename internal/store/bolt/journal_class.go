@@ -187,8 +187,9 @@ var metaKeyClasses = map[string]journalClass{
 
 	// The journal's own position in the projection, written by the transaction
 	// entry rather than by any caller.
-	"applied_journal_sequence": classJournalBookkeeping,
-	"metadata_journal_epoch":   classJournalBookkeeping,
+	"applied_journal_sequence":              classJournalBookkeeping,
+	"metadata_journal_epoch":                classJournalBookkeeping,
+	"metadata_journal_schema_epoch_pending": classJournalBookkeeping,
 }
 
 // classify answers what a write to one (bucket path, key) is.

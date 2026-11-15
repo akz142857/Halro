@@ -20,6 +20,8 @@ import (
 	"github.com/akz142857/Halro/internal/durable"
 )
 
+// Schema 9 adds the long-lived subset of cache writes. Older rows read as zero.
+//
 // Schema 8 adds account-region attribution and canonical provider failure
 // semantics. Rows written under schema 7 decode with those columns empty or
 // false.
@@ -42,7 +44,7 @@ import (
 // reasoning spans that partition the input and output totals. Rows written under
 // schema 3 decode with those columns zero, which reads correctly as "no tier
 // reported" rather than as a tier of size zero.
-const parquetSchemaVersion = 8
+const parquetSchemaVersion = 9
 
 // parquetSchemaMinReadable is the oldest manifest this build still opens. Every
 // version from here to parquetSchemaVersion is accepted and upgraded in place;
@@ -62,57 +64,58 @@ const (
 )
 
 type parquetAttempt struct {
-	SchemaVersion                 int32  `parquet:"schema_version" json:"schema_version"`
-	EventID                       string `parquet:"event_id,dict" json:"event_id"`
-	RequestID                     string `parquet:"request_id,dict" json:"request_id"`
-	AttemptID                     string `parquet:"attempt_id,dict" json:"attempt_id"`
-	Sequence                      int64  `parquet:"sequence,delta" json:"sequence"`
-	AttemptNumber                 int32  `parquet:"attempt_number" json:"attempt_number"`
-	ProjectID                     string `parquet:"project_id,dict" json:"project_id"`
-	WorkUnitID                    string `parquet:"work_unit_id,dict" json:"work_unit_id"`
-	RunID                         string `parquet:"run_id,dict" json:"run_id"`
-	KeyID                         string `parquet:"key_id,dict" json:"key_id"`
-	RouteID                       string `parquet:"route_id,dict" json:"route_id"`
-	DeploymentID                  string `parquet:"deployment_id,dict" json:"deployment_id"`
-	ProviderID                    string `parquet:"provider_id,dict" json:"provider_id"`
-	OfferingID                    string `parquet:"offering_id,dict" json:"offering_id"`
-	ProfileID                     string `parquet:"profile_id,dict" json:"profile_id"`
-	AccountRegionID               string `parquet:"account_region_id,dict" json:"account_region_id"`
-	RequestedModel                string `parquet:"requested_model,dict" json:"requested_model"`
-	ProviderModel                 string `parquet:"provider_model,dict" json:"provider_model"`
-	ProviderInputTokens           int64  `parquet:"provider_input_tokens" json:"provider_input_tokens"`
-	ProviderOutputTokens          int64  `parquet:"provider_output_tokens" json:"provider_output_tokens"`
-	ProviderCachedInputTokens     int64  `parquet:"provider_cached_input_tokens" json:"provider_cached_input_tokens"`
-	ProviderCacheWriteInputTokens int64  `parquet:"provider_cache_write_input_tokens" json:"provider_cache_write_input_tokens"`
-	ProviderReasoningTokens       int64  `parquet:"provider_reasoning_tokens" json:"provider_reasoning_tokens"`
-	PreparedOutputTokens          int64  `parquet:"prepared_output_tokens" json:"prepared_output_tokens"`
-	CostMicrosUSD                 int64  `parquet:"cost_micros_usd" json:"cost_micros_usd"`
-	CostKnown                     bool   `parquet:"cost_known" json:"cost_known"`
-	PriceEvidenceStatus           string `parquet:"price_evidence_status,dict" json:"price_evidence_status"`
-	CostValueStatus               string `parquet:"cost_value_status,dict" json:"cost_value_status"`
-	BillingMode                   string `parquet:"billing_mode,dict" json:"billing_mode"`
-	PriceSnapshotJSON             string `parquet:"price_snapshot_json" json:"price_snapshot_json"`
-	InputCostMicrosUSD            int64  `parquet:"input_cost_micros_usd" json:"input_cost_micros_usd"`
-	OutputCostMicrosUSD           int64  `parquet:"output_cost_micros_usd" json:"output_cost_micros_usd"`
-	FixedCostMicrosUSD            int64  `parquet:"fixed_cost_micros_usd" json:"fixed_cost_micros_usd"`
-	TokenUsageSource              string `parquet:"token_usage_source,dict" json:"token_usage_source"`
-	CostEstimated                 bool   `parquet:"cost_estimated" json:"cost_estimated"`
-	TokensEstimated               bool   `parquet:"tokens_estimated" json:"tokens_estimated"`
-	StartedAtMicros               int64  `parquet:"started_at_utc,timestamp(microsecond)" json:"started_at_utc"`
-	CompletedAtMicros             int64  `parquet:"completed_at_utc,timestamp(microsecond)" json:"completed_at_utc"`
-	Status                        string `parquet:"status,dict" json:"status"`
-	ErrorClass                    string `parquet:"error_class,dict" json:"error_class"`
-	HTTPStatus                    int32  `parquet:"http_status" json:"http_status"`
-	ProviderCode                  string `parquet:"provider_code,dict" json:"provider_code"`
-	ProviderFailureReason         string `parquet:"provider_failure_reason,dict" json:"provider_failure_reason"`
-	ProviderRequestID             string `parquet:"provider_request_id" json:"provider_request_id"`
-	FailurePhase                  string `parquet:"failure_phase,dict" json:"failure_phase"`
-	Retryable                     bool   `parquet:"retryable" json:"retryable"`
-	Ambiguous                     bool   `parquet:"ambiguous" json:"ambiguous"`
-	FailureSemanticsRecorded      bool   `parquet:"failure_semantics_recorded" json:"failure_semantics_recorded"`
-	LatencyMillis                 int64  `parquet:"latency_millis" json:"latency_millis"`
-	RetryCount                    int32  `parquet:"retry_count" json:"retry_count"`
-	FallbackCount                 int32  `parquet:"fallback_count" json:"fallback_count"`
+	SchemaVersion                     int32  `parquet:"schema_version" json:"schema_version"`
+	EventID                           string `parquet:"event_id,dict" json:"event_id"`
+	RequestID                         string `parquet:"request_id,dict" json:"request_id"`
+	AttemptID                         string `parquet:"attempt_id,dict" json:"attempt_id"`
+	Sequence                          int64  `parquet:"sequence,delta" json:"sequence"`
+	AttemptNumber                     int32  `parquet:"attempt_number" json:"attempt_number"`
+	ProjectID                         string `parquet:"project_id,dict" json:"project_id"`
+	WorkUnitID                        string `parquet:"work_unit_id,dict" json:"work_unit_id"`
+	RunID                             string `parquet:"run_id,dict" json:"run_id"`
+	KeyID                             string `parquet:"key_id,dict" json:"key_id"`
+	RouteID                           string `parquet:"route_id,dict" json:"route_id"`
+	DeploymentID                      string `parquet:"deployment_id,dict" json:"deployment_id"`
+	ProviderID                        string `parquet:"provider_id,dict" json:"provider_id"`
+	OfferingID                        string `parquet:"offering_id,dict" json:"offering_id"`
+	ProfileID                         string `parquet:"profile_id,dict" json:"profile_id"`
+	AccountRegionID                   string `parquet:"account_region_id,dict" json:"account_region_id"`
+	RequestedModel                    string `parquet:"requested_model,dict" json:"requested_model"`
+	ProviderModel                     string `parquet:"provider_model,dict" json:"provider_model"`
+	ProviderInputTokens               int64  `parquet:"provider_input_tokens" json:"provider_input_tokens"`
+	ProviderOutputTokens              int64  `parquet:"provider_output_tokens" json:"provider_output_tokens"`
+	ProviderCachedInputTokens         int64  `parquet:"provider_cached_input_tokens" json:"provider_cached_input_tokens"`
+	ProviderCacheWriteInputTokens     int64  `parquet:"provider_cache_write_input_tokens" json:"provider_cache_write_input_tokens"`
+	ProviderCacheWriteLongInputTokens int64  `parquet:"provider_cache_write_long_input_tokens" json:"provider_cache_write_long_input_tokens"`
+	ProviderReasoningTokens           int64  `parquet:"provider_reasoning_tokens" json:"provider_reasoning_tokens"`
+	PreparedOutputTokens              int64  `parquet:"prepared_output_tokens" json:"prepared_output_tokens"`
+	CostMicrosUSD                     int64  `parquet:"cost_micros_usd" json:"cost_micros_usd"`
+	CostKnown                         bool   `parquet:"cost_known" json:"cost_known"`
+	PriceEvidenceStatus               string `parquet:"price_evidence_status,dict" json:"price_evidence_status"`
+	CostValueStatus                   string `parquet:"cost_value_status,dict" json:"cost_value_status"`
+	BillingMode                       string `parquet:"billing_mode,dict" json:"billing_mode"`
+	PriceSnapshotJSON                 string `parquet:"price_snapshot_json" json:"price_snapshot_json"`
+	InputCostMicrosUSD                int64  `parquet:"input_cost_micros_usd" json:"input_cost_micros_usd"`
+	OutputCostMicrosUSD               int64  `parquet:"output_cost_micros_usd" json:"output_cost_micros_usd"`
+	FixedCostMicrosUSD                int64  `parquet:"fixed_cost_micros_usd" json:"fixed_cost_micros_usd"`
+	TokenUsageSource                  string `parquet:"token_usage_source,dict" json:"token_usage_source"`
+	CostEstimated                     bool   `parquet:"cost_estimated" json:"cost_estimated"`
+	TokensEstimated                   bool   `parquet:"tokens_estimated" json:"tokens_estimated"`
+	StartedAtMicros                   int64  `parquet:"started_at_utc,timestamp(microsecond)" json:"started_at_utc"`
+	CompletedAtMicros                 int64  `parquet:"completed_at_utc,timestamp(microsecond)" json:"completed_at_utc"`
+	Status                            string `parquet:"status,dict" json:"status"`
+	ErrorClass                        string `parquet:"error_class,dict" json:"error_class"`
+	HTTPStatus                        int32  `parquet:"http_status" json:"http_status"`
+	ProviderCode                      string `parquet:"provider_code,dict" json:"provider_code"`
+	ProviderFailureReason             string `parquet:"provider_failure_reason,dict" json:"provider_failure_reason"`
+	ProviderRequestID                 string `parquet:"provider_request_id" json:"provider_request_id"`
+	FailurePhase                      string `parquet:"failure_phase,dict" json:"failure_phase"`
+	Retryable                         bool   `parquet:"retryable" json:"retryable"`
+	Ambiguous                         bool   `parquet:"ambiguous" json:"ambiguous"`
+	FailureSemanticsRecorded          bool   `parquet:"failure_semantics_recorded" json:"failure_semantics_recorded"`
+	LatencyMillis                     int64  `parquet:"latency_millis" json:"latency_millis"`
+	RetryCount                        int32  `parquet:"retry_count" json:"retry_count"`
+	FallbackCount                     int32  `parquet:"fallback_count" json:"fallback_count"`
 }
 
 type Manifest struct {
@@ -359,7 +362,8 @@ func (e *Exporter) Verify(source AttemptSource) error {
 				if _, exists := seen[attempt.EventID]; !exists {
 					return fmt.Errorf("usage reconciliation missing event %s", attempt.EventID)
 				}
-				if row, exists := canonicalRows[attempt.EventID]; exists && row != narrowToSchema(toParquetAttempt(attempt), row.SchemaVersion) {
+				if row := canonicalRows[attempt.EventID]; row.ProviderCacheWriteLongInputTokens != attempt.ProviderCacheWriteLongInputTokens ||
+					row != narrowToSchema(toParquetAttempt(attempt), row.SchemaVersion) {
 					return fmt.Errorf("usage reconciliation content mismatch for event %s", attempt.EventID)
 				}
 				return nil
@@ -510,9 +514,11 @@ func (e *Exporter) publishPartition(date string, attempts []AttemptEvent) (Manif
 		if err != nil {
 			return ManifestFile{}, fmt.Errorf("read orphan usage partition: %w", err)
 		}
-		if !sameRows(existing, rows) {
+		version, ok := matchingOrphanSchema(existing, rows)
+		if !ok {
 			return ManifestFile{}, fmt.Errorf("existing usage partition conflicts with export: %s", relative)
 		}
+		entry.SchemaVersion = version
 	}
 	checksum, err := fileSHA256(path)
 	if err != nil {
@@ -693,6 +699,9 @@ func (e *Exporter) safeManifestPath(relative string) (string, error) {
 // columns the row's own schema could express take part in the comparison.
 func narrowToSchema(row parquetAttempt, version int32) parquetAttempt {
 	row.SchemaVersion = version
+	if version < 9 {
+		row.ProviderCacheWriteLongInputTokens = 0
+	}
 	if version < 8 {
 		row.AccountRegionID = ""
 		row.ProviderFailureReason = ""
@@ -792,12 +801,13 @@ func toParquetAttempt(attempt AttemptEvent) parquetAttempt {
 		OfferingID: string(attempt.OfferingID), ProfileID: string(attempt.ProfileID),
 		AccountRegionID: string(attempt.AccountRegionID),
 		ProviderModel:   attempt.ProviderModel, ProviderInputTokens: attempt.ProviderInputTokens,
-		ProviderOutputTokens:          attempt.ProviderOutputTokens,
-		ProviderCachedInputTokens:     attempt.ProviderCachedInputTokens,
-		ProviderCacheWriteInputTokens: attempt.ProviderCacheWriteInputTokens,
-		ProviderReasoningTokens:       attempt.ProviderReasoningTokens,
-		PreparedOutputTokens:          attempt.PreparedOutputTokens,
-		CostMicrosUSD:                 cost, CostKnown: costKnown,
+		ProviderOutputTokens:              attempt.ProviderOutputTokens,
+		ProviderCachedInputTokens:         attempt.ProviderCachedInputTokens,
+		ProviderCacheWriteInputTokens:     attempt.ProviderCacheWriteInputTokens,
+		ProviderCacheWriteLongInputTokens: attempt.ProviderCacheWriteLongInputTokens,
+		ProviderReasoningTokens:           attempt.ProviderReasoningTokens,
+		PreparedOutputTokens:              attempt.PreparedOutputTokens,
+		CostMicrosUSD:                     cost, CostKnown: costKnown,
 		PriceEvidenceStatus: string(attempt.PriceEvidenceStatus), CostValueStatus: string(attempt.CostValueStatus),
 		BillingMode: func() string {
 			if attempt.PriceSnapshot != nil {
@@ -824,16 +834,24 @@ func toParquetAttempt(attempt AttemptEvent) parquetAttempt {
 	}
 }
 
-func sameRows(left, right []parquetAttempt) bool {
-	if len(left) != len(right) {
-		return false
+// matchingOrphanSchema allows export to adopt an older file published before
+// its manifest commit. Compare every value, including zero defaults for missing
+// columns, so adoption cannot discard usage facts present in the Ledger.
+func matchingOrphanSchema(existing, expected []parquetAttempt) (int, bool) {
+	if len(existing) == 0 || len(existing) != len(expected) {
+		return 0, false
 	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
+	version := existing[0].SchemaVersion
+	if !supportedManifestSchema(int(version)) {
+		return 0, false
+	}
+	for i, row := range expected {
+		row.SchemaVersion = version
+		if existing[i] != row {
+			return 0, false
 		}
 	}
-	return true
+	return int(version), true
 }
 
 func fileSHA256(path string) (string, error) {

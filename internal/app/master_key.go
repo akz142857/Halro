@@ -27,7 +27,7 @@ func unlockMasterKey(ctx context.Context, cfg config.Config, stores ...*boltstor
 	if len(stores) == 1 && stores[0] != nil {
 		return unlockKMSMasterKey(ctx, cfg, stores[0], masterkey.KeySlotPrimary, defaultKMSWrapperFactory)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := boltstore.OpenKeySlotMetadata(cfg.MetadataPath())
 	if err != nil {
 		return nil, err
 	}

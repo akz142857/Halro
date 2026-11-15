@@ -10,11 +10,15 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
-it("shows how to replace an empty bundle without showing a zero-count preview", async () => {
+it.each([
+  { version: 2, code: "record_count", hint: "请从有配置的源实例重新下载。" },
+  { version: 1, code: "reexport_required", hint: "请升级源实例并重新下载配置。新版配置文件包含缓存写入费率。" },
+  { version: 3, code: "unsupported_version", hint: "当前 Halro 版本不支持此配置文件。" },
+])("explains why configuration version $version was rejected without showing a preview", async ({ version, code, hint }) => {
   vi.spyOn(api, "previewConfigurationImport").mockResolvedValue({
     counts: { providers: 0, deployments: 0, routes: 0, redaction_policies: 0, token_guard_policies: 0, projects: 0, gateway_keys: 0 },
     providers: [], deployments_to_enable: [], routes_to_enable: [],
-    issues: [{ resource: "bundle", code: "record_count", message: "configuration is empty" }],
+    issues: [{ resource: "bundle", code, message: "configuration file rejected" }],
   });
   window.history.replaceState(null, "", "/admin/settings/transfer");
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -24,14 +28,15 @@ it("shows how to replace an empty bundle without showing a zero-count preview", 
   const chooseFile = vi.spyOn(input, "click");
   fireEvent.click(screen.getByRole("button", { name: "选择文件…" }));
   expect(chooseFile).toHaveBeenCalledOnce();
-  const file = new File(['{"version":1}'], "empty.json");
-  Object.defineProperty(file, "text", { value: () => Promise.resolve('{"version":1}') });
+  const source = JSON.stringify({ version });
+  const file = new File([source], "transfer.json");
+  Object.defineProperty(file, "text", { value: () => Promise.resolve(source) });
   fireEvent.change(input, { target: { files: [file] } });
 
-  expect(await screen.findByRole("alert")).toHaveTextContent("请从有配置的源实例重新下载。");
+  expect(await screen.findByRole("alert")).toHaveTextContent(hint);
   expect(screen.queryByRole("region", { name: "配置摘要" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "检查导入" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "更换文件…" })).toHaveAccessibleDescription("empty.json");
+  expect(screen.getByRole("button", { name: "更换文件…" })).toHaveAccessibleDescription("transfer.json");
 });
 
 it("requires a fresh preview after binding edits and offers newly issued keys once", async () => {
@@ -70,7 +75,7 @@ it("requires a fresh preview after binding edits and offers newly issued keys on
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryData(["session"], { username: "admin", role: "administrator" });
   render(<QueryClientProvider client={client}><SettingsPage /></QueryClientProvider>);
-  const source = '{"version":1}';
+  const source = '{"version":2}';
   const file = new File([source], "halro-configuration.json");
   Object.defineProperty(file, "text", { value: () => Promise.resolve(source) });
   fireEvent.change(await screen.findByLabelText("配置文件"), { target: { files: [file] } });
@@ -135,7 +140,7 @@ it("shows the current preview after a conflict and explains recovery after a loc
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryData(["session"], { username: "admin", role: "administrator" });
   render(<QueryClientProvider client={client}><SettingsPage /></QueryClientProvider>);
-  const source = '{"version":1}';
+  const source = '{"version":2}';
   const file = new File([source], "halro-configuration.json");
   Object.defineProperty(file, "text", { value: () => Promise.resolve(source) });
   fireEvent.change(await screen.findByLabelText("配置文件"), { target: { files: [file] } });

@@ -766,10 +766,15 @@ func TestNativeMessagesSettlesTheWholePromptAcrossCacheTiers(t *testing.T) {
 			name = "stream"
 		}
 		t.Run(name, func(t *testing.T) {
-			service, fake, key, closeFixture := newNativeMessagesFixture(t)
+			service, fake, key, closeFixture := newNativeMessagesFixtureWithPrice(t, 1_000_000, 2)
+			pricing := service.pricing.(*fakePricePinStore)
+			pricing.price.CachedInputMicrosPerMillion = 100_000
+			pricing.price.CacheWriteMicrosPerMillion = 2_000_000
+			pricing.price.CacheWriteLongMicrosPerMillion = 3_000_000
 			defer closeFixture()
-			fake.response = []byte(`{"id":"msg_provider","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-provider","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":5,"cache_read_input_tokens":90,"cache_creation_input_tokens":5,"output_tokens":1}}`)
-			fake.streamUsage = &anthropicapi.Usage{InputTokens: 5, CacheReadInputTokens: 90, CacheCreationInputTokens: 5, OutputTokens: 1}
+			fake.response = []byte(`{"id":"msg_provider","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-provider","stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":5,"cache_read_input_tokens":90,"cache_creation_input_tokens":5,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":3},"output_tokens":1}}`)
+			fake.streamUsage = &anthropicapi.Usage{InputTokens: 5, CacheReadInputTokens: 90, CacheCreationInputTokens: 5, OutputTokens: 1,
+				CacheCreation: &anthropicapi.CacheCreationDetails{Ephemeral5mInputTokens: 2, Ephemeral1hInputTokens: 3}}
 			body := `{"model":"claude","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
 			if streaming {
 				body = `{"model":"claude","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hi"}]}`
@@ -788,8 +793,8 @@ func TestNativeMessagesSettlesTheWholePromptAcrossCacheTiers(t *testing.T) {
 			}
 			period := time.Now().UTC().Format("2006-01-02")
 			balance := fake.ledgerState.Balance("project_native", period, testTimezoneVersion)
-			// 5 + 90 + 5 prompt tokens, not the 5 Anthropic reports net of caching.
-			if balance.InputTokens != 100 || balance.OutputTokens != 1 {
+			// 5 ordinary + 9 read + 4 short writes + 9 long writes + 1 output + 2 fixed.
+			if balance.InputTokens != 100 || balance.OutputTokens != 1 || balance.CommittedMicrosUSD != 30 || balance.ReservedMicrosUSD != 0 {
 				t.Fatalf("balance=%#v", balance)
 			}
 		})

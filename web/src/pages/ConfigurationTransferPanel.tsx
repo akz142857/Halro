@@ -55,7 +55,7 @@ export function ConfigurationTransferPanel() {
     };
   }, [unsavedKeys, t]);
   const hasProviders = Boolean(preview?.providers.length);
-  const fileRejected = preview?.issues.some(({ code }) => code === "record_count" || code === "unsupported_version");
+  const fileRejected = preview?.issues.some(({ code }) => code === "record_count" || code === "unsupported_version" || code === "reexport_required");
   const emptyBundle = preview && resources.every((resource) => preview.counts[resource] === 0);
   const canApply = Boolean(preview?.plan_id);
   const credentials = useQuery({ queryKey: ["credentials"], queryFn: api.credentials, enabled: hasProviders, refetchOnWindowFocus: true });

@@ -103,15 +103,19 @@ type Event struct {
 	// an operator can tell an expensive request from a cache-served one. Events
 	// written before this field existed decode to zero, which reads correctly as
 	// "no cache tier reported".
-	ProviderCachedInputTokens     int64            `json:"provider_cached_input_tokens,omitempty"`
-	ProviderCacheWriteInputTokens int64            `json:"provider_cache_write_input_tokens,omitempty"`
-	ProviderReasoningTokens       int64            `json:"provider_reasoning_tokens,omitempty"`
-	CostEstimated                 bool             `json:"cost_estimated,omitempty"`
-	TokenEstimated                bool             `json:"token_estimated,omitempty"`
-	TokenUsageSource              TokenUsageSource `json:"token_usage_source,omitempty"`
-	Outcome                       string           `json:"outcome,omitempty"`
-	ErrorClass                    string           `json:"error_class,omitempty"`
-	HTTPStatus                    int              `json:"http_status,omitempty"`
+	ProviderCachedInputTokens     int64 `json:"provider_cached_input_tokens,omitempty"`
+	ProviderCacheWriteInputTokens int64 `json:"provider_cache_write_input_tokens,omitempty"`
+	// ProviderCacheWriteLongInputTokens partitions the write tier in turn: the
+	// span written with the provider's longer cache lifetime. Events written
+	// before it existed decode to zero, read as "the whole write was short".
+	ProviderCacheWriteLongInputTokens int64            `json:"provider_cache_write_long_input_tokens,omitempty"`
+	ProviderReasoningTokens           int64            `json:"provider_reasoning_tokens,omitempty"`
+	CostEstimated                     bool             `json:"cost_estimated,omitempty"`
+	TokenEstimated                    bool             `json:"token_estimated,omitempty"`
+	TokenUsageSource                  TokenUsageSource `json:"token_usage_source,omitempty"`
+	Outcome                           string           `json:"outcome,omitempty"`
+	ErrorClass                        string           `json:"error_class,omitempty"`
+	HTTPStatus                        int              `json:"http_status,omitempty"`
 	// What an operator takes to the upstream's support desk, and where along
 	// the request the failure happened. The class and the status say what kind
 	// of failure it was; these say which one, in the upstream's own vocabulary,
@@ -188,6 +192,9 @@ func (e Event) Validate() error {
 	if e.ProviderInputTokens < 0 || e.ProviderOutputTokens < 0 || e.PreparedOutputTokens < 0 || e.PreparedInputTokens < 0 ||
 		e.InputCostMicrosUSD < 0 || e.OutputCostMicrosUSD < 0 || e.FixedCostMicrosUSD < 0 {
 		problems = append(problems, errors.New("tokens cannot be negative"))
+	}
+	if e.ProviderCacheWriteLongInputTokens < 0 || e.ProviderCacheWriteLongInputTokens > e.ProviderCacheWriteInputTokens {
+		problems = append(problems, errors.New("long-lived cache write tokens must be a subset of cache write tokens"))
 	}
 	if e.AttemptNumber < 0 || e.RetryCount < 0 || e.FallbackCount < 0 ||
 		e.HTTPStatus < 0 || e.LatencyMillis < 0 {

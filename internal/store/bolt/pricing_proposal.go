@@ -198,6 +198,7 @@ func (s *Store) AdoptDeploymentPriceProposal(ctx context.Context, deploymentID, 
 			ID: priceID, DeploymentID: proposal.DeploymentID, Version: current + 1,
 			BillingMode: proposal.BillingMode, Currency: proposal.Currency, FormulaVersion: proposal.FormulaVersion,
 			InputMicrosPerMillion: proposal.InputMicrosPerMillion, CachedInputMicrosPerMillion: proposal.CachedInputMicrosPerMillion,
+			CacheWriteMicrosPerMillion: proposal.CacheWriteMicrosPerMillion, CacheWriteLongMicrosPerMillion: proposal.CacheWriteLongMicrosPerMillion,
 			OutputMicrosPerMillion: proposal.OutputMicrosPerMillion,
 			FixedRequestMicrosUSD:  proposal.FixedRequestMicrosUSD, EffectiveFrom: effectiveFrom.UTC(), Source: proposal.Source,
 			CreatedBy: actor, CreatedAt: now.UTC(), Revision: 1,
@@ -237,7 +238,7 @@ func (s *Store) AdoptDeploymentPriceProposal(ctx context.Context, deploymentID, 
 		effective := price.EffectiveFrom.UTC()
 		intent.DeploymentID, intent.PriceVersion, intent.EffectiveFrom = price.DeploymentID, price.Version, &effective
 		intent.RecordSource(price.Source)
-		intent.ChangeSummary = fmt.Sprintf("before={proposal:%s} after={price:%s,billing:%s,input:%d,cached_input:%d,output:%d,fixed:%d}", proposal.ID, price.ID, price.BillingMode, price.InputMicrosPerMillion, price.CachedInputMicrosPerMillion, price.OutputMicrosPerMillion, price.FixedRequestMicrosUSD) + price.Schedule.AuditSummary()
+		intent.ChangeSummary = fmt.Sprintf("before={proposal:%s} after={price:%s,billing:%s,input:%d,cached_input:%d,cache_write:%d,cache_write_long:%d,output:%d,fixed:%d}", proposal.ID, price.ID, price.BillingMode, price.InputMicrosPerMillion, price.CachedInputMicrosPerMillion, price.CacheWriteMicrosPerMillion, price.CacheWriteLongMicrosPerMillion, price.OutputMicrosPerMillion, price.FixedRequestMicrosUSD) + price.Schedule.AuditSummary()
 		return putPricingAuditIntentTx(tx, intent)
 	})
 	// Adoption appends a version like any other creation, so the audited copy

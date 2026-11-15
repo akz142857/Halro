@@ -391,7 +391,8 @@ describe("destructive step-up", () => {
     const activePrice = {
       id: "price_a", deployment_id: deployment.id, version: 1, revision: 1,
       billing_mode: "metered", currency: "USD", formula_version: "v1",
-      input_micros_per_million: 1_000_000, output_micros_per_million: 2_000_000,
+      input_micros_per_million: 1_000_000, cached_input_micros_per_million: 100_000, output_micros_per_million: 2_000_000,
+      cache_write_micros_per_million: 1_250_000, cache_write_long_micros_per_million: 1_500_000,
       fixed_request_micros_usd: 0, effective_from: "2026-08-10T00:00:00Z",
       source: { type: "manual", assurance: "asserted" }, status: "active",
     } as DeploymentPriceVersion;

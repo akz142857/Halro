@@ -809,7 +809,7 @@ func (s *Service) startAttempt(
 }
 
 func accountingTermsFromSnapshot(price domain.DeploymentPriceVersion, snapshot domain.PriceSnapshot, target provider.Target, inputTokens, outputTokens int64) (int64, ledger.LeaseMode, *domain.PriceSnapshot, provider.Target, error) {
-	cost, err := snapshot.Calculate(inputTokens, 0, outputTokens)
+	reservation, err := snapshotReservationCost(snapshot, target, inputTokens, outputTokens)
 	if err != nil {
 		return 0, "", nil, target, gatewayError("accounting_error", "unable to estimate request cost", http.StatusServiceUnavailable, err)
 	}
@@ -817,7 +817,6 @@ func accountingTermsFromSnapshot(price domain.DeploymentPriceVersion, snapshot d
 	if price.BillingMode == domain.BillingModeFree {
 		mode = ledger.LeaseModeFree
 	}
-	reservation := cost.TotalCostMicrosUSD
 	if mode == ledger.LeaseModeMetered && reservation == 0 {
 		// A metered lease has to reserve something — the Ledger refuses one that
 		// reserves nothing — and an operation with no span to price still opens
@@ -827,11 +826,23 @@ func accountingTermsFromSnapshot(price domain.DeploymentPriceVersion, snapshot d
 		reservation = 1
 	}
 	priced := target
-	priced.InputMicrosPerMillion = *snapshot.InputMicrosPerMillion
-	priced.CachedInputMicrosPerMillion = *snapshot.CachedInputMicrosPerMillion
-	priced.OutputMicrosPerMillion = *snapshot.OutputMicrosPerMillion
-	priced.FixedRequestMicrosUSD = *snapshot.FixedRequestMicrosUSD
+	rates := snapshot.Tier()
+	priced.InputMicrosPerMillion = rates.InputMicrosPerMillion
+	priced.CachedInputMicrosPerMillion = rates.CachedInputMicrosPerMillion
+	priced.CacheWriteMicrosPerMillion = rates.CacheWriteMicrosPerMillion
+	priced.CacheWriteLongMicrosPerMillion = rates.CacheWriteLongMicrosPerMillion
+	priced.OutputMicrosPerMillion = rates.OutputMicrosPerMillion
+	priced.FixedRequestMicrosUSD = rates.FixedRequestMicrosUSD
+	priced.PriceScheduleTier = rates.Provenance
 	return reservation, mode, &snapshot, priced, nil
+}
+
+func snapshotReservationCost(snapshot domain.PriceSnapshot, target provider.Target, inputTokens, outputTokens int64) (int64, error) {
+	if target.OrdinaryInputEstimate {
+		cost, err := snapshot.Calculate(domain.BilledTokens{Input: inputTokens, Output: outputTokens})
+		return cost.TotalCostMicrosUSD, err
+	}
+	return snapshot.ReservationCost(inputTokens, outputTokens)
 }
 
 func (s *Service) prepareAccountingLease(ctx context.Context, target provider.Target, inputTokens, outputTokens int64) (int64, ledger.LeaseMode, *domain.PriceSnapshot, provider.Target, error) {
@@ -1892,7 +1903,7 @@ func (s *Service) MessagesCountTokens(ctx context.Context, plaintextKey, version
 		if redactionErr != nil {
 			settlement.Outcome = "policy_rejected"
 		}
-		setSettlementCost(&settlement, attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD)
+		setSettlementCost(&settlement, attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD, domain.BilledTokens{})
 	}
 	if err := attempt.finish(providerErr, settlement); err != nil {
 		return anthropicapi.TokenCount{}, err
@@ -2801,19 +2812,19 @@ func (s *Service) finalizeRequest(request budget.Request, outcome string) error 
 }
 
 func estimateReservation(inputTokens, outputTokens int64, target provider.Target) (int64, error) {
-	// A reservation is taken before the provider answers, so no cache read has
-	// been reported yet and the whole prompt reserves at the ordinary input rate.
-	reservation, err := budget.EstimateCostMicros(budget.TokenCost{
-		InputTokens: inputTokens, OutputTokens: outputTokens,
-		InputMicrosPerMillion: target.InputMicrosPerMillion, OutputMicrosPerMillion: target.OutputMicrosPerMillion,
-	})
+	tier := target.PriceTier()
+	var reservation int64
+	var err error
+	if target.OrdinaryInputEstimate {
+		var cost domain.PriceCostBreakdown
+		cost, err = tier.Calculate(domain.BilledTokens{Input: inputTokens, Output: outputTokens})
+		reservation = cost.TotalCostMicrosUSD
+	} else {
+		reservation, err = tier.ReservationCost(inputTokens, outputTokens)
+	}
 	if err != nil {
 		return 0, gatewayError("accounting_error", "unable to estimate request cost", 503, err)
 	}
-	if target.FixedRequestMicrosUSD > math.MaxInt64-reservation {
-		return 0, gatewayError("accounting_error", "fixed request price overflows", 503, nil)
-	}
-	reservation += target.FixedRequestMicrosUSD
 	if reservation == 0 {
 		reservation = 1
 	}
@@ -2966,9 +2977,8 @@ func (s *Service) captureTokenGuardPricingView(
 			if err != nil {
 				return 0, "", gatewayError("accounting_error", "candidate pricing snapshot is invalid", http.StatusServiceUnavailable, err)
 			}
-			// Token Guard bounds what a request may cost before it runs, so it
-			// prices every candidate as if nothing were served from cache.
-			cost, err := snapshot.Calculate(inputTokens, 0, outputTokens)
+			// Token Guard uses the same quote as attempt reservation.
+			reservation, err := snapshotReservationCost(snapshot, target, inputTokens, outputTokens)
 			if err != nil {
 				return 0, "", gatewayError("accounting_error", "candidate cost could not be calculated", http.StatusServiceUnavailable, err)
 			}
@@ -2978,8 +2988,8 @@ func (s *Service) captureTokenGuardPricingView(
 			}
 			entry.EvidenceStatus, entry.SnapshotSHA256 = string(domain.PriceEvidenceVersioned), digest
 			entries = append(entries, entry)
-			if cost.TotalCostMicrosUSD > maximumCost {
-				maximumCost = cost.TotalCostMicrosUSD
+			if reservation > maximumCost {
+				maximumCost = reservation
 			}
 			continue
 		}
@@ -3251,6 +3261,7 @@ func settlementForResult(
 	target provider.Target,
 	reservationMicrosUSD int64,
 ) budget.Settlement {
+	prepared := domain.BilledTokens{Input: estimatedInputTokens, Output: estimatedOutputTokens}
 	result := budget.Settlement{Outcome: "success"}
 	if providerErr != nil {
 		result.Outcome = "provider_error"
@@ -3261,7 +3272,7 @@ func settlementForResult(
 			result.ProviderInputTokens = response.Usage.InputTokens
 			result.ProviderOutputTokens = response.Usage.OutputTokens
 			recordUsageTiers(&result, *response.Usage)
-			setSettlementCost(&result, target, reservationMicrosUSD)
+			setSettlementCost(&result, target, reservationMicrosUSD, prepared)
 			return result
 		}
 		result.ProviderInputTokens = estimatedInputTokens
@@ -3269,7 +3280,7 @@ func settlementForResult(
 		result.PreparedOutputTokens = estimatedOutputTokens
 		result.TokenEstimated = true
 		result.CostEstimated = true
-		setSettlementCost(&result, target, reservationMicrosUSD)
+		setSettlementCost(&result, target, reservationMicrosUSD, prepared)
 		return result
 	}
 	if !validSemanticUsage(response.Usage) {
@@ -3283,7 +3294,7 @@ func settlementForResult(
 		result.ProviderOutputTokens = response.Usage.OutputTokens
 		recordUsageTiers(&result, *response.Usage)
 	}
-	setSettlementCost(&result, target, reservationMicrosUSD)
+	setSettlementCost(&result, target, reservationMicrosUSD, prepared)
 	return result
 }
 
@@ -3298,59 +3309,62 @@ func settlementForResult(
 // compatibility mapping already recovers the full span this way; the native path
 // was reading the same field with the other meaning.
 func nativeAnthropicUsage(usage anthropicapi.Usage) semantic.Usage {
-	promptTokens := usage.PromptTokens()
-	return semantic.Usage{
-		InputTokens:           promptTokens,
-		CachedInputTokens:     usage.CacheReadInputTokens,
-		CacheWriteInputTokens: usage.CacheCreationInputTokens,
-		OutputTokens:          usage.OutputTokens,
-		ReasoningTokens:       usage.ReasoningTokens(),
-		TotalTokens:           promptTokens + usage.OutputTokens,
-		Source:                semantic.UsageProviderReported,
-	}
+	return anthropicwire.DecodeUsage(usage)
 }
 
-// recordUsageTiers copies the provider's token breakdown onto the settlement and
-// marks the cost estimated whenever a tier is reported that the price cannot
-// express.
+// recordUsageTiers copies the provider's token breakdown onto the settlement.
 //
-// A cache read now has its own rate on the price version, so a cached span is
-// charged at what it actually costs and needs no such flag. A cache *write*
-// still does: upstreams bill it at a premium over the input rate — 1.25x on
-// Anthropic's table — and a Deployment has no term for it, so those tokens are
-// charged at the ordinary input rate and the row is marked estimated. That is an
-// under-charge rather than an upper bound, which is exactly why it must stay
-// visible: CostEstimated is the signal that identifies the rows worth re-rating
-// once a price version can express the write tier.
+// Every tier it copies has its own rate on the price version — cache reads,
+// and cache writes at both of their lifetimes — so a reported tier is charged
+// at what it actually costs and needs no estimated flag. (A write tier used to
+// set CostEstimated, because it was charged at the ordinary input rate while
+// upstreams bill it at a premium; ADR 0028 gave it its rates.)
 func recordUsageTiers(result *budget.Settlement, usage semantic.Usage) {
 	result.ProviderCachedInputTokens = usage.CachedInputTokens
 	result.ProviderCacheWriteInputTokens = usage.CacheWriteInputTokens
+	result.ProviderCacheWriteLongInputTokens = usage.CacheWriteLongInputTokens
 	result.ProviderReasoningTokens = usage.ReasoningTokens
-	if usage.CacheWriteInputTokens > 0 {
-		result.CostEstimated = true
-	}
 }
 
-func setSettlementCost(result *budget.Settlement, target provider.Target, reservationMicrosUSD int64) {
-	cost, err := budget.EstimateCostMicros(budget.TokenCost{
-		InputTokens:                 result.ProviderInputTokens,
-		CachedInputTokens:           result.ProviderCachedInputTokens,
-		OutputTokens:                result.ProviderOutputTokens,
-		InputMicrosPerMillion:       target.InputMicrosPerMillion,
-		CachedInputMicrosPerMillion: target.CachedInputMicrosPerMillion,
-		OutputMicrosPerMillion:      target.OutputMicrosPerMillion,
-	})
+// setSettlementCost bills the attempt at its pinned rates. An estimated
+// generation prompt uses the conservative split, while synthetic resource
+// units use ordinary input. Settlement stores the split for Ledger validation.
+func setSettlementCost(result *budget.Settlement, target provider.Target, reservationMicrosUSD int64, prepared domain.BilledTokens) {
+	tier := target.PriceTier()
+	tokens := domain.BilledTokens{
+		Input:          result.ProviderInputTokens,
+		CachedInput:    result.ProviderCachedInputTokens,
+		CacheWrite:     result.ProviderCacheWriteInputTokens,
+		CacheWriteLong: result.ProviderCacheWriteLongInputTokens,
+		Output:         result.ProviderOutputTokens,
+	}
+	if result.TokenEstimated && !target.OrdinaryInputEstimate {
+		tokens = tier.ConservativeTokens(tokens.Input, tokens.Output)
+	}
+	cost, err := tier.Calculate(tokens)
+	if err != nil {
+		// Provider-reported usage can cost more than fits in micro-USD.
+		// Settle with the prepared estimate and the matching token split so
+		// recovery and the Ledger can reproduce the same charge.
+		tokens = prepared
+		if !target.OrdinaryInputEstimate {
+			tokens = tier.ConservativeTokens(prepared.Input, prepared.Output)
+		}
+		result.PreparedOutputTokens = prepared.Output
+		result.ProviderReasoningTokens = 0
+		result.TokenEstimated, result.CostEstimated = true, true
+		cost, err = tier.Calculate(tokens)
+	}
+	result.ProviderInputTokens = tokens.Input
+	result.ProviderOutputTokens = tokens.Output
+	result.ProviderCachedInputTokens = tokens.CachedInput
+	result.ProviderCacheWriteInputTokens = tokens.CacheWrite
+	result.ProviderCacheWriteLongInputTokens = tokens.CacheWriteLong
 	if err != nil {
 		result.CommittedMicrosUSD = reservationMicrosUSD
-		result.CostEstimated = true
 		return
 	}
-	if target.FixedRequestMicrosUSD > math.MaxInt64-cost {
-		result.CommittedMicrosUSD = reservationMicrosUSD
-		result.CostEstimated = true
-		return
-	}
-	result.CommittedMicrosUSD = cost + target.FixedRequestMicrosUSD
+	result.CommittedMicrosUSD = cost.TotalCostMicrosUSD
 }
 
 // enrichSettlement records on the settlement what the failure was, so the
@@ -3401,6 +3415,7 @@ func embeddingSettlement(
 	target provider.Target,
 	reservationMicrosUSD int64,
 ) budget.Settlement {
+	prepared := domain.BilledTokens{Input: estimatedInputTokens}
 	result := budget.Settlement{Outcome: "success"}
 	if providerErr != nil {
 		result.Outcome = "provider_error"
@@ -3409,7 +3424,7 @@ func embeddingSettlement(
 		}
 		if validSemanticUsage(response.Usage) {
 			result.ProviderInputTokens = response.Usage.InputTokens
-			setSettlementCost(&result, target, reservationMicrosUSD)
+			setSettlementCost(&result, target, reservationMicrosUSD, prepared)
 			return result
 		}
 		result.ProviderInputTokens = estimatedInputTokens
@@ -3422,7 +3437,7 @@ func embeddingSettlement(
 	} else {
 		result.ProviderInputTokens = response.Usage.InputTokens
 	}
-	setSettlementCost(&result, target, reservationMicrosUSD)
+	setSettlementCost(&result, target, reservationMicrosUSD, prepared)
 	return result
 }
 
@@ -3436,6 +3451,7 @@ func streamSettlement(
 	target provider.Target,
 	reservationMicrosUSD int64,
 ) budget.Settlement {
+	prepared := domain.BilledTokens{Input: estimatedInputTokens, Output: estimatedOutputTokens}
 	result := budget.Settlement{Outcome: "success"}
 	if providerErr != nil {
 		result.Outcome = "provider_error"
@@ -3469,7 +3485,7 @@ func streamSettlement(
 		result.TokenEstimated = true
 		result.CostEstimated = true
 	}
-	setSettlementCost(&result, target, reservationMicrosUSD)
+	setSettlementCost(&result, target, reservationMicrosUSD, prepared)
 	return result
 }
 
@@ -3519,7 +3535,7 @@ func cappedOutputEstimate(estimated, delivered int64) int64 {
 }
 
 func validSemanticUsage(usage *semantic.Usage) bool {
-	if usage == nil || usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.TotalTokens < 0 {
+	if usage == nil || usage.Validate() != nil {
 		return false
 	}
 	if usage.InputTokens > maxAccountableTokens ||
@@ -3527,8 +3543,7 @@ func validSemanticUsage(usage *semantic.Usage) bool {
 		usage.TotalTokens > maxAccountableTokens {
 		return false
 	}
-	total, err := addTokens(usage.InputTokens, usage.OutputTokens)
-	return err == nil && usage.TotalTokens >= total
+	return true
 }
 
 // requestedOutputTokens is what the reservation is made against: what the caller

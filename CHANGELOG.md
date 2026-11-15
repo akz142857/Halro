@@ -6,6 +6,21 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Set short- and long-lived prompt cache write prices for model deployments,
+  including time-of-day windows. Usage details retain the long-lived write count.
+
+### Upgrading
+
+- Metadata schema 43 fills both write rates from each existing input rate.
+  Keep the existing data directory. Historical settlements and the rounded
+  charge for the same reported usage at backfilled rates are preserved.
+  HA upgrades across this schema change use an offline verified backup, restore
+  under a new incarnation, and Replica reseed.
+- For configuration transfer, upgrade the source and re-export its bundle in
+  version 2 to include both write rates.
+
 ## [0.14.0] - 2026-11-11
 
 ### Added
