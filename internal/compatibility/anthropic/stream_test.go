@@ -19,12 +19,20 @@ func TestStreamRendererEmitsAnthropicLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	final, err := renderer.Accept(semantic.Event{Kind: semantic.EventUsage, ID: "chatcmpl-1", Model: "provider", Usage: &semantic.Usage{InputTokens: 2, OutputTokens: 1, TotalTokens: 3, Source: semantic.UsageProviderReported}, Translation: semantic.TranslationNone, MappingRevision: 1})
+	usage := &semantic.Usage{
+		InputTokens: 2, CacheWriteInputTokens: 2, CacheWriteLongInputTokens: 1,
+		CacheWriteTTLPair: semantic.CacheWriteTTL5m1h,
+		OutputTokens:      1, TotalTokens: 3, Source: semantic.UsageProviderReported,
+	}
+	final, err := renderer.Accept(semantic.Event{Kind: semantic.EventUsage, ID: "chatcmpl-1", Model: "provider", Usage: usage, Translation: semantic.TranslationNone, MappingRevision: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(final) != 3 || final[0].Type != "content_block_stop" || final[1].Type != "message_delta" || final[2].Type != "message_stop" {
 		t.Fatalf("unexpected final events: %#v", final)
+	}
+	if got := final[1].Usage; got == nil || got.CacheCreationInputTokens != 2 || got.CacheCreation != nil {
+		t.Fatalf("unexpected message_delta usage: %+v", got)
 	}
 }
 

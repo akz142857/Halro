@@ -133,6 +133,14 @@ func validateSnapshotAgainstPrice(prices *Bucket, snapshot domain.PriceSnapshot)
 	if err != nil {
 		return err
 	}
+	// Schema 43 added write rates to live metadata without rewriting old
+	// Ledger leases or their pin digests. A pre-upgrade snapshot matches the
+	// migrated price only when both write rates are the backfilled input rate.
+	if snapshot.CacheWriteMicrosPerMillion == nil && snapshot.CacheWriteLongMicrosPerMillion == nil &&
+		*expected.CacheWriteMicrosPerMillion == *expected.InputMicrosPerMillion &&
+		*expected.CacheWriteLongMicrosPerMillion == *expected.InputMicrosPerMillion {
+		expected.CacheWriteMicrosPerMillion, expected.CacheWriteLongMicrosPerMillion = nil, nil
+	}
 	left, err := snapshot.Digest()
 	if err != nil {
 		return err
@@ -164,11 +172,18 @@ func (s *Store) PricingBackupState() (PricingBackupState, error) {
 		} {
 			stateHash.Write(name)
 			bucket := tx.Bucket(name)
+			if bucket == nil {
+				return fmt.Errorf("missing pricing backup bucket %q", name)
+			}
 			if err := hashBucketRecursive(stateHash, bucket); err != nil {
 				return err
 			}
 		}
-		if err := tx.Bucket(bucketPricingAuditIntents).ForEach(func(key, value []byte) error {
+		intents := tx.Bucket(bucketPricingAuditIntents)
+		if intents == nil {
+			return errors.New("missing pricing backup audit intent bucket")
+		}
+		if err := intents.ForEach(func(key, value []byte) error {
 			var intent domain.PricingAuditIntent
 			if err := json.Unmarshal(value, &intent); err != nil {
 				return err
@@ -187,6 +202,17 @@ func (s *Store) PricingBackupState() (PricingBackupState, error) {
 	result.StateSHA256 = "sha256:" + hex.EncodeToString(stateHash.Sum(nil))
 	result.PendingIntentSHA256 = "sha256:" + hex.EncodeToString(pendingHash.Sum(nil))
 	return result, err
+}
+
+// ArchivedPricingBackupState reads the manifest's pricing projection before
+// a restore migrates the staged metadata.
+func ArchivedPricingBackupState(path string) (PricingBackupState, error) {
+	db, err := bbolt.Open(path, 0o600, &bbolt.Options{ReadOnly: true, Timeout: time.Second})
+	if err != nil {
+		return PricingBackupState{}, err
+	}
+	defer db.Close()
+	return (&Store{db: db}).PricingBackupState()
 }
 
 // LegacyPricingBackupState computes the schema-13/backup-v2 projection before

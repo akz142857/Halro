@@ -207,6 +207,10 @@ type Usage struct {
 	// CacheWriteTokens is the in-process bridge for non-OpenAI providers. New
 	// OpenAI models report the same tier in prompt_tokens_details.cache_write_tokens.
 	CacheWriteTokens int64 `json:"-"`
+	// CacheWriteLongTokens carries a translated lifetime split through the
+	// Chat-shaped in-process bridge. Chat's wire usage reports a total only.
+	CacheWriteLongTokens int64  `json:"-"`
+	CacheWriteTTLPair    string `json:"-"`
 	// PromptCacheHitTokens and PromptCacheMissTokens are DeepSeek's spelling of
 	// the cache-read split. It speaks this wire format but reports the tiers as
 	// two sibling counters on usage rather than inside prompt_tokens_details, so

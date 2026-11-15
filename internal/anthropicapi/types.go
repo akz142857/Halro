@@ -717,11 +717,15 @@ func validateBlock(role string, block ContentBlock) error {
 }
 
 type Usage struct {
-	InputTokens              int64 `json:"input_tokens"`
-	OutputTokens             int64 `json:"output_tokens"`
-	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int64 `json:"cache_read_input_tokens,omitempty"`
-	ThinkingTokens           int64 `json:"thinking_tokens,omitempty"`
+	InputTokens              int64                 `json:"input_tokens"`
+	OutputTokens             int64                 `json:"output_tokens"`
+	CacheCreationInputTokens int64                 `json:"cache_creation_input_tokens,omitempty"`
+	CacheCreation            *CacheCreationDetails `json:"cache_creation,omitempty"`
+	// CacheCreationPartial marks earlier details when a stream later reports
+	// a higher cumulative total without a new breakdown.
+	CacheCreationPartial bool  `json:"-"`
+	CacheReadInputTokens int64 `json:"cache_read_input_tokens,omitempty"`
+	ThinkingTokens       int64 `json:"thinking_tokens,omitempty"`
 	// OutputTokensDetails is where Kimi's Anthropic-shaped face puts the same
 	// number, and it is a second place to look rather than a second meaning.
 	// Measured against a real Kimi account on 2026-09-01: a Messages response
@@ -730,6 +734,11 @@ type Usage struct {
 	// Kimi reasoning span as zero. Anthropic itself sends neither shape on most
 	// responses, so this member is simply absent there.
 	OutputTokensDetails *OutputTokenDetails `json:"output_tokens_details,omitempty"`
+}
+
+type CacheCreationDetails struct {
+	Ephemeral5mInputTokens int64 `json:"ephemeral_5m_input_tokens"`
+	Ephemeral1hInputTokens int64 `json:"ephemeral_1h_input_tokens"`
 }
 
 type OutputTokenDetails struct {

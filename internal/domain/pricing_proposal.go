@@ -41,9 +41,11 @@ type DeploymentPriceProposal struct {
 	// CachedInputMicrosPerMillion mirrors the adopted price version's cache-read
 	// term, so adopting a proposal produces a complete price rather than one
 	// that silently prices cached prompt tokens at zero.
-	CachedInputMicrosPerMillion int64 `json:"cached_input_micros_per_million"`
-	OutputMicrosPerMillion      int64 `json:"output_micros_per_million"`
-	FixedRequestMicrosUSD       int64 `json:"fixed_request_micros_usd"`
+	CachedInputMicrosPerMillion    int64 `json:"cached_input_micros_per_million"`
+	CacheWriteMicrosPerMillion     int64 `json:"cache_write_micros_per_million"`
+	CacheWriteLongMicrosPerMillion int64 `json:"cache_write_long_micros_per_million"`
+	OutputMicrosPerMillion         int64 `json:"output_micros_per_million"`
+	FixedRequestMicrosUSD          int64 `json:"fixed_request_micros_usd"`
 	// Schedule mirrors the adopted price version's time-of-day rule for the
 	// same reason the cache-read term does: adoption copies the proposal
 	// verbatim, so a proposal that could not carry the rule would silently
@@ -78,16 +80,14 @@ func (p DeploymentPriceProposal) Validate() error {
 			return errors.New("invalid price proposal warning")
 		}
 	}
-	if p.Currency != "USD" || p.FormulaVersion != PriceFormulaUSDTokensV1 ||
-		p.InputMicrosPerMillion < 0 || p.CachedInputMicrosPerMillion < 0 || p.OutputMicrosPerMillion < 0 || p.FixedRequestMicrosUSD < 0 {
+	rates := p.BaseTier()
+	if p.Currency != "USD" || p.FormulaVersion != PriceFormulaUSDTokensV1 || rates.hasNegativeRate() {
 		return errors.New("invalid price proposal candidate")
 	}
-	if p.BillingMode == BillingModeMetered && p.InputMicrosPerMillion == 0 && p.CachedInputMicrosPerMillion == 0 &&
-		p.OutputMicrosPerMillion == 0 && p.FixedRequestMicrosUSD == 0 {
+	if p.BillingMode == BillingModeMetered && rates.isZero() {
 		return errors.New("metered proposal requires a positive component")
 	}
-	if p.BillingMode == BillingModeFree && (p.InputMicrosPerMillion != 0 || p.CachedInputMicrosPerMillion != 0 ||
-		p.OutputMicrosPerMillion != 0 || p.FixedRequestMicrosUSD != 0) {
+	if p.BillingMode == BillingModeFree && !rates.isZero() {
 		return errors.New("free proposal components must be zero")
 	}
 	if p.BillingMode != BillingModeMetered && p.BillingMode != BillingModeFree {
@@ -141,4 +141,16 @@ func (p DeploymentPriceProposal) ComputeDigest() (string, error) {
 	}
 	digest := sha256.Sum256(encoded)
 	return "sha256:" + hex.EncodeToString(digest[:]), nil
+}
+
+// BaseTier is the proposal's base rates, the ones an adopted price version takes.
+func (p DeploymentPriceProposal) BaseTier() PriceTier {
+	return PriceTier{
+		InputMicrosPerMillion:          p.InputMicrosPerMillion,
+		CachedInputMicrosPerMillion:    p.CachedInputMicrosPerMillion,
+		CacheWriteMicrosPerMillion:     p.CacheWriteMicrosPerMillion,
+		CacheWriteLongMicrosPerMillion: p.CacheWriteLongMicrosPerMillion,
+		OutputMicrosPerMillion:         p.OutputMicrosPerMillion,
+		FixedRequestMicrosUSD:          p.FixedRequestMicrosUSD,
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -1336,6 +1337,30 @@ func TestEmbeddingsUsesSameAuthorizationAndAccounting(t *testing.T) {
 	}
 }
 
+func TestEmbeddingsUseOrdinaryRateWhenUsageIsAbsent(t *testing.T) {
+	f := newFixture(t, 10)
+	defer f.close()
+	f.adapter.embeddingResponse.Usage = nil
+	now := time.Now().UTC()
+	prices := &fakePricePinStore{price: domain.DeploymentPriceVersion{
+		ID: "price_embeddings", DeploymentID: "dep_target_1", Version: 1, Revision: 1,
+		BillingMode: domain.BillingModeMetered, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
+		InputMicrosPerMillion: 1_000_000, CacheWriteLongMicrosPerMillion: 100_000_000,
+		EffectiveFrom: now.Add(-time.Hour), CreatedBy: "test", CreatedAt: now.Add(-time.Hour),
+		Source: domain.PriceSource{Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted,
+			ReceivedAt: now.Add(-time.Hour), Reference: "test", AssertedWithoutArchive: true},
+	}}
+	f.service.pricing = prices
+	request := openaiapi.EmbeddingRequest{Model: "chat", Input: json.RawMessage(`["hello"]`)}
+	if _, err := f.service.Embeddings(context.Background(), f.plaintext, request); err != nil {
+		t.Fatal(err)
+	}
+	balance := f.state.Balance(f.project.ID, now.Format("2006-01-02"), testTimezoneVersion)
+	if balance.CommittedMicrosUSD != request.EstimatedInputTokens() || balance.ReservedMicrosUSD != 0 {
+		t.Fatalf("embedding balance used the cache-write rate: %+v", balance)
+	}
+}
+
 func TestEmbeddingsRejectsRouteWithoutCapabilityBeforeProviderCall(t *testing.T) {
 	f := newFixture(t, 1_000)
 	defer f.close()
@@ -2621,5 +2646,27 @@ func TestProjectMaxStreamDurationEndsAStreamThatOutlivesIt(t *testing.T) {
 	took, err = stream(0, 300*time.Millisecond)
 	if err == nil || took < 300*time.Millisecond {
 		t.Fatalf("a Project with no limit of its own ended its stream at %s (%v), before the caller's deadline", took, err)
+	}
+}
+
+func TestCacheWriteSettlementUsesPreparedBoundsOnPriceOverflow(t *testing.T) {
+	target := provider.Target{CacheWriteLongMicrosPerMillion: math.MaxInt64}
+	const preparedInput = 10
+	const reportedLong = 1_000_001
+	tier := target.PriceTier()
+	reservation, err := tier.ReservationCost(preparedInput, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := settlementForResult(semantic.GenerateResult{Usage: &semantic.Usage{
+		InputTokens: reportedLong, CacheWriteInputTokens: reportedLong, CacheWriteLongInputTokens: reportedLong,
+		TotalTokens: reportedLong, Source: semantic.UsageProviderReported,
+	}}, nil, preparedInput, 0, target, reservation)
+	cost, err := tier.Calculate(domain.BilledTokens{Input: result.ProviderInputTokens, CachedInput: result.ProviderCachedInputTokens,
+		CacheWrite: result.ProviderCacheWriteInputTokens, CacheWriteLong: result.ProviderCacheWriteLongInputTokens, Output: result.ProviderOutputTokens})
+	if err != nil || !result.TokenEstimated || !result.CostEstimated || result.ProviderInputTokens != preparedInput ||
+		result.ProviderCacheWriteLongInputTokens != preparedInput || result.CommittedMicrosUSD != cost.TotalCostMicrosUSD ||
+		result.CommittedMicrosUSD > reservation {
+		t.Fatalf("settlement=%+v cost=%+v reservation=%d err=%v", result, cost, reservation, err)
 	}
 }

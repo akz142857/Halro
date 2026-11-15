@@ -110,13 +110,16 @@ type Settlement struct {
 	// version can re-rate the span without replaying provider traffic.
 	ProviderCachedInputTokens     int64
 	ProviderCacheWriteInputTokens int64
-	ProviderReasoningTokens       int64
-	PreparedOutputTokens          int64
-	CostEstimated                 bool
-	TokenEstimated                bool
-	Outcome                       string
-	ErrorClass                    string
-	HTTPStatus                    int
+	// ProviderCacheWriteLongInputTokens is the subset of the write tier written
+	// with the provider's longer cache lifetime, billed at its own rate.
+	ProviderCacheWriteLongInputTokens int64
+	ProviderReasoningTokens           int64
+	PreparedOutputTokens              int64
+	CostEstimated                     bool
+	TokenEstimated                    bool
+	Outcome                           string
+	ErrorClass                        string
+	HTTPStatus                        int
 	// The upstream's own identifiers for this failure, and the phase it
 	// happened in. They are carried through to the ledger so a support ticket
 	// raised days later can still name the request the upstream saw; the
@@ -1121,6 +1124,7 @@ func unservedSettlement(settlement Settlement) bool {
 		settlement.ProviderOutputTokens == 0 &&
 		settlement.ProviderCachedInputTokens == 0 &&
 		settlement.ProviderCacheWriteInputTokens == 0 &&
+		settlement.ProviderCacheWriteLongInputTokens == 0 &&
 		settlement.Outcome != "success"
 }
 
@@ -1139,7 +1143,6 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		settlement.ProviderInputTokens < 0 ||
 		settlement.ProviderOutputTokens < 0 ||
 		settlement.ProviderCachedInputTokens < 0 ||
-		settlement.ProviderCacheWriteInputTokens < 0 ||
 		settlement.ProviderReasoningTokens < 0 ||
 		settlement.PreparedOutputTokens < 0 {
 		return ErrInvalidAmount
@@ -1147,7 +1150,7 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 	// The tiers partition the input total. A sum that overruns it means a caller
 	// added them on top instead of reporting a breakdown, which would let a
 	// later re-rating charge the cached span twice.
-	if settlement.ProviderCachedInputTokens+settlement.ProviderCacheWriteInputTokens > settlement.ProviderInputTokens {
+	if settlement.billedTokens().Validate() != nil {
 		return ErrInvalidAmount
 	}
 	var priceSnapshot *domain.PriceSnapshot
@@ -1156,7 +1159,7 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		copy := attempt.PriceSnapshot.Clone()
 		priceSnapshot = &copy
 		if copy.CostValueStatus == domain.CostValueKnown && !unservedSettlement(settlement) {
-			cost, costErr := copy.Calculate(settlement.ProviderInputTokens, settlement.ProviderCachedInputTokens, settlement.ProviderOutputTokens)
+			cost, costErr := copy.Calculate(settlement.billedTokens())
 			if costErr != nil {
 				return costErr
 			}
@@ -1209,26 +1212,27 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		CommittedMicrosUSD: committedValue,
 		LeaseMode:          attempt.LeaseMode, PriceSnapshot: priceSnapshot,
 		InputCostMicrosUSD: inputCost, OutputCostMicrosUSD: outputCost, FixedCostMicrosUSD: fixedCost,
-		ProviderInputTokens:           settlement.ProviderInputTokens,
-		ProviderOutputTokens:          settlement.ProviderOutputTokens,
-		ProviderCachedInputTokens:     settlement.ProviderCachedInputTokens,
-		ProviderCacheWriteInputTokens: settlement.ProviderCacheWriteInputTokens,
-		ProviderReasoningTokens:       settlement.ProviderReasoningTokens,
-		PreparedOutputTokens:          settlement.PreparedOutputTokens,
-		CostEstimated:                 settlement.CostEstimated,
-		TokenEstimated:                settlement.TokenEstimated,
-		TokenUsageSource:              tokenSource,
-		Outcome:                       settlement.Outcome,
-		ErrorClass:                    settlement.ErrorClass,
-		HTTPStatus:                    settlement.HTTPStatus,
-		ProviderCode:                  settlement.ProviderCode,
-		ProviderFailureReason:         settlement.ProviderFailureReason,
-		Retryable:                     settlement.Retryable,
-		Ambiguous:                     settlement.Ambiguous,
-		FailureSemanticsRecorded:      settlement.FailureSemanticsRecorded,
-		ProviderRequestID:             settlement.ProviderRequestID,
-		FailurePhase:                  settlement.FailurePhase,
-		LatencyMillis:                 settlement.LatencyMillis,
+		ProviderInputTokens:               settlement.ProviderInputTokens,
+		ProviderOutputTokens:              settlement.ProviderOutputTokens,
+		ProviderCachedInputTokens:         settlement.ProviderCachedInputTokens,
+		ProviderCacheWriteInputTokens:     settlement.ProviderCacheWriteInputTokens,
+		ProviderCacheWriteLongInputTokens: settlement.ProviderCacheWriteLongInputTokens,
+		ProviderReasoningTokens:           settlement.ProviderReasoningTokens,
+		PreparedOutputTokens:              settlement.PreparedOutputTokens,
+		CostEstimated:                     settlement.CostEstimated,
+		TokenEstimated:                    settlement.TokenEstimated,
+		TokenUsageSource:                  tokenSource,
+		Outcome:                           settlement.Outcome,
+		ErrorClass:                        settlement.ErrorClass,
+		HTTPStatus:                        settlement.HTTPStatus,
+		ProviderCode:                      settlement.ProviderCode,
+		ProviderFailureReason:             settlement.ProviderFailureReason,
+		Retryable:                         settlement.Retryable,
+		Ambiguous:                         settlement.Ambiguous,
+		FailureSemanticsRecorded:          settlement.FailureSemanticsRecorded,
+		ProviderRequestID:                 settlement.ProviderRequestID,
+		FailurePhase:                      settlement.FailurePhase,
+		LatencyMillis:                     settlement.LatencyMillis,
 	}
 	attempt.Period.Stamp(&settled)
 	return m.appendApply(ctx, settled)
@@ -1279,14 +1283,19 @@ func (m *Manager) RecoverPendingLeases(ctx context.Context) error {
 				OccurredAt: event.OccurredAt,
 			}
 			if event.PriceSnapshot != nil && event.PriceSnapshot.CostValueStatus == domain.CostValueKnown {
-				// Nothing is known about how much of a recovered attempt's prompt
-				// the provider served from cache, so none of it is: the whole
-				// prompt is charged at the ordinary input rate, which is the
-				// conservative reading of an ambiguous outcome.
-				cost, err := event.PriceSnapshot.Calculate(event.PreparedInputTokens, 0, event.PreparedOutputTokens)
+				// Embeddings and resource operations use ordinary input.
+				// Ambiguous prompt usage uses the frozen conservative split.
+				tokens := domain.BilledTokens{Input: event.PreparedInputTokens, Output: event.PreparedOutputTokens}
+				if !provider.PrimitiveUsesOrdinaryInputEstimate(event.ProfileID, event.ProviderPrimitive) {
+					tokens = event.PriceSnapshot.ConservativeTokens(tokens.Input, tokens.Output)
+				}
+				cost, err := event.PriceSnapshot.Calculate(tokens)
 				if err != nil {
 					return fmt.Errorf("recover attempt %q: %w", event.AttemptID, err)
 				}
+				settlement.ProviderCachedInputTokens = tokens.CachedInput
+				settlement.ProviderCacheWriteInputTokens = tokens.CacheWrite
+				settlement.ProviderCacheWriteLongInputTokens = tokens.CacheWriteLong
 				settlement.CommittedMicrosUSD = cost.TotalCostMicrosUSD
 			}
 		}
@@ -1404,48 +1413,17 @@ func (m *Manager) appendApplyRecord(ctx context.Context, event ledger.Event) (le
 	return record, nil
 }
 
-// TokenCost is one attempt's priced tokens together with the rates they are
-// billed at. CachedInputTokens is a subset of InputTokens — the span the
-// provider served from its own cache — and is billed at
-// CachedInputMicrosPerMillion instead of the ordinary input rate. Callers that
-// do not know the split, such as a reservation taken before the provider
-// answers, leave it zero and pay the ordinary rate for the whole prompt.
-type TokenCost struct {
-	InputTokens                 int64
-	CachedInputTokens           int64
-	OutputTokens                int64
-	InputMicrosPerMillion       int64
-	CachedInputMicrosPerMillion int64
-	OutputMicrosPerMillion      int64
-}
-
-// EstimateCostMicros rounds each priced span up independently, matching
-// domain.PriceSnapshot.Calculate exactly: a settlement whose committed amount
-// disagrees with the snapshot by even one micro-USD is rejected as not matching
-// its frozen price.
-func EstimateCostMicros(cost TokenCost) (int64, error) {
-	if cost.InputTokens < 0 || cost.CachedInputTokens < 0 || cost.OutputTokens < 0 ||
-		cost.InputMicrosPerMillion < 0 || cost.CachedInputMicrosPerMillion < 0 || cost.OutputMicrosPerMillion < 0 ||
-		cost.CachedInputTokens > cost.InputTokens {
-		return 0, ErrInvalidAmount
+// billedTokens is the split the settlement is priced on. Every tier is
+// reported by the provider (or, for a recovered attempt, assigned
+// conservatively) and none of them is re-derived here.
+func (s Settlement) billedTokens() domain.BilledTokens {
+	return domain.BilledTokens{
+		Input:          s.ProviderInputTokens,
+		CachedInput:    s.ProviderCachedInputTokens,
+		CacheWrite:     s.ProviderCacheWriteInputTokens,
+		CacheWriteLong: s.ProviderCacheWriteLongInputTokens,
+		Output:         s.ProviderOutputTokens,
 	}
-	inputCost, err := multiplyDivideCeil(cost.InputTokens-cost.CachedInputTokens, cost.InputMicrosPerMillion, 1_000_000)
-	if err != nil {
-		return 0, err
-	}
-	cachedCost, err := multiplyDivideCeil(cost.CachedInputTokens, cost.CachedInputMicrosPerMillion, 1_000_000)
-	if err != nil {
-		return 0, err
-	}
-	promptCost, err := checkedAdd(inputCost, cachedCost)
-	if err != nil {
-		return 0, err
-	}
-	outputCost, err := multiplyDivideCeil(cost.OutputTokens, cost.OutputMicrosPerMillion, 1_000_000)
-	if err != nil {
-		return 0, err
-	}
-	return checkedAdd(promptCost, outputCost)
 }
 
 func multiplyDivideCeil(left, right, divisor int64) (int64, error) {

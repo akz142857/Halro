@@ -297,7 +297,12 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	if member {
 		metadata, err = boltstore.OpenPrimary(cfg.MetadataPath())
 	} else {
-		metadata, err = boltstore.Open(cfg.MetadataPath())
+		metadata, err = boltstore.OpenWithJournalRecovery(cfg.MetadataPath(), func(store *boltstore.Store) ([]byte, error) {
+			if err := verifyVaultKeyCheck(store, secretVault); err != nil {
+				return nil, err
+			}
+			return loadMetadataJournalHMACKey(store, secretVault, masterKey)
+		})
 	}
 	if err != nil {
 		secretVault.Close()

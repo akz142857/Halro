@@ -64,6 +64,7 @@ ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/rel
 | [适配链条的未完成项](prd/adaptation-open-items.zh-CN.md) | 上面两份归档时留下的未完成项清单：§1 八条已修，§2 「能力上限三份真相」已由下面一份关闭，其余三项等外部凭据或排期，§3 是一处撤销的记录 |
 | [内存有界状态与历史持久化改造方案（第一版）](prd/memory-bounded-state-design-v1.zh-CN.md) | **未落地，路线已放弃**（2026-10-15）。实现留在 `memory-bounded-state` 分支，不合并；放弃原因见文首归档说明。由 todo 中的「内存有界的历史存储：重新设计」取代 |
 | [分时价位（按日时段折扣）](prd/time-of-day-pricing-review.zh-CN.md) | 采纳方案 B 并已实施，见 [ADR 0023](adr/0023-time-of-day-pricing.md)。价格版本可携带按供应商本地时段的费率表，档位在预留时刻定档并写入价格快照；空规则表 = 全天一档，**不需要迁移，不需要重新初始化数据目录** |
+| [模型计价维度升级方案](prd/model-pricing-dimensions-upgrade.zh-CN.md) | P1 已实施，见 [ADR 0028](adr/0028-cache-write-input-pricing.md)。缓存写入分短时/长时两档计价（schema 43，旧费率按输入价补齐，无需重新初始化）；P2 按输入长度分档、P3 服务端工具按次计价仅列设计要点 |
 | [适用能力改由服务端统一下发](prd/provider-capability-single-source.zh-CN.md) | 两轮全部实施并合入（PR #182）。六处 switch 收敛成 `internal/domain/provider_table.go`，新增只读端点 `GET /admin/api/v1/provider-profiles`，控制台不再镜像能力矩阵；请求契约改为扁平能力集，`bindings` 由服务端拆分——这是 API 形状变更，见 §10.8 |
 | [DeepSeek 适配方案](prd/deepseek-adaptation-plan.zh-CN.md) | 片 1–5 全部完成。片 1–4（缓存用量解码、字段申报按真实子集、thinking 映射、目录订正）2026-08-17 实施；片 5 于 2026-08-20 在真实账号跑通，`thinking` 拼写、`none` 关得掉、`hit + miss = prompt_tokens` 三条推断全部被证实（该文 §11）。仍未测量：思考开着时 `max_tokens` 算不算思维链——现实现按保守读法申报 `max_completion_tokens`。这次不是 GA 发版证据，未走 `tests/provider-matrix` |
 | [BigModel / Z.AI 适配方案](prd/bigmodel-adaptation-plan.zh-CN.md) | 中国大陆 Chat/Stream/Embeddings 与海外 Z.AI Chat/Stream 首期代码已实施：地域 profile/凭据隔离、严格方言渲染、模型目录、目标级推理约束、控制台与契约快照均已落地。当前标记为实验性；真实账号验证未运行，Anthropic 兼容 profile 仍按方案保持未注册 |
