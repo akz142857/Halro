@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@anthropic-ai/sdk": "1.4.0",
+    "@anthropic-ai/sdk": "1.7.0",
     "openai": "7.47.0"
   },
   "scripts": {
