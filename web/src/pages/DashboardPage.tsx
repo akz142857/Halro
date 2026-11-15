@@ -4,6 +4,7 @@ import { api } from "../api";
 import { ErrorState, Loading, Metric, PageHeader, SegmentedTabs, StatusDot } from "../components";
 import { FirstRunChecklist } from "./FirstRunChecklist";
 import { compactNumber, money, useInstantFormatter } from "../format";
+import type { Translate } from "../i18n";
 import { navigate } from "../navigation";
 import { adoptTimeContext, useAccountingTimeZone } from "../timezone";
 import { errorClassLabel } from "../failure";
@@ -260,12 +261,12 @@ function StatusRow({ label, ok, value }: { label: string; ok?: boolean; value: s
   return <div className="status-row"><span>{ok !== undefined && <StatusDot ok={ok} />}{label}</span><strong>{value}</strong></div>;
 }
 
-function costDetail(t: (key: string, options?: Record<string, unknown>) => string, estimated: number, unknown: number) {
+function costDetail(t: Translate, estimated: number, unknown: number) {
   if (unknown > 0) return t("dashboard.unknownCostExcluded", { count: unknown, estimated: estimated > 0 ? money(estimated) : "" });
   return estimated > 0 ? t("dashboard.estimatedCost", { cost: money(estimated) }) : t("dashboard.allCostKnown");
 }
 
-function buildAttention(input: { acceptingTraffic: boolean; accountingHealthy: boolean; unknownAttempts: number; budgetItems: GovernancePressureItem[]; capacityItems: GovernancePressureItem[]; pricingQuarantined: number; pricingUnknown: number; alertHealthy: boolean; walHealthy: boolean; recentAnomalies: UsageAnomaly[]; t: (key: string, options?: Record<string, unknown>) => string }): AttentionItem[] {
+function buildAttention(input: { acceptingTraffic: boolean; accountingHealthy: boolean; unknownAttempts: number; budgetItems: GovernancePressureItem[]; capacityItems: GovernancePressureItem[]; pricingQuarantined: number; pricingUnknown: number; alertHealthy: boolean; walHealthy: boolean; recentAnomalies: UsageAnomaly[]; t: Translate }): AttentionItem[] {
   const items: AttentionItem[] = [];
   if (!input.acceptingTraffic) items.push({ key: "traffic", title: input.t("dashboard.attention.traffic.title"), detail: input.t("dashboard.attention.traffic.detail"), href: "/admin/settings/diagnostics", danger: true });
   if (!input.accountingHealthy) items.push({ key: "ledger", title: input.t("dashboard.attention.ledger.title"), detail: input.t("dashboard.attention.ledger.detail"), href: "/admin/settings/diagnostics", danger: true });

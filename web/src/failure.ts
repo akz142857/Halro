@@ -1,3 +1,5 @@
+import type { Translate } from "./i18n";
+
 // How a failure is explained to a reader.
 //
 // The gateway sends its own identifiers — `error_class` is a member of
@@ -29,8 +31,6 @@ export const errorClasses = [
 ] as const;
 
 export type ErrorClass = (typeof errorClasses)[number];
-
-type Translate = (key: string, values?: Record<string, unknown>) => string;
 
 // errorClassLabel names the class in the reader's language, or hands back the
 // identifier the server sent.

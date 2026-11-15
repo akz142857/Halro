@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { Translate } from "../i18n";
 import { api, ApiError } from "../api";
 import { Loading, Modal } from "../components";
 import { predatesProviderIdentifiers } from "../failure";
@@ -95,7 +96,7 @@ function Fact({ label, value, code = false, emphasis = false }: FailureFact) {
 // row and the attempt row cannot disagree about when a blank means "none" and
 // when it means "not kept".
 export function providerIdentifierFacts(
-  t: (key: string, values?: Record<string, unknown>) => string,
+  t: Translate,
   failure: { provider_code?: string; provider_request_id?: string; failure_phase?: string } | undefined,
 ): { facts: FailureFact[]; unrecorded: boolean } {
   if (!failure || predatesProviderIdentifiers(failure)) {
@@ -111,7 +112,7 @@ export function providerIdentifierFacts(
 }
 
 export function providerAttributionFacts(
-  t: (key: string, values?: Record<string, unknown>) => string,
+  t: Translate,
   failure: {
     offering_id?: string;
     profile_id?: string;

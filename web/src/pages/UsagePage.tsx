@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api } from "../api";
 import { EmptyState, ErrorState, Loading, LoadMore, Modal, PageHeader, StatusDot } from "../components";
 import { compactNumber, money, useInstantFormatter } from "../format";
+import type { Translate } from "../i18n";
 import { Link, navigate } from "../navigation";
 import { useTranslation } from "react-i18next";
 import { isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
@@ -538,7 +539,7 @@ function clockOf(minute: number) {
 // called out rather than smoothed over: it means the attempt was billed at the
 // dearest rate the version could express because its zone could not be
 // resolved, and that is worth someone looking into.
-export function billedTierLabel(tier: PriceScheduleTier, t: (key: string, values?: Record<string, unknown>) => string) {
+export function billedTierLabel(tier: PriceScheduleTier, t: Translate) {
   if (tier.source === "window" && tier.start_minute != null && tier.end_minute != null) {
     return t("usage.billedWindow", { start: clockOf(tier.start_minute), end: clockOf(tier.end_minute), timezone: tier.timezone });
   }
