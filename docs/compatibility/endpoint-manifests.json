@@ -43,6 +43,8 @@
       "model",
       "choices",
       "usage",
+      "usage.prompt_tokens_details.cached_tokens",
+      "usage.prompt_tokens_details.cache_write_tokens",
       "choices[].message.encrypted_content",
       "choices[].delta.encrypted_content"
     ],
@@ -65,6 +67,7 @@
     "status": "compatible",
     "documented_deviations": [
       "gateway routes model names; provider-owned chat state is not exposed",
+      "cache write usage exposes a total when reported; Chat Completions does not expose the lifetime split",
       "unknown request fields are rejected before provider I/O",
       "provider-specific unsupported fields are rejected before provider I/O",
       "Idempotency-Key is optional and buys at-most-once execution upstream, not response replay: a repeat of a key whose request finished answers 409 idempotency_completed rather than the original answer, because the answer is not stored",
@@ -997,6 +1000,10 @@
       "truncation",
       "usage",
       "usage.input_tokens",
+      "usage.input_tokens_details.cached_tokens",
+      "usage.input_tokens_details.cache_write_tokens",
+      "usage.input_tokens_details.cache_write_tokens_details.ttl_30m_tokens",
+      "usage.input_tokens_details.cache_write_tokens_details.ttl_12h_tokens",
       "usage.output_tokens",
       "usage.total_tokens"
     ],
@@ -1046,6 +1053,7 @@
       "tools[].type=web_search is the one hosted tool accepted; it is routed against the provider_executed_tools capability and served only by the OpenAI Responses profile, and code_interpreter and file_search stay rejected because both are provider-side state",
       "request instructions, tool definitions, tool choice, and structured schema bodies are returned as conservative null, empty, or default response metadata because the original Responses object has not passed through outbound redaction",
       "portable requests are translated through the selected profile's existing generation primitive",
+      "cache write usage exposes the reported total; the optional 30m and 12h breakdown is emitted only for an exact matching provider breakdown",
       "unknown fields and unsupported item types are rejected before provider I/O"
     ],
     "provider_profiles": [
@@ -1681,7 +1689,11 @@
       "model",
       "stop_reason",
       "stop_sequence",
-      "usage"
+      "usage",
+      "usage.cache_read_input_tokens",
+      "usage.cache_creation_input_tokens",
+      "usage.cache_creation.ephemeral_5m_input_tokens",
+      "usage.cache_creation.ephemeral_1h_input_tokens"
     ],
     "stream_events": [
       "message_start",
@@ -1714,6 +1726,7 @@
       "mcp_servers, container, and fallbacks are rejected as deliberate boundaries rather than unmodelled fields: the first two delegate egress or code execution to the upstream, and the third moves model selection outside Halro's routing and cost attribution",
       "in native mode tool and content-block bodies are forwarded verbatim, so cache_control and per-tool configuration reach the provider unchanged; portable mode refuses them rather than re-authoring the body without them",
       "Gateway Keys are accepted through x-api-key for official SDK compatibility and are never forwarded upstream",
+      "portable Messages emit a 5m and 1h breakdown only when the provider reports a complete matching split; portable message_delta events carry the cumulative cache creation total",
       "native mode is selected with Halro-Route-Mode and requires either the direct Anthropic or Bedrock Mantle Anthropic profile"
     ],
     "provider_profiles": [
