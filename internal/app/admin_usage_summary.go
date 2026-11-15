@@ -58,22 +58,23 @@ type summaryMetrics struct {
 	RequestLatencyP95Millis *int64 `json:"request_latency_p95_millis,omitempty"`
 	RequestLatencyOverMax   uint64 `json:"request_latency_over_max,omitempty"`
 
-	Attempts                int64  `json:"attempts"`
-	Errors                  int64  `json:"errors"`
-	InputTokens             int64  `json:"input_tokens"`
-	OutputTokens            int64  `json:"output_tokens"`
-	EstimatedInputTokens    int64  `json:"estimated_input_tokens"`
-	EstimatedOutputTokens   int64  `json:"estimated_output_tokens"`
-	CachedInputTokens       int64  `json:"provider_cached_input_tokens"`
-	CacheWriteInputTokens   int64  `json:"provider_cache_write_input_tokens"`
-	ReasoningTokens         int64  `json:"provider_reasoning_tokens"`
-	CostMicrosUSD           int64  `json:"cost_micros_usd"`
-	EstimatedCostMicrosUSD  int64  `json:"estimated_cost_micros_usd"`
-	UnknownAttempts         int64  `json:"unknown_attempts"`
-	LatencyMillis           int64  `json:"latency_millis"`
-	AttemptLatencySamples   int64  `json:"attempt_latency_samples"`
-	AttemptLatencyP95Millis int64  `json:"attempt_latency_p95_millis"`
-	AttemptLatencyOverMax   uint64 `json:"attempt_latency_over_max,omitempty"`
+	Attempts                  int64  `json:"attempts"`
+	Errors                    int64  `json:"errors"`
+	InputTokens               int64  `json:"input_tokens"`
+	OutputTokens              int64  `json:"output_tokens"`
+	EstimatedInputTokens      int64  `json:"estimated_input_tokens"`
+	EstimatedOutputTokens     int64  `json:"estimated_output_tokens"`
+	CachedInputTokens         int64  `json:"provider_cached_input_tokens"`
+	CacheWriteInputTokens     int64  `json:"provider_cache_write_input_tokens"`
+	CacheWriteLongInputTokens int64  `json:"provider_cache_write_long_input_tokens"`
+	ReasoningTokens           int64  `json:"provider_reasoning_tokens"`
+	CostMicrosUSD             int64  `json:"cost_micros_usd"`
+	EstimatedCostMicrosUSD    int64  `json:"estimated_cost_micros_usd"`
+	UnknownAttempts           int64  `json:"unknown_attempts"`
+	LatencyMillis             int64  `json:"latency_millis"`
+	AttemptLatencySamples     int64  `json:"attempt_latency_samples"`
+	AttemptLatencyP95Millis   int64  `json:"attempt_latency_p95_millis"`
+	AttemptLatencyOverMax     uint64 `json:"attempt_latency_over_max,omitempty"`
 	// LatencyApproximate is always true: a stored histogram can only place a
 	// percentile inside a bucket. Saying so in the payload keeps the console
 	// from presenting it as the exact figure the dashboard shows for today.
@@ -510,10 +511,11 @@ func renderMetrics(row domain.DailyRollup, requestLevel bool) summaryMetrics {
 		Attempts: row.Attempts, Errors: row.Errors,
 		InputTokens: row.InputTokens, OutputTokens: row.OutputTokens,
 		EstimatedInputTokens: row.EstimatedInputTokens, EstimatedOutputTokens: row.EstimatedOutputTokens,
-		CachedInputTokens:     row.ProviderCachedInputTokens,
-		CacheWriteInputTokens: row.ProviderCacheWriteInputTokens,
-		ReasoningTokens:       row.ProviderReasoningTokens,
-		CostMicrosUSD:         row.CostMicrosUSD, EstimatedCostMicrosUSD: row.EstimatedCostMicrosUSD,
+		CachedInputTokens:         row.ProviderCachedInputTokens,
+		CacheWriteInputTokens:     row.ProviderCacheWriteInputTokens,
+		CacheWriteLongInputTokens: row.ProviderCacheWriteLongInputTokens,
+		ReasoningTokens:           row.ProviderReasoningTokens,
+		CostMicrosUSD:             row.CostMicrosUSD, EstimatedCostMicrosUSD: row.EstimatedCostMicrosUSD,
 		UnknownAttempts: row.UnknownAttempts, LatencyMillis: row.LatencyMillis,
 		AttemptLatencySamples: row.AttemptLatencySamples, AttemptLatencyP95Millis: attemptP95,
 		LatencyApproximate: true,

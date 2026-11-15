@@ -273,6 +273,10 @@ function DeploymentRow({
   });
   const priceItems = prices.data?.items ?? [];
   const activePrice = priceItems.find((price) => price.status === "active");
+  const priceAction = t(prices.isSuccess && !activePrice ? "deployments.setPrice" : "deployments.adjustPrice");
+  const priceActionDisabledReason = readOnly ? t("navigation.readOnlyAction")
+    : prices.isPending ? t("common.loadingShort")
+    : prices.isError ? t("deployments.priceUnavailable") : undefined;
   const scheduledPrices = priceItems.filter((price) => price.status === "scheduled");
   // The server refuses any version that is not strictly later than every
   // non-cancelled one, so a scheduled version makes "immediately" unreachable
@@ -490,6 +494,15 @@ function DeploymentRow({
           control to say why, so each carries the reason. */}
       <div className="resource-card-actions row-actions deployment-compact-actions">
         <button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} aria-label={t("deployments.editDeployment", { name: deployment.name })} onClick={onEdit}>{t("common.edit")}</button>
+        <button
+          type="button"
+          className="button secondary"
+          aria-label={`${priceAction}${t("common.labelSeparator")}${deployment.name}`}
+          aria-haspopup="dialog"
+          disabled={readOnly || !prices.isSuccess}
+          title={priceActionDisabledReason}
+          onClick={() => setPricing(true)}
+        >{priceAction}</button>
         {/* A dialog, not a disclosure: the label never changes and the card
             never resizes, so aria-expanded would describe a state the card no
             longer has. */}
@@ -513,7 +526,7 @@ function DeploymentRow({
           <section className="detail-section">
             <div className="detail-section-head">
               <h3>{t("deployments.sectionBilling")}</h3>
-              <button className="button secondary" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setPricing(true)}>{activePrice ? t("deployments.adjustPrice") : t("deployments.setPrice")}</button>
+              <button type="button" className="button secondary" disabled={readOnly || !prices.isSuccess} title={priceActionDisabledReason} onClick={() => setPricing(true)}>{priceAction}</button>
             </div>
             {deployment.pricing_quarantined && <div className="notice warning"><strong>{t("deployments.pricingQuarantined")}</strong><span>{pricingQuarantineReason(deployment, t)}</span><button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setConfirmingRestore(true)}>{t(isClockPricing(deployment) ? "deployments.confirmClockPricing" : "deployments.confirmRestoredPricing")}</button></div>}
             {prices.isError && <ErrorState
@@ -531,6 +544,8 @@ function DeploymentRow({
                     fact worth reading, since it means cached prompt tokens are
                     not priced separately on this deployment. */}
                 <DetailFact label={t("deployments.cachedInputPrice")} value={money(activePrice.cached_input_micros_per_million)} meta={t("deployments.perMillionTokens")} />
+                <DetailFact label={t("deployments.cacheWritePrice")} value={money(activePrice.cache_write_micros_per_million)} meta={t("deployments.perMillionTokens")} />
+                <DetailFact label={t("deployments.cacheWriteLongPrice")} value={money(activePrice.cache_write_long_micros_per_million)} meta={t("deployments.perMillionTokens")} />
                 <DetailFact label={t("deployments.outputPrice")} value={money(activePrice.output_micros_per_million)} meta={t("deployments.perMillionTokens")} />
               </>}
               {activePrice?.billing_mode === "metered" && <DetailFact label={t("deployments.fixedPrice")} value={money(activePrice.fixed_request_micros_usd)} meta={t("deployments.perRequest")} />}
@@ -783,8 +798,8 @@ function ClockPricingConfirm({ deployment, onClose }: { deployment: Deployment; 
         <DetailFact label={t("deployments.priceTimeline")} value={`v${review.data.price.version}`} meta={review.data.price.id} />
         <DetailFact label={t("deployments.billingMode")} value={t(review.data.price.billing_mode === "free" ? "deployments.freeLabel" : "deployments.meteredLabel")} />
       </div>
-      <p>{t("deployments.clockPriceRates", { input: money(review.data.price.input_micros_per_million), cached: money(review.data.price.cached_input_micros_per_million), output: money(review.data.price.output_micros_per_million), fixed: money(review.data.price.fixed_request_micros_usd) })}</p>
-      {review.data.price.schedule && <div><p>{review.data.price.schedule.timezone}</p><ul className="price-schedule-summary">{review.data.price.schedule.windows.map((window) => <li key={window.start_minute}>{minuteToClock(window.start_minute)}–{minuteToClock(window.end_minute)} · {t("deployments.clockPriceRates", { input: money(window.input_micros_per_million), cached: money(window.cached_input_micros_per_million), output: money(window.output_micros_per_million), fixed: money(window.fixed_request_micros_usd) })}</li>)}</ul></div>}
+      <p>{t("deployments.clockPriceRates", { input: money(review.data.price.input_micros_per_million), cached: money(review.data.price.cached_input_micros_per_million), short: money(review.data.price.cache_write_micros_per_million), long: money(review.data.price.cache_write_long_micros_per_million), output: money(review.data.price.output_micros_per_million), fixed: money(review.data.price.fixed_request_micros_usd) })}</p>
+      {review.data.price.schedule && <div><p>{review.data.price.schedule.timezone}</p><ul className="price-schedule-summary">{review.data.price.schedule.windows.map((window) => <li key={window.start_minute}>{minuteToClock(window.start_minute)}–{minuteToClock(window.end_minute)} · {t("deployments.clockPriceRates", { input: money(window.input_micros_per_million), cached: money(window.cached_input_micros_per_million), short: money(window.cache_write_micros_per_million), long: money(window.cache_write_long_micros_per_million), output: money(window.output_micros_per_million), fixed: money(window.fixed_request_micros_usd) })}</li>)}</ul></div>}
       <label className="check-row"><input type="checkbox" checked={confirmed} disabled={review.isFetching || mutation.isPending} onChange={(event) => setConfirmed(event.target.checked)} /><span>{t("deployments.clockPricingAcknowledgement")}</span></label>
     </>}
     <button type="button" className="button ghost" disabled={review.isFetching || mutation.isPending} onClick={() => { setConfirmed(false); void review.refetch(); }}>{t("deployments.clockRefreshReview")}</button>
@@ -871,10 +886,14 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
   // anyone who filled in the other two rates and moved on.
   const [cachedInput, setCachedInput] = useState<string | null>(current ? priceInputValue(current.cached_input_micros_per_million) : null);
   const cachedInputValue = cachedInput ?? input;
+  const [cacheWrite, setCacheWrite] = useState<string | null>(current ? priceInputValue(current.cache_write_micros_per_million) : null);
+  const [cacheWriteLong, setCacheWriteLong] = useState<string | null>(current ? priceInputValue(current.cache_write_long_micros_per_million) : null);
+  const cacheWriteValue = cacheWrite ?? input;
+  const cacheWriteLongValue = cacheWriteLong ?? input;
   const [output, setOutput] = useState(current ? priceInputValue(current.output_micros_per_million) : "0");
   const [fixed, setFixed] = useState(current ? priceInputValue(current.fixed_request_micros_usd) : "0");
   // A schedule is off unless the provider actually charges by time of day. The
-  // four rates above are then what applies outside every window, which is why
+  // base rates above are then what applies outside every window, which is why
   // the windows are edited underneath them rather than replacing them.
   const [schedule, setSchedule] = useState<ScheduleDraft | null>(current?.schedule ? scheduleToDraft(current.schedule) : null);
   const scheduleProblem = schedule ? scheduleDraftProblem(schedule) : undefined;
@@ -900,7 +919,8 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
   const idempotencyKey = useRef(crypto.randomUUID());
   const confirmSummary = useRef<HTMLElement>(null);
   const submitError = useRef<HTMLDivElement>(null);
-  const validPrice = mode === "free" || ([input, cachedInputValue, output, fixed].every(validUSD) && [input, cachedInputValue, output, fixed].some((value) => Number(value) > 0));
+  const rates = [input, cachedInputValue, cacheWriteValue, cacheWriteLongValue, output, fixed];
+  const validPrice = mode === "free" || (rates.every(validUSD) && rates.some((value) => Number(value) > 0));
   const scheduledTimestamp = Date.parse(zonedInputToISO(effective, timeZone));
   const validEffective = effectiveMode === "now"
     ? !blocking
@@ -908,8 +928,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
   const sourceNeedsNote = sourceKind === "official_public_price" || sourceKind === "contract_price";
   const validSource = !sourceNeedsNote || sourceNote.trim() !== "";
   const validDetails = validPrice && validEffective && validSource && !scheduleProblem;
-  // The worked example prices a prompt with no cache hit, which is what a first
-  // request costs; the cache-read rate only ever lowers it from here.
+  // The worked example prices ordinary input and output.
   const exampleCost = mode === "free" ? 0 : Number(input) / 1000 + Number(output) / 2000 + Number(fixed);
   const effectiveLabel = effectiveMode === "now" ? t("deployments.effectiveNow") : validEffective ? dateTime(new Date(scheduledTimestamp).toISOString()) : "—";
   // Someone adjusting a live price is changing what every request costs from
@@ -920,6 +939,8 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
     ? {
         input: priceInputValue(current.input_micros_per_million),
         cachedInput: priceInputValue(current.cached_input_micros_per_million),
+        cacheWrite: priceInputValue(current.cache_write_micros_per_million),
+        cacheWriteLong: priceInputValue(current.cache_write_long_micros_per_million),
         output: priceInputValue(current.output_micros_per_million),
         fixed: priceInputValue(current.fixed_request_micros_usd),
       }
@@ -931,6 +952,8 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
       billing_mode: mode, currency: "USD",
       input_usd_per_million: mode === "free" ? "0" : input,
       cached_input_usd_per_million: mode === "free" ? "0" : cachedInputValue,
+      cache_write_usd_per_million: mode === "free" ? "0" : cacheWriteValue,
+      cache_write_long_usd_per_million: mode === "free" ? "0" : cacheWriteLongValue,
       output_usd_per_million: mode === "free" ? "0" : output,
       fixed_request_usd: mode === "free" ? "0" : fixed,
       ...(mode === "metered" && schedule ? { schedule: draftToScheduleRequest(schedule) } : {}),
@@ -1008,10 +1031,14 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
           <div className="price-form-grid price-cached-row">
             <Field label={t("deployments.cachedInputUSD")} hint={t("deployments.cachedInputHint")}><input autoComplete="off" inputMode="decimal" required value={cachedInputValue} onChange={(event) => setCachedInput(event.target.value)} /></Field>
           </div>
+          <div className="price-form-grid">
+            <Field label={t("deployments.cacheWriteUSD")} hint={t("deployments.cacheWriteHint")}><input autoComplete="off" inputMode="decimal" required value={cacheWriteValue} onChange={(event) => setCacheWrite(event.target.value)} /></Field>
+            <Field label={t("deployments.cacheWriteLongUSD")} hint={t("deployments.cacheWriteLongHint")}><input autoComplete="off" inputMode="decimal" required value={cacheWriteLongValue} onChange={(event) => setCacheWriteLong(event.target.value)} /></Field>
+          </div>
           {/* Some providers publish peak and off-peak rates. Without this the
               operator can only enter one number, and which way the accounting
               is wrong is decided by which number they happen to pick. */}
-          <PriceScheduleFields schedule={schedule} onChange={setSchedule} problem={scheduleProblem} baseRates={{ input, cachedInput: cachedInputValue, output, fixed }} />
+          <PriceScheduleFields schedule={schedule} onChange={setSchedule} problem={scheduleProblem} baseRates={{ input, cachedInput: cachedInputValue, cacheWrite, cacheWriteLong, output, fixed }} />
           <details className="price-advanced">
             <summary>{t("deployments.advancedPricing")}</summary>
             <Field label={t("deployments.fixedRequestUSD")}><input autoComplete="off" inputMode="decimal" required value={fixed} onChange={(event) => setFixed(event.target.value)} /></Field>
@@ -1037,16 +1064,23 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
           {current && <p>{t("deployments.currentPriceVersion", { version: current.version })}</p>}
           <dl>
             <div><dt>{t("deployments.billingMode")}</dt><dd>{mode === "free" ? t("deployments.freeLabel") : t("deployments.meteredLabel")}</dd></div>
-            {mode === "metered" && <><div><dt>{t("deployments.inputUSD")}</dt><dd>{priceCell(previousPrice?.input, input)}</dd></div><div><dt>{t("deployments.cachedInputUSD")}</dt><dd>{priceCell(previousPrice?.cachedInput, cachedInputValue)}</dd></div><div><dt>{t("deployments.outputUSD")}</dt><dd>{priceCell(previousPrice?.output, output)}</dd></div><div><dt>{t("deployments.fixedRequestUSD")}</dt><dd>{priceCell(previousPrice?.fixed, fixed)}</dd></div></>}
+            {mode === "metered" && <>
+              <div><dt>{t("deployments.inputUSD")}</dt><dd>{priceCell(previousPrice?.input, input)}</dd></div>
+              <div><dt>{t("deployments.cachedInputUSD")}</dt><dd>{priceCell(previousPrice?.cachedInput, cachedInputValue)}</dd></div>
+              <div><dt>{t("deployments.cacheWriteUSD")}</dt><dd>{priceCell(previousPrice?.cacheWrite, cacheWriteValue)}</dd></div>
+              <div><dt>{t("deployments.cacheWriteLongUSD")}</dt><dd>{priceCell(previousPrice?.cacheWriteLong, cacheWriteLongValue)}</dd></div>
+              <div><dt>{t("deployments.outputUSD")}</dt><dd>{priceCell(previousPrice?.output, output)}</dd></div>
+              <div><dt>{t("deployments.fixedRequestUSD")}</dt><dd>{priceCell(previousPrice?.fixed, fixed)}</dd></div>
+            </>}
             {mode === "metered" && schedule && <div>
               <dt>{t("deployments.priceSchedule")}</dt>
               <dd>
                 <span>{t("deployments.scheduleZoneSummary", { timezone: schedule.timezone })}</span>
                 <ul className="price-schedule-summary">
                   {schedule.windows.map((window, index) => <li key={index}>
-                    {t("deployments.scheduleWindowSummary", { start: window.start, end: window.end, input: window.input, output: window.output })}
+                    {t("deployments.scheduleWindowSummary", { start: window.start, end: window.end, input: window.input, output: window.output, short: window.cacheWrite ?? window.input, long: window.cacheWriteLong ?? window.input })}
                   </li>)}
-                  <li>{t("deployments.scheduleBaseSummary", { input, output })}</li>
+                  <li>{t("deployments.scheduleBaseSummary", { input, output, short: cacheWriteValue, long: cacheWriteLongValue })}</li>
                 </ul>
               </dd>
             </div>}
@@ -1077,6 +1111,8 @@ export interface ScheduleWindowDraft {
   end: string;
   input: string;
   cachedInput: string;
+  cacheWrite: string | null;
+  cacheWriteLong: string | null;
   output: string;
   fixed: string;
 }
@@ -1110,6 +1146,8 @@ function scheduleToDraft(schedule: PriceSchedule): ScheduleDraft {
       end: minuteToClock(window.end_minute),
       input: priceInputValue(window.input_micros_per_million),
       cachedInput: priceInputValue(window.cached_input_micros_per_million),
+      cacheWrite: priceInputValue(window.cache_write_micros_per_million),
+      cacheWriteLong: priceInputValue(window.cache_write_long_micros_per_million),
       output: priceInputValue(window.output_micros_per_million),
       fixed: priceInputValue(window.fixed_request_micros_usd),
     })),
@@ -1126,6 +1164,8 @@ function draftToScheduleRequest(draft: ScheduleDraft) {
     windows: windows.map((window) => ({
       start: window.start.trim(), end: window.end.trim(),
       input_usd_per_million: window.input, cached_input_usd_per_million: window.cachedInput,
+      cache_write_usd_per_million: window.cacheWrite ?? window.input,
+      cache_write_long_usd_per_million: window.cacheWriteLong ?? window.input,
       output_usd_per_million: window.output, fixed_request_usd: window.fixed,
     })),
   };
@@ -1142,8 +1182,8 @@ export function scheduleDraftProblem(draft: ScheduleDraft): "timezone" | "window
     const start = clockToMinute(window.start);
     const end = clockToMinute(window.end);
     if (start === null || end === null || start >= end) return "time";
-    if (![window.input, window.cachedInput, window.output, window.fixed].every(validUSD)) return "rate";
-    if (![window.input, window.cachedInput, window.output, window.fixed].some((value) => Number(value) > 0)) return "rate";
+    const rates = [window.input, window.cachedInput, window.cacheWrite ?? window.input, window.cacheWriteLong ?? window.input, window.output, window.fixed];
+    if (!rates.every(validUSD) || !rates.some((value) => Number(value) > 0)) return "rate";
     bounds.push([start, end]);
   }
   bounds.sort((left, right) => left[0] - right[0]);
@@ -1157,7 +1197,7 @@ function PriceScheduleFields({ schedule, onChange, problem, baseRates }: {
   schedule: ScheduleDraft | null;
   onChange: (value: ScheduleDraft | null) => void;
   problem?: string;
-  baseRates: { input: string; cachedInput: string; output: string; fixed: string };
+  baseRates: Omit<ScheduleWindowDraft, "start" | "end">;
 }) {
   const { t } = useTranslation();
   const update = (index: number, patch: Partial<ScheduleWindowDraft>) => {
@@ -1176,7 +1216,7 @@ function PriceScheduleFields({ schedule, onChange, problem, baseRates }: {
           // silently shifts every peak hour.
           //
           // A new window copies the rates already on screen, so the operator
-          // edits real numbers rather than four empty boxes that would read as
+          // edits real numbers rather than empty boxes that would read as
           // free until filled.
           ? { timezone: "", windows: [{ start: "09:00", end: "12:00", ...baseRates }] }
           : null)}
@@ -1217,6 +1257,8 @@ function PriceScheduleFields({ schedule, onChange, problem, baseRates }: {
         <div className="price-schedule-rates">
           <label><span>{t("deployments.scheduleRateInput")}</span><input autoComplete="off" inputMode="decimal" value={window.input} onChange={(event) => update(index, { input: event.target.value })} aria-label={t("deployments.inputUSD")} /></label>
           <label><span>{t("deployments.scheduleRateCachedInput")}</span><input autoComplete="off" inputMode="decimal" value={window.cachedInput} onChange={(event) => update(index, { cachedInput: event.target.value })} aria-label={t("deployments.cachedInputUSD")} /></label>
+          <label><span>{t("deployments.scheduleRateCacheWrite")}</span><input autoComplete="off" inputMode="decimal" value={window.cacheWrite ?? window.input} onChange={(event) => update(index, { cacheWrite: event.target.value })} aria-label={t("deployments.cacheWriteUSD")} /></label>
+          <label><span>{t("deployments.scheduleRateCacheWriteLong")}</span><input autoComplete="off" inputMode="decimal" value={window.cacheWriteLong ?? window.input} onChange={(event) => update(index, { cacheWriteLong: event.target.value })} aria-label={t("deployments.cacheWriteLongUSD")} /></label>
           <label><span>{t("deployments.scheduleRateOutput")}</span><input autoComplete="off" inputMode="decimal" value={window.output} onChange={(event) => update(index, { output: event.target.value })} aria-label={t("deployments.outputUSD")} /></label>
           <label><span>{t("deployments.scheduleRateFixed")}</span><input autoComplete="off" inputMode="decimal" value={window.fixed} onChange={(event) => update(index, { fixed: event.target.value })} aria-label={t("deployments.fixedRequestUSD")} /></label>
         </div>

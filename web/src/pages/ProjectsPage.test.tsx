@@ -56,6 +56,83 @@ describe("projects page", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  it("links administrators to AI configuration from the projects header", async () => {
+    renderPage();
+    await screen.findByRole("button", { name: "创建第一个项目" });
+    expect(screen.getByRole("link", { name: "AI 配置向导" })).toHaveAttribute("href", "/admin/settings/ai-configuration");
+  });
+
+  it("guides the operator to routes before creating the first key when the authorized route is disabled", async () => {
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [project({ rpm: 0 })], next_cursor: "" } as never);
+    vi.mocked(api.routes).mockResolvedValue({ items: [
+      { id: "route_chat", public_model: "chat", deployment_id: "dep_chat", enabled: false },
+      { id: "route_other", public_model: "other", deployment_id: "dep_chat", enabled: true },
+    ], next_cursor: "" } as never);
+    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment("dep_chat")], next_cursor: "" } as never);
+    renderPage();
+
+    const status = await screen.findByRole("region", { name: "调用状态" });
+    expect(await within(status).findByText("已授权的模型没有启用的路由")).toBeVisible();
+    expect(within(status).getByText("已授权 1 个模型")).toBeVisible();
+    expect(within(status).getByText("0 个模型有可用路由")).toBeVisible();
+    expect(within(status).getByRole("link", { name: "查看模型路由" })).toHaveAttribute("href", "/admin/routes");
+    const keys = screen.getByRole("region", { name: "网关密钥" });
+    expect(within(keys).getByRole("button", { name: "创建第一枚网关密钥" })).toBeVisible();
+    expect(screen.getAllByRole("button", { name: /创建.*密钥/ })).toHaveLength(1);
+    expect(within(screen.getByRole("region", { name: "项目列表" })).getByText(/项目请求速率未设上限/)).toBeVisible();
+  });
+
+  it.each([
+    { items: [], next_cursor: "", verdict: "下一步是创建网关密钥" },
+    { items: [gatewayKey({ scopes: ["outcome:write"] })], next_cursor: "", verdict: "缺少有效的推理密钥" },
+    { items: [gatewayKey({ expires_at: "2020-01-01T00:00:00Z" })], next_cursor: "", verdict: "缺少有效的推理密钥" },
+    { items: [gatewayKey({ enabled: false })], next_cursor: "", verdict: "推理密钥已禁用" },
+    { items: [gatewayKey({ enabled: false })], next_cursor: "key_1", verdict: "还需检查其余网关密钥" },
+    { items: [gatewayKey({ scopes: [] })], next_cursor: "", verdict: "调用配置已就绪" },
+  ])("shows $verdict for the loaded gateway keys once a route is available", async ({ items, next_cursor, verdict }) => {
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [project()], next_cursor: "" } as never);
+    vi.mocked(api.routes).mockResolvedValue({ items: [
+      { id: "route_chat", public_model: "chat", deployment_id: "dep_chat", enabled: true },
+    ], next_cursor: "" } as never);
+    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment("dep_chat")], next_cursor: "" } as never);
+    vi.mocked(api.keysPage).mockResolvedValue({ items, next_cursor } as never);
+    renderPage();
+
+    const status = await screen.findByRole("region", { name: "调用状态" });
+    expect(await within(status).findByText(verdict)).toBeVisible();
+    expect(within(status).getByText("1 个模型有可用路由")).toBeVisible();
+  });
+
+  it("distinguishes a withheld target from an unavailable route read", async () => {
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [project()], next_cursor: "" } as never);
+    vi.mocked(api.routes).mockResolvedValue({ items: [
+      { id: "route_chat", public_model: "chat", deployment_id: "dep_chat", enabled: true, withheld: { kind: "reference", reason: "pricing_quarantined" } },
+    ], next_cursor: "" } as never);
+    vi.mocked(api.deployments).mockRejectedValueOnce(new ApiError(500, "request failed (500)", "", ""));
+    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment("dep_chat")], next_cursor: "" } as never);
+    renderPage();
+
+    const status = await screen.findByRole("region", { name: "调用状态" });
+    expect(await within(status).findByText("暂时无法确认路由状态")).toBeVisible();
+    expect(within(status).queryByText("0 个模型有可用路由")).not.toBeInTheDocument();
+    fireEvent.click(within(status).getByRole("button", { name: "重试" }));
+    expect(await within(status).findByText("已授权的模型没有可用的路由目标")).toBeVisible();
+  });
+
+  it("selects a routable alias by default when generating connection instructions", async () => {
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [project({ allowed_models: ["disabled-chat", "chat"] })], next_cursor: "" } as never);
+    vi.mocked(api.routes).mockResolvedValue({ items: [
+      { id: "route_chat", public_model: "chat", deployment_id: "dep_chat", enabled: true },
+    ], next_cursor: "" } as never);
+    vi.mocked(api.deployments).mockResolvedValue({ items: [deployment("dep_chat")], next_cursor: "" } as never);
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "https://gateway.example", enabled: true });
+    renderPage();
+
+    await screen.findByText("1 个模型有可用路由");
+    fireEvent.click(screen.getByRole("button", { name: "生成接入说明" }));
+    expect(within(screen.getByRole("dialog")).getByRole("combobox", { name: "模型" })).toHaveValue("chat");
+  });
+
   it("opens AI integration for each selected project without requiring write access", async () => {
     vi.mocked(api.projectsPage).mockResolvedValue({ items: [project({ enabled: false })], next_cursor: "" } as never);
     const config = vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "https://gateway.example", enabled: false });
@@ -64,11 +141,12 @@ describe("projects page", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     client.setQueryData(["session"], { username: "viewer", role: "read_only" });
     render(<QueryClientProvider client={client}><NotificationProvider><ProjectsPage /></NotificationProvider></QueryClientProvider>);
-    const entry = await screen.findByRole("button", { name: "AI 接入" });
+    const entry = await screen.findByRole("button", { name: "生成接入说明" });
+    expect(screen.queryByRole("link", { name: "AI 配置向导" })).not.toBeInTheDocument();
     expect(entry).toBeEnabled();
     entry.focus();
     fireEvent.click(entry);
-    const dialog = screen.getByRole("dialog", { name: "AI 接入" });
+    const dialog = screen.getByRole("dialog", { name: "生成接入说明" });
     expect(within(dialog).getByText("Inference")).toBeVisible();
     expect(within(dialog).getByText("项目已停用，启用后可导出接入说明。")).toBeVisible();
     expect(within(dialog).getByRole("button", { name: "复制接入说明" })).toBeDisabled();
@@ -76,7 +154,7 @@ describe("projects page", () => {
     expect(mint).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "AI 接入" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "生成接入说明" })).not.toBeInTheDocument();
     expect(entry).toHaveFocus();
   });
 
@@ -359,8 +437,8 @@ describe("projects page", () => {
   });
 
   it.each([
-    [true, "禁用", false],
-    [false, "启用", true],
+    [true, "禁用项目", false],
+    [false, "启用项目", true],
   ])("switches project status from the detail actions without changing its policy (%s)", async (enabled, actionLabel, nextEnabled) => {
     const current = project({
       enabled,
@@ -379,12 +457,13 @@ describe("projects page", () => {
 
     renderPage();
     expect(await screen.findByText(enabled ? "已启用" : "已禁用", { selector: ".detail-title .badge" })).toHaveClass(enabled ? "good" : "muted");
+    if (enabled) fireEvent.click(screen.getByLabelText("更多项目操作"));
     fireEvent.click(await screen.findByRole("button", { name: actionLabel }));
     // Disabling a project revokes every gateway key under it at once, so it asks
     // first; enabling one restores nothing that was not already configured.
     if (enabled) {
       const dialog = await screen.findByRole("alertdialog");
-      fireEvent.click(within(dialog).getByRole("button", { name: "禁用" }));
+      fireEvent.click(within(dialog).getByRole("button", { name: actionLabel }));
     }
 
     await waitFor(() => expect(update).toHaveBeenCalledWith("prj_1", {
@@ -429,9 +508,10 @@ describe("projects page", () => {
     const update = vi.spyOn(api, "updateProject").mockResolvedValue({ ...current, enabled: false } as never);
 
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "禁用" }));
+    fireEvent.click(await screen.findByLabelText("更多项目操作"));
+    fireEvent.click(screen.getByRole("button", { name: "禁用项目" }));
     const dialog = await screen.findByRole("alertdialog");
-    fireEvent.click(within(dialog).getByRole("button", { name: "禁用" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "禁用项目" }));
 
     await waitFor(() => expect(update).toHaveBeenCalledWith(
       "prj_1",
@@ -447,11 +527,9 @@ describe("projects page", () => {
     } as never);
 
     renderPage();
-    // Every key row carries its own "禁用" too, so the project-level one is taken
-    // from the detail header.
-    const header = (await screen.findByRole("heading", { name: /Inference/ })).closest(".detail-title")!;
     await waitFor(() => expect(screen.getByText("service-b")).toBeVisible());
-    fireEvent.click(within(header as HTMLElement).getByRole("button", { name: "禁用" }));
+    fireEvent.click(screen.getByLabelText("更多项目操作"));
+    fireEvent.click(screen.getByRole("button", { name: "禁用项目" }));
 
     expect(await screen.findByText(/该项目下已创建的 2 个网关密钥/)).toBeVisible();
   });
@@ -466,7 +544,7 @@ describe("projects page", () => {
     );
 
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一枚网关密钥" }));
     expect(screen.getByRole("checkbox", { name: "调用模型" })).toBeVisible();
     const nameField = screen.getByLabelText(/密钥名称/);
     fireEvent.change(nameField, { target: { value: "service-a" } });
@@ -492,7 +570,7 @@ describe("projects page", () => {
     status.mockResolvedValue(enabled);
     const mint = vi.spyOn(api, "createKey").mockResolvedValue({ data: { key: "gw_secret", metadata: gatewayKey() }, etag: "" } as never);
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一枚网关密钥" }));
     const name = screen.getByLabelText(/密钥名称/);
     fireEvent.change(name, { target: { value: "service-a" } });
     fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
@@ -520,7 +598,7 @@ describe("projects page", () => {
     vi.mocked(api.projectsPage).mockResolvedValue({ items: [project()], next_cursor: "" } as never);
 
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一枚网关密钥" }));
     const inference = screen.getByRole("checkbox", { name: "调用模型" });
     const discovery = screen.getByRole("checkbox", { name: "发现模型" });
 
@@ -544,7 +622,7 @@ describe("projects page", () => {
     vi.mocked(api.projectsPage).mockResolvedValue({ items: [project()], next_cursor: "" } as never);
     const mint = vi.spyOn(api, "createKey").mockResolvedValue({ data: { key: "gw_secret", metadata: gatewayKey() }, etag: "" } as never);
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一枚网关密钥" }));
     const scopes = screen.getByRole("group", { name: "权限范围" });
     expect(within(scopes).getByRole("checkbox", { name: "调用模型" })).toBeChecked();
     expect(within(scopes).getByRole("checkbox", { name: "发现模型" })).toHaveAccessibleDescription(/同时选中“调用模型”/);
@@ -575,7 +653,7 @@ describe("projects page", () => {
     vi.mocked(api.projectsPage).mockResolvedValue({ items: [project()], next_cursor: "" } as never);
     const mint = vi.spyOn(api, "createKey").mockResolvedValue({ data: { key: "gw_secret", metadata: gatewayKey() }, etag: "" } as never);
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一枚网关密钥" }));
     const name = screen.getByLabelText(/密钥名称/);
     fireEvent.change(name, { target: { value: "outcomes-only" } });
     fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
@@ -601,7 +679,7 @@ describe("projects page", () => {
     let reject = (_error: unknown) => {};
     const mint = vi.spyOn(api, "createKey").mockReturnValue(new Promise((_resolve, rejectCall) => { reject = rejectCall; }) as never);
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一枚网关密钥" }));
     fireEvent.change(screen.getByLabelText(/密钥名称/), { target: { value: "service-a" } });
     fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "生成密钥" })).toBeEnabled());
@@ -622,7 +700,7 @@ describe("projects page", () => {
     const createKey = vi.spyOn(api, "createKey").mockRejectedValue(new ApiError(503, "upstream unavailable"));
 
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一枚网关密钥" }));
     fireEvent.change(screen.getByLabelText(/密钥名称/), { target: { value: "service-a" } });
     // Minting now asks for the operator's password, so the form cannot submit
     // until it is supplied.
@@ -727,7 +805,7 @@ describe("projects page", () => {
     const update = vi.spyOn(api, "updateProject").mockResolvedValue(current as never);
 
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    fireEvent.click(await screen.findByRole("button", { name: "编辑项目" }));
     fireEvent.change(screen.getByLabelText("名称"), { target: { value: "Renamed" } });
     fireEvent.click(screen.getByRole("button", { name: "保存并应用" }));
 
@@ -768,7 +846,7 @@ describe("projects page", () => {
     const update = vi.spyOn(api, "updateProject").mockResolvedValue(current as never);
 
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    fireEvent.click(await screen.findByRole("button", { name: "编辑项目" }));
     expect(screen.getByLabelText(/流式请求时长上限/)).toHaveValue(600);
     fireEvent.change(screen.getByLabelText("名称"), { target: { value: "Renamed" } });
     fireEvent.click(screen.getByRole("button", { name: "保存并应用" }));
@@ -802,7 +880,7 @@ describe("projects page", () => {
     } as never);
 
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一枚网关密钥" }));
     fireEvent.change(screen.getByLabelText(/密钥名称/), { target: { value: "service-a" } });
     fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "生成密钥" })).toBeEnabled());
@@ -872,17 +950,19 @@ describe("projects page", () => {
 
     renderPage();
 
-    const summary = await screen.findByText("配额与策略");
+    const summary = await screen.findByText("项目配置");
     const block = summary.closest("details")!;
     expect(block.open).toBe(false);
     // The digest has to carry the headline numbers, or collapsing hides them entirely.
-    expect(block).toHaveTextContent("1 个模型 · 60 RPM · 不限");
+    expect(block).toHaveTextContent("60 RPM · 项目每日预算未设上限");
 
     // The affordance is the visible control, not the browser's default marker.
     expect(within(block).getByText("查看详情")).toBeInTheDocument();
+    expect(within(block).getByText("重置词元防护状态")).not.toBeVisible();
 
     fireEvent.click(summary);
     expect(block.open).toBe(true);
     expect(within(block).getByText("词元防护策略")).toBeVisible();
+    expect(within(block).getByRole("button", { name: "重置词元防护状态" })).toBeVisible();
   });
 });

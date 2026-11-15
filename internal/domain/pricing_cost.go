@@ -12,9 +12,10 @@ const microsPerUSD = int64(1_000_000)
 
 // PriceCostBreakdown reports the cost of one attempt by component.
 // InputCostMicrosUSD covers the whole prompt — the span billed at the ordinary
-// input rate plus the cached span billed at the cache-read rate — because the
-// two are always charged against the same budget and the split is already
-// reconstructible from the attempt's cached token count and its price snapshot.
+// input rate plus the cached span billed at the cache-read rate and the written
+// span billed at its cache-write rate — because they are always charged against
+// the same budget and the split is already reconstructible from the attempt's
+// token tiers and its price snapshot.
 type PriceCostBreakdown struct {
 	InputCostMicrosUSD  int64 `json:"input_cost_micros_usd"`
 	OutputCostMicrosUSD int64 `json:"output_cost_micros_usd"`
@@ -22,14 +23,39 @@ type PriceCostBreakdown struct {
 	TotalCostMicrosUSD  int64 `json:"total_cost_micros_usd"`
 }
 
+// BilledTokens is the token breakdown one attempt is priced on, following
+// semantic.Usage: CachedInput and CacheWrite are subsets of Input, never
+// additions to it, and CacheWriteLong is the subset of CacheWrite written with
+// the provider's longer cache lifetime (Anthropic's 1h, OpenAI's 12h). What is
+// left of the prompt is billed at the ordinary input rate.
+type BilledTokens struct {
+	Input          int64
+	CachedInput    int64
+	CacheWrite     int64
+	CacheWriteLong int64
+	Output         int64
+}
+
+func (t BilledTokens) Validate() error {
+	if t.Input < 0 || t.CachedInput < 0 || t.CacheWrite < 0 || t.CacheWriteLong < 0 || t.Output < 0 {
+		return errors.New("token counts cannot be negative")
+	}
+	if t.CacheWriteLong > t.CacheWrite {
+		return errors.New("long-lived cache write tokens cannot exceed cache write tokens")
+	}
+	if t.CachedInput > t.Input || t.CacheWrite > t.Input-t.CachedInput {
+		return errors.New("cached and cache write input tokens cannot exceed input tokens")
+	}
+	return nil
+}
+
 // CalculateUSDTokensV1 applies usd_token_v1 with exact integer arithmetic and
 // rounds each priced component independently up to one micro-USD.
 //
-// cachedInputTokens is a subset of inputTokens, following semantic.Usage: the
-// span the provider served from cache is billed at the cache-read rate and the
-// remainder at the ordinary input rate. Callers that do not know the split yet —
-// a reservation taken before the provider answers, a lease recovered from its
-// prepared bounds — pass zero and are charged the higher rate throughout.
+// Callers that do not know the prompt's split yet — a reservation taken before
+// the provider answers, a lease recovered from its prepared bounds — do not
+// pass zero tiers: they price PriceTier.ConservativeTokens, which bills the
+// whole prompt at the most expensive input-side rate.
 //
 // selectedAt is the instant the price is being applied at, and it is a required
 // argument rather than an optional refinement: a price version can bill
@@ -38,12 +64,9 @@ type PriceCostBreakdown struct {
 // that carries no schedule. Callers pricing an already-settled attempt do not
 // come through here at all — they call PriceSnapshot.Calculate, which reads the
 // rung frozen at reservation instead of consulting a clock a second time.
-func CalculateUSDTokensV1(inputTokens, cachedInputTokens, outputTokens int64, price DeploymentPriceVersion, selectedAt time.Time) (PriceCostBreakdown, error) {
-	if inputTokens < 0 || cachedInputTokens < 0 || outputTokens < 0 {
-		return PriceCostBreakdown{}, errors.New("token counts cannot be negative")
-	}
-	if cachedInputTokens > inputTokens {
-		return PriceCostBreakdown{}, errors.New("cached input tokens cannot exceed input tokens")
+func CalculateUSDTokensV1(tokens BilledTokens, price DeploymentPriceVersion, selectedAt time.Time) (PriceCostBreakdown, error) {
+	if err := tokens.Validate(); err != nil {
+		return PriceCostBreakdown{}, err
 	}
 	if err := price.Validate(); err != nil {
 		return PriceCostBreakdown{}, err
@@ -51,26 +74,26 @@ func CalculateUSDTokensV1(inputTokens, cachedInputTokens, outputTokens int64, pr
 	if price.BillingMode == BillingModeFree {
 		return PriceCostBreakdown{}, nil
 	}
-	return price.TierAt(selectedAt).Calculate(inputTokens, cachedInputTokens, outputTokens)
+	return price.TierAt(selectedAt).Calculate(tokens)
 }
 
 // Calculate is the one place usd_token_v1 arithmetic lives. A price version
 // resolves to a tier before pricing and a settled snapshot carries the tier it
-// was pinned to, so both arrive here with four literal rates and neither can
-// drift from the other by a micro-USD — which matters, because a settlement
-// whose amount disagrees with its reservation's is rejected outright.
-func (t PriceTier) Calculate(inputTokens, cachedInputTokens, outputTokens int64) (PriceCostBreakdown, error) {
-	if inputTokens < 0 || cachedInputTokens < 0 || outputTokens < 0 {
-		return PriceCostBreakdown{}, errors.New("token counts cannot be negative")
+// was pinned to, so both arrive here with literal rates and neither can drift
+// from the other by a micro-USD — which matters, because a settlement whose
+// amount disagrees with its reservation's is rejected outright.
+func (t PriceTier) Calculate(tokens BilledTokens) (PriceCostBreakdown, error) {
+	if err := tokens.Validate(); err != nil {
+		return PriceCostBreakdown{}, err
 	}
-	if cachedInputTokens > inputTokens {
-		return PriceCostBreakdown{}, errors.New("cached input tokens cannot exceed input tokens")
+	if t.hasNegativeRate() {
+		return PriceCostBreakdown{}, errors.New("price amounts cannot be negative")
 	}
-	input, err := ceilInputComponents(inputTokens, cachedInputTokens, t.InputMicrosPerMillion, t.CachedInputMicrosPerMillion)
+	input, err := ceilInputComponents(tokens, t)
 	if err != nil {
 		return PriceCostBreakdown{}, err
 	}
-	output, err := ceilTokenComponent(outputTokens, t.OutputMicrosPerMillion)
+	output, err := ceilTokenComponent(tokens.Output, t.OutputMicrosPerMillion)
 	if err != nil {
 		return PriceCostBreakdown{}, err
 	}
@@ -86,21 +109,91 @@ func (t PriceTier) Calculate(inputTokens, cachedInputTokens, outputTokens int64)
 	}, nil
 }
 
-// ceilInputComponents prices the uncached and cached spans of one prompt,
-// rounding each up independently before adding them. Rounding per tier rather
-// than on the sum keeps the result identical whichever caller computes it —
-// the gateway's settlement and the ledger's re-derivation must agree to the
-// micro-USD or the settlement is rejected as not matching its price snapshot.
-func ceilInputComponents(inputTokens, cachedInputTokens, microsPerMillion, cachedMicrosPerMillion int64) (int64, error) {
-	uncached, err := ceilTokenComponent(inputTokens-cachedInputTokens, microsPerMillion)
+// ConservativeTokens is the split to price a prompt on when nothing yet says
+// how the provider will bill it. Every input-side rate is a candidate, and the
+// whole prompt is assigned to the most expensive one: a cache write costs more
+// than an ordinary input token, so "no split known" can no longer mean "all
+// ordinary input" without under-reserving. Ties go to the ordinary input rate,
+// so equal rates keep the estimated split in ordinary input.
+//
+// The answer is a token split rather than an amount so that a settlement built
+// from it re-derives to the same micro-USD against the snapshot.
+func (t PriceTier) ConservativeTokens(inputTokens, outputTokens int64) BilledTokens {
+	tokens := BilledTokens{Input: inputTokens, Output: outputTokens}
+	highest := t.InputMicrosPerMillion
+	if t.CachedInputMicrosPerMillion > highest {
+		highest = t.CachedInputMicrosPerMillion
+		tokens = BilledTokens{Input: inputTokens, CachedInput: inputTokens, Output: outputTokens}
+	}
+	if t.CacheWriteMicrosPerMillion > highest {
+		highest = t.CacheWriteMicrosPerMillion
+		tokens = BilledTokens{Input: inputTokens, CacheWrite: inputTokens, Output: outputTokens}
+	}
+	if t.CacheWriteLongMicrosPerMillion > highest {
+		tokens = BilledTokens{Input: inputTokens, CacheWrite: inputTokens, CacheWriteLong: inputTokens, Output: outputTokens}
+	}
+	return tokens
+}
+
+// ReservationCost bounds all possible input splits for the supplied token counts.
+func (t PriceTier) ReservationCost(input, output int64) (int64, error) {
+	cost, err := t.Calculate(t.ConservativeTokens(input, output))
 	if err != nil {
 		return 0, err
 	}
-	cached, err := ceilTokenComponent(cachedInputTokens, cachedMicrosPerMillion)
-	if err != nil {
-		return 0, err
+	// Independent rounding can make a split cost more than rounding once at
+	// the highest rate. Only occupied tiers with fractional per-token rates
+	// can round up; each after the first can add at most one micro-USD.
+	var fractionalTiers int64
+	for _, span := range t.inputSpans(BilledTokens{}) {
+		if span.rate%microsPerUSD != 0 {
+			fractionalTiers++
+		}
 	}
-	sum := new(big.Int).Add(big.NewInt(uncached), big.NewInt(cached))
+	headroom := max(0, min(fractionalTiers, input)-1)
+	if cost.TotalCostMicrosUSD > math.MaxInt64-headroom {
+		return 0, errors.New("token reservation overflows int64 micro-USD")
+	}
+	return cost.TotalCostMicrosUSD + headroom, nil
+}
+
+func (t PriceTier) writesShareInputRounding() bool {
+	return t.CacheWriteMicrosPerMillion == t.InputMicrosPerMillion &&
+		t.CacheWriteLongMicrosPerMillion == t.InputMicrosPerMillion &&
+		(t.Provenance == nil || !t.Provenance.SeparateCacheWriteRounding)
+}
+
+type inputPriceSpan struct{ tokens, rate int64 }
+
+func (t PriceTier) inputSpans(tokens BilledTokens) [4]inputPriceSpan {
+	ordinary := tokens.Input - tokens.CachedInput - tokens.CacheWrite
+	short := inputPriceSpan{tokens.CacheWrite - tokens.CacheWriteLong, t.CacheWriteMicrosPerMillion}
+	long := inputPriceSpan{tokens.CacheWriteLong, t.CacheWriteLongMicrosPerMillion}
+	// Migration 43 backfills writes at the ordinary input rate. Those tokens
+	// shared one rounded component before the upgrade, so keep them together
+	// whenever both write rates match the input rate.
+	if t.writesShareInputRounding() {
+		ordinary += tokens.CacheWrite
+		short, long = inputPriceSpan{}, inputPriceSpan{}
+	}
+	return [4]inputPriceSpan{
+		{ordinary, t.InputMicrosPerMillion},
+		{tokens.CachedInput, t.CachedInputMicrosPerMillion},
+		short,
+		long,
+	}
+}
+
+// ceilInputComponents rounds each priced component up to a micro-USD.
+func ceilInputComponents(tokens BilledTokens, t PriceTier) (int64, error) {
+	sum := new(big.Int)
+	for _, span := range t.inputSpans(tokens) {
+		cost, err := ceilTokenComponent(span.tokens, span.rate)
+		if err != nil {
+			return 0, err
+		}
+		sum.Add(sum, big.NewInt(cost))
+	}
 	if !sum.IsInt64() {
 		return 0, errors.New("token price component overflows int64 micro-USD")
 	}

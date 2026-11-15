@@ -1,6 +1,7 @@
 package bolt
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -92,6 +93,8 @@ func (s *Store) AttachMetadataJournal(key []byte, reason string) (JournalState, 
 		return s.startEpoch(key, path, stored, state, reason)
 	case statErr != nil:
 		return state, statErr
+	case stored.pendingEpochHead != nil:
+		return s.finishSchemaEpoch(key, path, stored, state)
 	case s.migrated:
 		// A migration rewrote the projection as a whole. Recording DDL as
 		// operations is the thing physical replication was chosen to avoid, so
@@ -186,8 +189,9 @@ func (s *Store) ApplyReplicaMetadataThrough(ctx context.Context, epoch, target u
 }
 
 type journalPosition struct {
-	epoch    uint64
-	sequence uint64
+	epoch            uint64
+	sequence         uint64
+	pendingEpochHead []byte
 	// present says the projection has ever recorded a position. A database
 	// created before the journal existed has not, and is not the same thing as
 	// one that sits at sequence zero.
@@ -203,17 +207,102 @@ func (s *Store) journalPosition() (journalPosition, error) {
 		}
 		epoch, hasEpoch := decodeUint64(meta.Get(keyMetadataJournalEpoch))
 		sequence, hasSequence := decodeUint64(meta.Get(keyAppliedJournalSequence))
-		position = journalPosition{epoch: epoch, sequence: sequence, present: hasEpoch && hasSequence}
+		position = journalPosition{epoch: epoch, sequence: sequence, present: hasEpoch && hasSequence,
+			pendingEpochHead: bytes.Clone(meta.Get(keyJournalEpochPending))}
 		return nil
 	})
 	return position, err
+}
+
+// recoverJournalBeforeSchema43 replays old frames before any rate backfill can
+// invalidate their projection. A crash here leaves schema 42, so the same
+// recovery can retry. An archived restore removes its journal before migration.
+func (s *Store) recoverJournalBeforeSchema43(loadKey func(*Store) ([]byte, error)) ([]byte, error) {
+	var version uint64
+	if err := s.view(func(tx *Tx) error {
+		if meta := tx.Bucket(bucketMeta); meta != nil {
+			version, _ = decodeUint64(meta.Get(keySchemaVersion))
+		}
+		return nil
+	}); err != nil || version != 42 {
+		return nil, err
+	}
+	path := s.MetadataJournalPath()
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	if loadKey == nil {
+		return nil, fmt.Errorf("%w: start Halro to authenticate the metadata journal before upgrading schema 42", ErrSchemaVersionMismatch)
+	}
+	key, err := loadKey(s)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(key)
+	stored, err := s.journalPosition()
+	if err != nil {
+		return nil, err
+	}
+	log, err := metadatajournal.Open(path, key)
+	if err != nil {
+		return nil, fmt.Errorf("open pre-upgrade metadata journal: %w", err)
+	}
+	state := JournalState{Path: path}
+	head := log.Head()
+	reconcileErr := s.reconcileJournal(log, stored, &state, key, path)
+	if err := errors.Join(reconcileErr, log.Close()); err != nil {
+		return nil, err
+	}
+	return head.Hash[:], nil
+}
+
+func (s *Store) finishSchemaEpoch(key []byte, path string, stored journalPosition, state JournalState) (JournalState, error) {
+	log, err := metadatajournal.Open(path, key)
+	if err != nil {
+		return state, fmt.Errorf("open metadata journal for schema epoch publication: %w", err)
+	}
+	head := log.Head()
+	switch {
+	case stored.present && head.Epoch == stored.epoch && head.Sequence == stored.sequence && bytes.Equal(head.Hash[:], stored.pendingEpochHead):
+		if err := log.Close(); err != nil {
+			return state, err
+		}
+		return s.startEpoch(key, path, stored, state, "schema migration")
+	case stored.present && head.Epoch == stored.epoch+1 && head.Sequence == 0 && head.TrimmedThrough == 0:
+		// A previous start published the new epoch file but did not advance
+		// the database position. Confirm it replaced the authenticated old head.
+		if _, err := metadatajournal.Replay(path, key, func(record metadatajournal.Record) error {
+			if record.Kind != metadatajournal.KindEpoch || record.Header.PreviousEpoch != stored.epoch ||
+				!bytes.Equal(record.Header.PreviousChainHead, stored.pendingEpochHead) {
+				return fmt.Errorf("%w: schema migration epoch has a different predecessor", ErrJournalDiverged)
+			}
+			return nil
+		}); err != nil {
+			log.Close()
+			return state, err
+		}
+		if err := s.writeJournalPosition(head.Epoch, 0); err != nil {
+			log.Close()
+			return state, err
+		}
+		s.journal, s.journalKey = log, append([]byte(nil), key...)
+		state.Epoch, state.StartedEpoch = head.Epoch, true
+		return state, nil
+	default:
+		log.Close()
+		return state, fmt.Errorf("%w: cannot finish publishing the schema migration epoch", ErrJournalDiverged)
+	}
 }
 
 // startEpoch publishes a fresh journal whose starting projection is the
 // database as it stands right now.
 func (s *Store) startEpoch(key []byte, path string, stored journalPosition, state JournalState, reason string) (JournalState, error) {
 	header := metadatajournal.EpochHeader{Epoch: stored.epoch + 1, PreviousEpoch: stored.epoch, Reason: reason}
-	if stored.present {
+	if stored.pendingEpochHead != nil {
+		header.PreviousChainHead = stored.pendingEpochHead
+	} else if stored.present {
 		// The chain head of the epoch being replaced, where it is still
 		// readable. A restore hands over a directory whose journal belongs to
 		// somebody else's chain, so this is best-effort by design: the epoch
@@ -411,7 +500,10 @@ func (s *Store) writeJournalPosition(epoch, sequence uint64) error {
 		if err := meta.Put(keyMetadataJournalEpoch, encodeUint64(epoch)); err != nil {
 			return err
 		}
-		return meta.Put(keyAppliedJournalSequence, encodeUint64(sequence))
+		if err := meta.Put(keyAppliedJournalSequence, encodeUint64(sequence)); err != nil {
+			return err
+		}
+		return meta.Delete(keyJournalEpochPending)
 	})
 }
 

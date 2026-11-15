@@ -283,7 +283,18 @@ func renderStopReason(reason string) string {
 }
 
 func renderUsage(usage semantic.Usage) anthropicapi.Usage {
-	return anthropicapi.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}
+	rendered := anthropicapi.Usage{
+		InputTokens: usage.UncachedInputTokens(), OutputTokens: usage.OutputTokens,
+		CacheReadInputTokens: usage.CachedInputTokens, CacheCreationInputTokens: usage.CacheWriteInputTokens,
+		ThinkingTokens: usage.ReasoningTokens,
+	}
+	if usage.CacheWriteInputTokens > 0 && usage.CacheWriteTTLPair == semantic.CacheWriteTTL5m1h {
+		rendered.CacheCreation = &anthropicapi.CacheCreationDetails{
+			Ephemeral5mInputTokens: usage.CacheWriteInputTokens - usage.CacheWriteLongInputTokens,
+			Ephemeral1hInputTokens: usage.CacheWriteLongInputTokens,
+		}
+	}
+	return rendered
 }
 
 func anthropicID(id string) string {
@@ -566,20 +577,34 @@ func DecodeResult(message anthropicapi.Message) (semantic.GenerateResult, error)
 		}
 	}
 	termination := DecodeStopReason(message.StopReason)
-	// input_tokens excludes both cache tiers on this API, so the full prompt span
-	// has to be recovered before anything downstream prices it.
-	promptTokens := message.Usage.PromptTokens()
-	usage := &semantic.Usage{
-		InputTokens:           promptTokens,
-		CachedInputTokens:     message.Usage.CacheReadInputTokens,
-		CacheWriteInputTokens: message.Usage.CacheCreationInputTokens,
-		OutputTokens:          message.Usage.OutputTokens,
-		ReasoningTokens:       message.Usage.ReasoningTokens(),
-		TotalTokens:           promptTokens + message.Usage.OutputTokens,
-		Source:                semantic.UsageProviderReported,
-	}
-	result := semantic.GenerateResult{ID: message.ID, Model: message.Model, Choices: []semantic.GenerateChoice{{Index: 0, Message: canonical, Termination: termination, NativeTermination: stringValue(message.StopReason)}}, Usage: usage, Translation: semantic.TranslationNone, MappingRevision: MappingRevision}
+	usage := DecodeUsage(message.Usage)
+	result := semantic.GenerateResult{ID: message.ID, Model: message.Model, Choices: []semantic.GenerateChoice{{Index: 0, Message: canonical, Termination: termination, NativeTermination: stringValue(message.StopReason)}}, Usage: &usage, Translation: semantic.TranslationNone, MappingRevision: MappingRevision}
 	return result, result.Validate()
+}
+
+// DecodeUsage restores the cache-exclusive Anthropic prompt count to a total.
+func DecodeUsage(usage anthropicapi.Usage) semantic.Usage {
+	prompt := usage.PromptTokens()
+	var long int64
+	var ttlPair semantic.CacheWriteTTLPair
+	if detail := usage.CacheCreation; detail != nil {
+		if usage.CacheCreationPartial {
+			long = min(max(0, detail.Ephemeral1hInputTokens), max(0, usage.CacheCreationInputTokens))
+		} else {
+			var exact bool
+			long, exact = compatibility.NormalizeCacheWriteLong(usage.CacheCreationInputTokens, detail.Ephemeral5mInputTokens, detail.Ephemeral1hInputTokens)
+			if exact {
+				ttlPair = semantic.CacheWriteTTL5m1h
+			}
+		}
+	}
+	return semantic.Usage{
+		InputTokens: prompt, CachedInputTokens: usage.CacheReadInputTokens,
+		CacheWriteInputTokens: usage.CacheCreationInputTokens, CacheWriteLongInputTokens: long,
+		CacheWriteTTLPair: ttlPair,
+		OutputTokens:      usage.OutputTokens, ReasoningTokens: usage.ReasoningTokens(),
+		TotalTokens: prompt + usage.OutputTokens, Source: semantic.UsageProviderReported,
+	}
 }
 
 // DecodeStopReason maps Anthropic's stop_reason onto the semantic termination
