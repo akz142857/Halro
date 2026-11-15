@@ -584,6 +584,12 @@ and vendored httpx-aiohttp license and notice are byte-identical. The lock
 keeps `opentelemetry-api` 1.45.2 and changes no transitive versions. The SDK
 remains confined to compatibility tests.
 
+The 2026-11-16 Python OpenAI contract-test update (#515) moves `openai` from
+3.42.1 to 3.48.0. Its Apache-2.0 LICENSE and vendored httpx-aiohttp license are
+byte-identical. The combined lock keeps Anthropic 2.7.0 and `opentelemetry-api`
+1.45.2 with no transitive version changes. Both SDKs pass the local Python
+black-box tests.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -603,8 +609,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `tests/compatibility/go/go.sum`: `504b5da47dd9e08145d2f8fcf0afc8f6a445d91c`
 - `tests/compatibility/node/package.json`: `9ea13eaa9cbe048115e33eb6eb672e48025db057`
 - `tests/compatibility/node/package-lock.json`: `4e9519004b74a3696acaa9a9f1829e2dc5c31609`
-- `tests/compatibility/python/requirements.in`: `38de2d4bdb7610d2bc64dcd6ff8492de9eca0e3c`
-- `tests/compatibility/python/requirements.txt`: `7ea926de375761061c92a4f4055c28661e1c7aa6`
+- `tests/compatibility/python/requirements.in`: `7a97cfab0a029086015babb6ee01fd00cf4428a7`
+- `tests/compatibility/python/requirements.txt`: `c1b7932c641ad2109ebd105e4b87b335bfd38656`
 
 The Python lock hash records the 2026-11-15 OpenTelemetry patch above.
 All ten hashes moved for the 2026-10-23 refreshes recorded above, and
