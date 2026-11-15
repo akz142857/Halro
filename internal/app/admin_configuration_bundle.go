@@ -1,9 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
@@ -11,7 +14,10 @@ import (
 )
 
 const (
-	configurationBundleVersion = 1
+	// configurationBundleVersion 2 added the cache-write rates to a price. A
+	// version 1 file has none, and importing it would have to invent them, so
+	// it is refused and the operator re-exports (ADR 0028).
+	configurationBundleVersion = 2
 	configurationBundleLimit   = 2 << 20
 	configurationRecordLimit   = 1000
 )
@@ -28,6 +34,18 @@ type configurationBundle struct {
 	Projects           []configurationProject    `json:"projects"`
 	GatewayKeys        []configurationKey        `json:"gateway_keys"`
 	Omissions          []configurationNotice     `json:"omissions,omitempty"`
+}
+
+var errConfigurationBundleTooLarge = errors.New("configuration exceeds the bundle limit")
+
+func (b *configurationBundle) UnmarshalJSON(raw []byte) error {
+	if len(raw) > configurationBundleLimit {
+		return errConfigurationBundleTooLarge
+	}
+	type fields configurationBundle
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode((*fields)(b))
 }
 
 type configurationProvider struct {
@@ -67,12 +85,53 @@ type configurationDeployment struct {
 }
 
 type configurationPrice struct {
-	BillingMode                 domain.BillingMode    `json:"billing_mode"`
-	InputMicrosPerMillion       int64                 `json:"input_micros_per_million"`
-	CachedInputMicrosPerMillion int64                 `json:"cached_input_micros_per_million"`
-	OutputMicrosPerMillion      int64                 `json:"output_micros_per_million"`
-	FixedRequestMicrosUSD       int64                 `json:"fixed_request_micros_usd"`
-	Schedule                    *domain.PriceSchedule `json:"schedule,omitempty"`
+	BillingMode domain.BillingMode `json:"billing_mode"`
+	configurationPriceRates
+	Schedule *configurationPriceSchedule `json:"schedule,omitempty"`
+}
+
+type configurationPriceRates struct {
+	InputMicrosPerMillion          int64  `json:"input_micros_per_million"`
+	CachedInputMicrosPerMillion    int64  `json:"cached_input_micros_per_million"`
+	CacheWriteMicrosPerMillion     *int64 `json:"cache_write_micros_per_million"`
+	CacheWriteLongMicrosPerMillion *int64 `json:"cache_write_long_micros_per_million"`
+	OutputMicrosPerMillion         int64  `json:"output_micros_per_million"`
+	FixedRequestMicrosUSD          int64  `json:"fixed_request_micros_usd"`
+}
+
+type configurationPriceSchedule struct {
+	Timezone string                     `json:"timezone"`
+	Windows  []configurationPriceWindow `json:"windows"`
+}
+
+type configurationPriceWindow struct {
+	StartMinute int `json:"start_minute"`
+	EndMinute   int `json:"end_minute"`
+	configurationPriceRates
+}
+
+func exportConfigurationPrice(price domain.DeploymentPriceVersion) *configurationPrice {
+	out := &configurationPrice{BillingMode: price.BillingMode, configurationPriceRates: exportConfigurationPriceRates(price.BaseTier())}
+	if price.Schedule != nil {
+		out.Schedule = &configurationPriceSchedule{
+			Timezone: price.Schedule.Timezone, Windows: make([]configurationPriceWindow, 0, len(price.Schedule.Windows)),
+		}
+		for _, window := range price.Schedule.Windows {
+			out.Schedule.Windows = append(out.Schedule.Windows, configurationPriceWindow{
+				StartMinute: window.StartMinute, EndMinute: window.EndMinute,
+				configurationPriceRates: exportConfigurationPriceRates(window.Tier()),
+			})
+		}
+	}
+	return out
+}
+
+func exportConfigurationPriceRates(tier domain.PriceTier) configurationPriceRates {
+	return configurationPriceRates{
+		InputMicrosPerMillion: tier.InputMicrosPerMillion, CachedInputMicrosPerMillion: tier.CachedInputMicrosPerMillion,
+		CacheWriteMicrosPerMillion: &tier.CacheWriteMicrosPerMillion, CacheWriteLongMicrosPerMillion: &tier.CacheWriteLongMicrosPerMillion,
+		OutputMicrosPerMillion: tier.OutputMicrosPerMillion, FixedRequestMicrosUSD: tier.FixedRequestMicrosUSD,
+	}
 }
 
 type configurationRoute struct {
@@ -125,7 +184,7 @@ func (r *Runtime) exportAdminConfiguration(writer http.ResponseWriter, request *
 		})
 		return
 	}
-	if err := r.auditAdminMutation(request, "configuration.export", "configuration", "v1"); err != nil {
+	if err := r.auditAdminMutation(request, "configuration.export", "configuration", "v"+strconv.Itoa(configurationBundleVersion)); err != nil {
 		adminAuditError(writer)
 		return
 	}
@@ -181,11 +240,7 @@ func exportConfiguration(config boltstore.PortableConfiguration) configurationBu
 			deployment.CapabilityModel = item.ModelCapabilitySnapshot.CanonicalModelRef
 		}
 		if price, ok := config.Prices[item.ID]; ok {
-			deployment.Price = &configurationPrice{
-				BillingMode: price.BillingMode, InputMicrosPerMillion: price.InputMicrosPerMillion,
-				CachedInputMicrosPerMillion: price.CachedInputMicrosPerMillion, OutputMicrosPerMillion: price.OutputMicrosPerMillion,
-				FixedRequestMicrosUSD: price.FixedRequestMicrosUSD, Schedule: price.Schedule,
-			}
+			deployment.Price = exportConfigurationPrice(price)
 		} else if config.QuarantinedPrices[item.ID] {
 			bundle.omit("deployments", item.ID, "quarantined_price")
 		}

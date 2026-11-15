@@ -1,10 +1,12 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -15,7 +17,51 @@ import (
 	"github.com/akz142857/Halro/internal/semantic"
 )
 
-const responseToolTurn = `{"id":"resp_tool","created_at":1,"model":"gpt-6.1-sol","status":"completed","output":[{"type":"reasoning","id":"rs_original","summary":[{"type":"summary_text","text":"Use ping."}],"encrypted_content":"ciphertext+/="},{"type":"function_call","id":"fc_original","call_id":"call_ping","name":"ping","arguments":"{\"value\":1}"}],"usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":20,"cache_write_tokens":30},"output_tokens":15,"output_tokens_details":{"reasoning_tokens":10},"total_tokens":115}}`
+const responseToolTurn = `{"id":"resp_tool","created_at":1,"model":"gpt-6.1-sol","status":"completed","output":[{"type":"reasoning","id":"rs_original","summary":[{"type":"summary_text","text":"Use ping."}],"encrypted_content":"ciphertext+/="},{"type":"function_call","id":"fc_original","call_id":"call_ping","name":"ping","arguments":"{\"value\":1}"}],"usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":20,"cache_write_tokens":30,"cache_write_tokens_details":{"ttl_30m_tokens":20,"ttl_12h_tokens":10}},"output_tokens":15,"output_tokens_details":{"reasoning_tokens":10},"total_tokens":115}}`
+
+func TestResponsesStreamNormalizesTerminalCacheWriteUsageOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		badOutput bool
+	}{
+		{name: "valid terminal"},
+		{name: "invalid terminal output", badOutput: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logged bytes.Buffer
+			logger := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+			t.Cleanup(func() { slog.SetDefault(logger) })
+
+			frames := toolResponsesSSEWithTerminal(func(response *openaiapi.Response) {
+				response.Usage.InputTokensDetails.CacheWriteTokensDetails.TTL12hTokens = 40
+				if tc.badOutput {
+					response.Output[1].Type = "unsupported"
+				}
+			})
+			adapter := newResponsesAdapter(t, &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(frames))}, nil
+			})})
+			request, err := openaiwire.DecodeGenerate(toolChatRequest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Stream = true
+			request.IncludeUsage = true
+			request.Requirements = request.DeriveRequirements()
+			usage, err := adapter.GenerateSemanticStream(context.Background(), provider.GenerateCall{ProviderModel: "gpt-6.1-sol", Request: request}, func(semantic.Event) error { return nil })
+			if (err != nil) != tc.badOutput {
+				t.Fatalf("unexpected terminal error: %v", err)
+			}
+			if usage == nil || usage.CacheWriteInputTokens != 30 || usage.CacheWriteLongInputTokens != 30 {
+				t.Fatalf("settlement usage lost the normalized write counts: %+v", usage)
+			}
+			if duplicates := strings.Count(logged.String(), "provider cache write breakdown does not match total"); duplicates != 1 {
+				t.Fatalf("expected one discrepancy warning, got %d", duplicates)
+			}
+		})
+	}
+}
 
 func toolChatRequest() openaiapi.ChatCompletionRequest {
 	return openaiapi.ChatCompletionRequest{Model: "gpt-sol", ReasoningEffort: "max", Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("ping")}}, Tools: []openaiapi.Tool{{Type: "function", Function: openaiapi.ToolFunction{Name: "ping", Parameters: json.RawMessage(`{"type":"object","properties":{"value":{"type":"integer"}}}`)}}}}
@@ -61,7 +107,7 @@ func TestResponsesToolsReasoningAndReplayReachOnlyResponses(t *testing.T) {
 	if reply.Choices[0].FinishReason == nil || *reply.Choices[0].FinishReason != "tool_calls" {
 		t.Fatal("tool finish reason lost")
 	}
-	if reply.Usage.CachedPromptTokens() != 20 || reply.Usage.CacheWritePromptTokens() != 30 || reply.Usage.ReasoningTokens() != 10 {
+	if reply.Usage.CachedPromptTokens() != 20 || reply.Usage.CacheWritePromptTokens() != 30 || reply.Usage.CacheWriteLongTokens != 10 || reply.Usage.ReasoningTokens() != 10 {
 		t.Fatalf("usage tiers lost: %+v", reply.Usage)
 	}
 	first.Messages = append(first.Messages, *reply.Choices[0].Message, openaiapi.Message{Role: "tool", ToolCallID: "call_ping", Content: openaiapi.TextContent("pong")})
@@ -72,6 +118,10 @@ func TestResponsesToolsReasoningAndReplayReachOnlyResponses(t *testing.T) {
 }
 
 func toolResponsesSSE() string {
+	return toolResponsesSSEWithTerminal(nil)
+}
+
+func toolResponsesSSEWithTerminal(editTerminal func(*openaiapi.Response)) string {
 	var response openaiapi.Response
 	_ = json.Unmarshal([]byte(responseToolTurn), &response)
 	var frames strings.Builder
@@ -94,6 +144,9 @@ func toolResponsesSSE() string {
 	write(openaiapi.ResponseStreamEvent{Type: "response.output_item.added", OutputIndex: &one, Item: &tool})
 	write(openaiapi.ResponseStreamEvent{Type: "response.function_call_arguments.delta", OutputIndex: &one, ItemID: tool.ID, Delta: `{"value":`})
 	write(openaiapi.ResponseStreamEvent{Type: "response.function_call_arguments.delta", OutputIndex: &one, ItemID: tool.ID, Delta: `1}`})
+	if editTerminal != nil {
+		editTerminal(&response)
+	}
 	write(openaiapi.ResponseStreamEvent{Type: "response.completed", Response: &response})
 	return frames.String()
 }
@@ -152,7 +205,7 @@ func TestResponsesStreamCarriesToolsReasoningAndFinalUsage(t *testing.T) {
 	if err := validator.Finalize(true); err != nil {
 		t.Fatal(err)
 	}
-	if arguments.String() != `{"value":1}` || termination != "tool_call" || opaque.Len() == 0 || usage.CacheWriteInputTokens != 30 {
+	if arguments.String() != `{"value":1}` || termination != "tool_call" || opaque.Len() == 0 || usage.CacheWriteInputTokens != 30 || usage.CacheWriteLongInputTokens != 10 {
 		t.Fatalf("stream fields lost: %s %s %d %+v", arguments.String(), termination, opaque.Len(), usage)
 	}
 }

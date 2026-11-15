@@ -57,7 +57,7 @@ func InspectInitialization(cfg config.Config) (InitializationState, error) {
 	}
 	if rootExists && metadataExists && ledgerExists && auditExists {
 		if cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots {
-			metadata, err := boltstore.OpenReadOnly(cfg.MetadataPath())
+			metadata, err := boltstore.OpenKeySlotMetadata(cfg.MetadataPath())
 			if err != nil {
 				return InitializationInconsistent, nil
 			}

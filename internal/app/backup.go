@@ -559,19 +559,26 @@ func validateRestoreStage(
 	purpose masterkey.KeySlotPurpose,
 	factory kmsWrapperFactory,
 ) error {
-	legacyPricingState, legacyStateErr := boltstore.LegacyPricingBackupState(filepath.Join(stageData, cfg.Storage.MetadataFile))
-	metadata, err := boltstore.OpenForWholeFilePublish(filepath.Join(stageData, cfg.Storage.MetadataFile))
+	stageMetadata := filepath.Join(stageData, cfg.Storage.MetadataFile)
+	if manifest.FormatVersion >= 2 {
+		matches := func(state boltstore.PricingBackupState, err error) bool {
+			return err == nil && state.StateSHA256 == manifest.PricingStateSHA256 &&
+				state.PendingIntentSHA256 == manifest.PendingIntentSHA256 && state.PendingIntents == manifest.PendingIntents
+		}
+		if !matches(boltstore.ArchivedPricingBackupState(stageMetadata)) &&
+			!matches(boltstore.LegacyPricingBackupState(stageMetadata)) {
+			return errors.New("staged pricing state does not match backup manifest")
+		}
+	}
+	metadata, err := boltstore.OpenForWholeFilePublish(stageMetadata)
 	if err != nil {
 		return fmt.Errorf("open staged metadata: %w", err)
 	}
 	defer metadata.Close()
 	if manifest.FormatVersion >= 2 {
 		gate, gateErr := metadata.LedgerCompatibilityGate()
-		state, stateErr := metadata.PricingBackupState()
-		stateMatches := stateErr == nil && state.StateSHA256 == manifest.PricingStateSHA256 && state.PendingIntentSHA256 == manifest.PendingIntentSHA256 && state.PendingIntents == manifest.PendingIntents
-		legacyMatches := legacyStateErr == nil && legacyPricingState.StateSHA256 == manifest.PricingStateSHA256 && legacyPricingState.PendingIntentSHA256 == manifest.PendingIntentSHA256 && legacyPricingState.PendingIntents == manifest.PendingIntents
-		if gateErr != nil || gate.FeatureEpoch != manifest.LedgerFeatureEpoch || gate.MinimumReaderVersion != manifest.MinimumLedgerReaderVersion || (!stateMatches && !legacyMatches) {
-			return errors.New("staged pricing/accounting compatibility state does not match backup manifest")
+		if gateErr != nil || gate.FeatureEpoch != manifest.LedgerFeatureEpoch || gate.MinimumReaderVersion != manifest.MinimumLedgerReaderVersion {
+			return errors.New("staged accounting compatibility state does not match backup manifest")
 		}
 	}
 	var masterKey []byte

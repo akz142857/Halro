@@ -1007,11 +1007,26 @@ func run(arguments []string, logger *slog.Logger) error {
 		dailyBudget := flags.Int64("daily-budget-micros-usd", 0, "daily budget in micro-USD; zero is unlimited")
 		inputPrice := flags.Int64("input-micros-per-million", 0, "input price in micro-USD per million tokens")
 		cachedInputPrice := flags.Int64("cached-input-micros-per-million", -1, "cache-read input price in micro-USD per million tokens; leave unset to bill cached tokens at the input price")
+		const cacheWriteFlag, cacheWriteLongFlag = "cache-write-micros-per-million", "cache-write-long-micros-per-million"
+		cacheWritePrice := flags.Int64(cacheWriteFlag, 0, "cache-write price for the shorter cache lifetime (Anthropic 5m, OpenAI 30m) in micro-USD per million tokens; leave unset to bill writes at the input price")
+		cacheWriteLongPrice := flags.Int64(cacheWriteLongFlag, 0, "cache-write price for the longer cache lifetime (Anthropic 1h, OpenAI 12h) in micro-USD per million tokens; leave unset to bill writes at the input price")
 		outputPrice := flags.Int64("output-micros-per-million", 0, "output price in micro-USD per million tokens")
-		billingMode := flags.String("billing-mode", "", "billing mode: metered or free; required when both prices are zero")
+		billingMode := flags.String("billing-mode", "", "billing mode: metered or free; required when all prices are zero")
 		if err := flags.Parse(arguments[1:]); err != nil {
 			return err
 		}
+		if *cacheWritePrice < 0 || *cacheWriteLongPrice < 0 {
+			return errors.New("cache write prices cannot be negative")
+		}
+		var shortWriteRate, longWriteRate *int64
+		flags.Visit(func(arg *flag.Flag) {
+			switch arg.Name {
+			case cacheWriteFlag:
+				shortWriteRate = cacheWritePrice
+			case cacheWriteLongFlag:
+				longWriteRate = cacheWriteLongPrice
+			}
+		})
 		cfg, err := config.Load(*configPath, config.LoadOptions{})
 		if err != nil {
 			return err
@@ -1035,6 +1050,7 @@ func run(arguments []string, logger *slog.Logger) error {
 			ProjectName: *projectName, DailyBudgetMicrosUSD: *dailyBudget,
 			BillingMode:           domain.BillingMode(*billingMode),
 			InputMicrosPerMillion: *inputPrice, CachedInputMicrosPerMillion: statedPrice(*cachedInputPrice),
+			CacheWriteMicrosPerMillion: shortWriteRate, CacheWriteLongMicrosPerMillion: longWriteRate,
 			OutputMicrosPerMillion: *outputPrice,
 		}, secret)
 		if err != nil {

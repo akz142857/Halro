@@ -162,6 +162,7 @@ export interface SummaryMetrics {
   estimated_output_tokens: number;
   provider_cached_input_tokens: number;
   provider_cache_write_input_tokens: number;
+  provider_cache_write_long_input_tokens: number;
   provider_reasoning_tokens: number;
   cost_micros_usd: number;
   estimated_cost_micros_usd: number;
@@ -1148,6 +1149,8 @@ export interface UsageAttempt {
   provider_model?: string;
   provider_input_tokens: number;
   provider_output_tokens: number;
+  provider_cache_write_input_tokens?: number;
+  provider_cache_write_long_input_tokens?: number;
   cost_micros_usd: number | null;
   price_evidence_status: "versioned" | "legacy_unversioned" | "unknown";
   cost_value_status: "known" | "unknown";
@@ -1301,9 +1304,11 @@ export interface PriceSnapshot {
   formula_version?: string;
   input_micros_per_million?: number;
   cached_input_micros_per_million?: number;
+  cache_write_micros_per_million?: number;
+  cache_write_long_micros_per_million?: number;
   output_micros_per_million?: number;
   fixed_request_micros_usd?: number;
-  // Present only when the price version bills by time of day. The four terms
+  // Present only when the price version bills by time of day. The terms
   // above are already this rung's rates; this says which rung, so a settled
   // attempt can be explained without re-reading the rule table.
   schedule_tier?: PriceScheduleTier;
@@ -1328,12 +1333,14 @@ export interface PriceWindow {
   end_minute: number;
   input_micros_per_million: number;
   cached_input_micros_per_million: number;
+  cache_write_micros_per_million: number;
+  cache_write_long_micros_per_million: number;
   output_micros_per_million: number;
   fixed_request_micros_usd: number;
 }
 
 // Windows are disjoint and sorted, and they need not cover the day: an instant
-// no window covers is billed at the version's own four terms.
+// no window covers is billed at the version's base rates.
 export interface PriceSchedule {
   timezone: string;
   windows: PriceWindow[];
@@ -1349,6 +1356,8 @@ export interface DeploymentPriceVersion {
   formula_version: string;
   input_micros_per_million: number;
   cached_input_micros_per_million: number;
+  cache_write_micros_per_million: number;
+  cache_write_long_micros_per_million: number;
   output_micros_per_million: number;
   fixed_request_micros_usd: number;
   schedule?: PriceSchedule;
@@ -1368,6 +1377,8 @@ export interface DeploymentPriceProposal {
 	currency: "USD";
 	input_micros_per_million: number;
 	cached_input_micros_per_million: number;
+	cache_write_micros_per_million: number;
+	cache_write_long_micros_per_million: number;
 	output_micros_per_million: number;
 	fixed_request_micros_usd: number;
 	source: { type: string; assurance: string; content_sha256: string; reference?: string; uri?: string };
@@ -1669,10 +1680,15 @@ export interface ConfigurationNotice {
   alias?: string;
 }
 
+export type ConfigurationImportSelection = { include_gateway_keys: boolean } & (
+  { mode: "all" } | { mode: "selected"; project_ids: string[]; route_aliases: string[] }
+);
+
 export interface ConfigurationImportPreview {
   counts: Record<ConfigurationResource, number>;
+  selection_options?: { projects: ConfigurationObject[]; route_aliases: string[]; gateway_keys: number };
   providers: ConfigurationProviderReview[];
-  issues: { resource: ConfigurationResource | "bundle" | "target"; id?: string; code: string; message: string }[];
+  issues: { resource: ConfigurationResource | "bundle" | "target"; id?: string; code: string; message: string; fields?: Record<string, string> }[];
   deployments_to_enable: ConfigurationObject[];
   routes_to_enable: ConfigurationObject[];
   notices?: ConfigurationNotice[];

@@ -99,7 +99,7 @@ func TestMigration30ReconstructsTheCacheReadRateFromTheInputRate(t *testing.T) {
 	}
 	// The rate a migrated price charges is the rate it charged yesterday: a
 	// prompt with cached tokens costs exactly what it did before the term existed.
-	cost, err := domain.CalculateUSDTokensV1(1_000_000, 400_000, 0, price, time.Now().UTC())
+	cost, err := domain.CalculateUSDTokensV1(domain.BilledTokens{Input: 1_000_000, CachedInput: 400_000, Output: 0}, price, time.Now().UTC())
 	if err != nil || cost.InputCostMicrosUSD != 5_000_000 {
 		t.Fatalf("migrated price re-rates existing traffic: cost=%#v err=%v", cost, err)
 	}

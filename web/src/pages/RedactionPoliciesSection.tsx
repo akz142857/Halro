@@ -165,20 +165,28 @@ export function RedactionPoliciesSection({
       {!!policies.length && visible.length === 0 && <EmptyState title={t("common.noMatches")} action={<button className="button ghost" onClick={() => { setSearch(""); setStatus(""); setMode(""); }}>{t("policyManagement.clearFilters")}</button>} />}
       {!!visible.length && (
         <div className="table-shell policy-table-shell">
-          <table className="policy-table"><thead><tr><th>{t("policyManagement.policy")}</th><th>{t("policyManagement.status")}</th><th>{t("policyManagement.mode")}</th><th>{t("policyManagement.summary")}</th><th>{t("policyManagement.bindings")}</th><th>{t("policyManagement.actions")}</th></tr></thead>
-          <tbody>{visible.map((policy) => {
+          <table className="policy-table" role="table">
+          <thead role="rowgroup"><tr role="row">
+            <th scope="col" role="columnheader">{t("policyManagement.policy")}</th>
+            <th scope="col" role="columnheader">{t("policyManagement.status")}</th>
+            <th scope="col" role="columnheader">{t("policyManagement.mode")}</th>
+            <th scope="col" role="columnheader">{t("policyManagement.summary")}</th>
+            <th scope="col" role="columnheader">{t("policyManagement.bindings")}</th>
+            <th scope="col" role="columnheader">{t("policyManagement.actions")}</th>
+          </tr></thead>
+          <tbody role="rowgroup">{visible.map((policy) => {
             const enabledRules = policy.rules.filter((rule) => rule.enabled);
             const strongest = enabledRules.some((rule) => rule.action === "reject") ? "reject" : enabledRules.some((rule) => rule.action === "replace") ? "replace" : enabledRules.some((rule) => rule.action === "mask") ? "mask" : "detect_only";
             const rowBusy = toggle.isPending && toggle.variables?.policy.id === policy.id;
-            return <tr key={policy.id}>
-              <td><strong>{policy.name}</strong><code>{policy.id}</code></td>
-              <td><span className="inline-status"><StatusDot ok={policy.enabled} />{policy.enabled ? t("common.enabled") : t("common.disabled")}</span></td>
-              <td><span className="badge">{policy.mode === "strict" ? t("redaction.strictBadge") : policy.mode === "bounded_stream" ? t("redaction.boundedBadge") : t("redaction.detectStreamBadge")}</span></td>
-              <td><strong>{t("redaction.rules", { count: policy.rules.length })}</strong><small>{t("policyManagement.enabledRules", { count: enabledRules.length })} · {t(`redaction.${strongest === "detect_only" ? "detect" : strongest}`)}</small></td>
-              <td>{t("policyManagement.projectCount", { count: policy.bound_projects ?? 0 })}</td>
+            return <tr key={policy.id} role="row">
+              <td role="cell"><strong>{policy.name}</strong><code>{policy.id}</code></td>
+              <td role="cell"><span className="compact-table-label" aria-hidden="true">{t("policyManagement.status")}</span><span className="inline-status"><StatusDot ok={policy.enabled} />{policy.enabled ? t("common.enabled") : t("common.disabled")}</span></td>
+              <td role="cell"><span className="compact-table-label" aria-hidden="true">{t("policyManagement.mode")}</span><span className="badge">{policy.mode === "strict" ? t("redaction.strictBadge") : policy.mode === "bounded_stream" ? t("redaction.boundedBadge") : t("redaction.detectStreamBadge")}</span></td>
+              <td role="cell"><span className="compact-table-label" aria-hidden="true">{t("policyManagement.summary")}</span><strong>{t("redaction.rules", { count: policy.rules.length })}</strong><small>{t("policyManagement.enabledRules", { count: enabledRules.length })} · {t(`redaction.${strongest === "detect_only" ? "detect" : strongest}`)}</small></td>
+              <td role="cell"><span className="compact-table-label" aria-hidden="true">{t("policyManagement.bindings")}</span>{t("policyManagement.projectCount", { count: policy.bound_projects ?? 0 })}</td>
               {/* Switching a redaction policy off takes DLP away from every Project
                   bound to it, so it asks first and names the blast radius. */}
-              <td><div className="row-actions policy-row-actions"><button className="button ghost" onClick={() => setTesting(policy)}>{t("common.test")}</button>{policy.enabled
+              <td role="cell"><div className="row-actions policy-row-actions"><button className="button ghost" onClick={() => setTesting(policy)}>{t("common.test")}</button>{policy.enabled
                 ? <ConfirmButton className="button ghost" label={t("common.disable")} title={t("redaction.disableTitle")} confirmLabel={t("redaction.disableConfirm", { name: policy.name, count: policy.bound_projects ?? 0 })} disabled={rowBusy} requireStepUp onConfirm={(reauth) => toggle.mutateAsync({ policy, reauth })} />
                 : <ConfirmButton className="button secondary" label={t("common.enable")} confirmLabel={t("redaction.enableConfirm", { name: policy.name })} disabled={rowBusy} requireStepUp onConfirm={(reauth) => toggle.mutateAsync({ policy, reauth })} />}<button className="button ghost" disabled={readOnly || rowBusy} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setEditing(policy)}>{t("common.edit")}</button><ConfirmButton label={t("common.delete")} confirmLabel={t("redaction.deleteConfirm", { name: policy.name })} disabled={remove.isPending || rowBusy} requireStepUp onConfirm={(reauth) => remove.mutateAsync({ policy, reauth })} /></div>{toggle.isError && !isStepUpPrompt(toggle.error) && toggle.variables?.policy.id === policy.id && <ErrorState error={toggle.error} />}</td>
             </tr>;

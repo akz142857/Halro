@@ -276,7 +276,8 @@ describe("design system themes", () => {
   // 691 → 679 as concise page headers, forms and the workbench adopt spacing tokens.
   // 679 → 669 as the task-focused developer workbench adopts shared spacing.
   // 669 → 663 as the account disclosure adopts shared spacing.
-  const bareSizeValueBaseline = 663;
+  // 663 → 662 after removing the route's separate test-control margin.
+  const bareSizeValueBaseline = 662;
 
   it("does not add bare spacing or radius values beyond the current baseline", () => {
     const styles = read("./styles.css") + read("./pages/ProjectAIIntegration.css") + read("./design-system/resource-list.css") + read("./design-system/resource-card.css");

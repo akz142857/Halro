@@ -60,6 +60,7 @@ func mixedTraffic(t *testing.T, aggregate *Aggregate) time.Time {
 			AttemptID: "att_1", ProjectID: "prj_a", RequestedModel: "chat", ProviderID: "prov_a",
 			DeploymentID: "dep_a", ProviderModel: "vendor/chat-1", OccurredAt: now.Add(time.Second),
 			ProviderInputTokens: 100, ProviderOutputTokens: 20, ProviderCachedInputTokens: 40,
+			ProviderCacheWriteInputTokens: 12, ProviderCacheWriteLongInputTokens: 4,
 			ProviderReasoningTokens: 5, LatencyMillis: 900,
 			CommittedMicrosUSD: ledger.MicrosUSD(120), Outcome: "success"}),
 		stamp(ledger.Event{EventID: "a1_final", Kind: ledger.EventRequestFinalized, RequestID: "req_1",
@@ -71,6 +72,7 @@ func mixedTraffic(t *testing.T, aggregate *Aggregate) time.Time {
 			AttemptID: "att_2", ProjectID: "prj_b", RequestedModel: "chat", ProviderID: "prov_b",
 			DeploymentID: "dep_b", ProviderModel: "vendor/chat-2", OccurredAt: now.Add(time.Minute + time.Second),
 			ProviderInputTokens: 70, ProviderOutputTokens: 30, LatencyMillis: 2500,
+			ProviderCacheWriteInputTokens: 70, ProviderCacheWriteLongInputTokens: 70,
 			CommittedMicrosUSD: ledger.MicrosUSD(80), CostEstimated: true, TokenEstimated: true,
 			TokenUsageSource: ledger.TokenUsageSourceEstimate, Outcome: "error", ErrorClass: "upstream"}),
 		stamp(ledger.Event{EventID: "a2_final", Kind: ledger.EventRequestFinalized, RequestID: "req_2",
@@ -152,6 +154,9 @@ func TestRollupEstimatedColumnsAreSubsets(t *testing.T) {
 		total.EstimatedOutputTokens > total.OutputTokens ||
 		total.EstimatedCostMicrosUSD > total.CostMicrosUSD {
 		t.Fatalf("estimated columns are not subsets: %#v", total)
+	}
+	if total.ProviderCacheWriteInputTokens != 12 || total.ProviderCacheWriteLongInputTokens != 4 {
+		t.Fatalf("provider cache-write totals included estimated tiers: %+v", total)
 	}
 	if total.ProviderCachedInputTokens > total.InputTokens ||
 		total.ProviderReasoningTokens > total.OutputTokens+total.InputTokens {

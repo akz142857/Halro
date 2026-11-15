@@ -50,12 +50,16 @@ func migrateVersionedDeploymentPricing(tx *Tx, step func(string) error) error {
 }
 
 func (s *Store) PricingIdempotencyRequestSHA256(ctx context.Context, keySHA256 string) (string, bool, error) {
+	return s.pricingIdempotencyRequestSHA256(ctx, bucketPricingIdempotency, keySHA256)
+}
+
+func (s *Store) pricingIdempotencyRequestSHA256(ctx context.Context, bucket []byte, keySHA256 string) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
 	}
 	var record pricingIdempotencyRecord
 	err := s.view(func(tx *Tx) error {
-		raw := tx.Bucket(bucketPricingIdempotency).Get([]byte(keySHA256))
+		raw := tx.Bucket(bucket).Get([]byte(keySHA256))
 		if raw == nil {
 			return nil
 		}
@@ -367,7 +371,7 @@ func (s *Store) createDeploymentPriceVersion(ctx context.Context, price domain.D
 			effective := price.EffectiveFrom.UTC()
 			intent.DeploymentID, intent.PriceVersion, intent.EffectiveFrom = price.DeploymentID, price.Version, &effective
 			intent.RecordSource(price.Source)
-			intent.ChangeSummary = fmt.Sprintf("before=none after={billing:%s,input:%d,cached_input:%d,output:%d,fixed:%d}", price.BillingMode, price.InputMicrosPerMillion, price.CachedInputMicrosPerMillion, price.OutputMicrosPerMillion, price.FixedRequestMicrosUSD) + price.Schedule.AuditSummary()
+			intent.ChangeSummary = fmt.Sprintf("before=none after={billing:%s,input:%d,cached_input:%d,cache_write:%d,cache_write_long:%d,output:%d,fixed:%d}", price.BillingMode, price.InputMicrosPerMillion, price.CachedInputMicrosPerMillion, price.CacheWriteMicrosPerMillion, price.CacheWriteLongMicrosPerMillion, price.OutputMicrosPerMillion, price.FixedRequestMicrosUSD) + price.Schedule.AuditSummary()
 			if err := putPricingAuditIntentTx(tx, *intent); err != nil {
 				return err
 			}

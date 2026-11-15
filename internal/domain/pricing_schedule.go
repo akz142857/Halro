@@ -49,8 +49,12 @@ type PriceWindow struct {
 	EndMinute                   int   `json:"end_minute"`
 	InputMicrosPerMillion       int64 `json:"input_micros_per_million"`
 	CachedInputMicrosPerMillion int64 `json:"cached_input_micros_per_million"`
-	OutputMicrosPerMillion      int64 `json:"output_micros_per_million"`
-	FixedRequestMicrosUSD       int64 `json:"fixed_request_micros_usd"`
+	// The cache-write terms follow DeploymentPriceVersion's: a window that
+	// discounts the prompt discounts what it writes too, at its own rate.
+	CacheWriteMicrosPerMillion     int64 `json:"cache_write_micros_per_million"`
+	CacheWriteLongMicrosPerMillion int64 `json:"cache_write_long_micros_per_million"`
+	OutputMicrosPerMillion         int64 `json:"output_micros_per_million"`
+	FixedRequestMicrosUSD          int64 `json:"fixed_request_micros_usd"`
 }
 
 // PriceSchedule is the recurring rule a price version carries when its provider
@@ -78,10 +82,12 @@ type PriceSchedule struct {
 // PriceTier is the rate table one attempt is billed at, together with the
 // evidence for why that rung was chosen.
 type PriceTier struct {
-	InputMicrosPerMillion       int64
-	CachedInputMicrosPerMillion int64
-	OutputMicrosPerMillion      int64
-	FixedRequestMicrosUSD       int64
+	InputMicrosPerMillion          int64
+	CachedInputMicrosPerMillion    int64
+	CacheWriteMicrosPerMillion     int64
+	CacheWriteLongMicrosPerMillion int64
+	OutputMicrosPerMillion         int64
+	FixedRequestMicrosUSD          int64
 	// Provenance is nil exactly when the version carries no schedule, which
 	// keeps a fixed price's snapshot byte-identical to what it was before
 	// schedules existed.
@@ -101,11 +107,17 @@ type PriceScheduleTier struct {
 	// It is nil on the PriceTierZoneUnavailable path, where the whole point is
 	// that no local hour could be established.
 	LocalMinute *int `json:"local_minute,omitempty"`
+	// An unavailable-zone tier may need separate rounding even when its
+	// maximum rates coincide, to bound every configured window's charge.
+	SeparateCacheWriteRounding bool `json:"separate_cache_write_rounding,omitempty"`
 }
 
 func (t PriceScheduleTier) Validate() error {
 	if err := validateIANAZoneName("price schedule timezone", t.Timezone); err != nil {
 		return err
+	}
+	if t.SeparateCacheWriteRounding && t.Source != PriceTierZoneUnavailable {
+		return errors.New("separate cache write rounding override requires a zone-unavailable tier")
 	}
 	inWindow := t.StartMinute != nil && t.EndMinute != nil
 	hasWindowBound := t.StartMinute != nil || t.EndMinute != nil
@@ -185,12 +197,10 @@ func (s PriceSchedule) Validate(mode BillingMode) error {
 			return fmt.Errorf("price schedule window %d overlaps the previous window or is out of order", index)
 		}
 		previousEnd = window.EndMinute
-		if window.InputMicrosPerMillion < 0 || window.CachedInputMicrosPerMillion < 0 ||
-			window.OutputMicrosPerMillion < 0 || window.FixedRequestMicrosUSD < 0 {
+		if window.Tier().hasNegativeRate() {
 			return fmt.Errorf("price schedule window %d cannot carry a negative rate", index)
 		}
-		if mode == BillingModeMetered && window.InputMicrosPerMillion == 0 && window.CachedInputMicrosPerMillion == 0 &&
-			window.OutputMicrosPerMillion == 0 && window.FixedRequestMicrosUSD == 0 {
+		if mode == BillingModeMetered && window.Tier().isZero() {
 			return fmt.Errorf("price schedule window %d prices a metered deployment at zero", index)
 		}
 	}
@@ -212,8 +222,9 @@ func (s *PriceSchedule) AuditSummary() string {
 		if index > 0 {
 			builder.WriteByte(',')
 		}
-		fmt.Fprintf(&builder, "%d-%d:%d/%d/%d/%d", window.StartMinute, window.EndMinute,
+		fmt.Fprintf(&builder, "%d-%d:%d/%d/%d/%d/%d/%d", window.StartMinute, window.EndMinute,
 			window.InputMicrosPerMillion, window.CachedInputMicrosPerMillion,
+			window.CacheWriteMicrosPerMillion, window.CacheWriteLongMicrosPerMillion,
 			window.OutputMicrosPerMillion, window.FixedRequestMicrosUSD)
 	}
 	builder.WriteString("]}")
@@ -239,20 +250,13 @@ func (s PriceSchedule) Clone() PriceSchedule {
 // that cannot quietly lose money. The same rung answers the gap between
 // windows, except that there the answer is decidable and is simply the base.
 func (p DeploymentPriceVersion) TierAt(selectedAt time.Time) PriceTier {
-	base := PriceTier{
-		InputMicrosPerMillion:       p.InputMicrosPerMillion,
-		CachedInputMicrosPerMillion: p.CachedInputMicrosPerMillion,
-		OutputMicrosPerMillion:      p.OutputMicrosPerMillion,
-		FixedRequestMicrosUSD:       p.FixedRequestMicrosUSD,
-	}
+	base := p.BaseTier()
 	if p.Schedule == nil {
 		return base
 	}
 	location, err := time.LoadLocation(p.Schedule.Timezone)
 	if err != nil {
-		tier := p.highestTier()
-		tier.Provenance = &PriceScheduleTier{Timezone: p.Schedule.Timezone, Source: PriceTierZoneUnavailable}
-		return tier
+		return p.highestTier()
 	}
 	local := selectedAt.In(location)
 	minute := local.Hour()*60 + local.Minute()
@@ -261,16 +265,12 @@ func (p DeploymentPriceVersion) TierAt(selectedAt time.Time) PriceTier {
 			continue
 		}
 		start, end := window.StartMinute, window.EndMinute
-		return PriceTier{
-			InputMicrosPerMillion:       window.InputMicrosPerMillion,
-			CachedInputMicrosPerMillion: window.CachedInputMicrosPerMillion,
-			OutputMicrosPerMillion:      window.OutputMicrosPerMillion,
-			FixedRequestMicrosUSD:       window.FixedRequestMicrosUSD,
-			Provenance: &PriceScheduleTier{
-				Timezone: p.Schedule.Timezone, Source: PriceTierWindow,
-				StartMinute: &start, EndMinute: &end, LocalMinute: &minute,
-			},
+		tier := window.Tier()
+		tier.Provenance = &PriceScheduleTier{
+			Timezone: p.Schedule.Timezone, Source: PriceTierWindow,
+			StartMinute: &start, EndMinute: &end, LocalMinute: &minute,
 		}
+		return tier
 	}
 	base.Provenance = &PriceScheduleTier{Timezone: p.Schedule.Timezone, Source: PriceTierBase, LocalMinute: &minute}
 	return base
@@ -282,20 +282,62 @@ func (p DeploymentPriceVersion) TierAt(selectedAt time.Time) PriceTier {
 // landed on, whatever mix of prompt, cached prompt and completion tokens it
 // turns out to have.
 func (p DeploymentPriceVersion) highestTier() PriceTier {
-	highest := PriceTier{
-		InputMicrosPerMillion:       p.InputMicrosPerMillion,
-		CachedInputMicrosPerMillion: p.CachedInputMicrosPerMillion,
-		OutputMicrosPerMillion:      p.OutputMicrosPerMillion,
-		FixedRequestMicrosUSD:       p.FixedRequestMicrosUSD,
-	}
+	highest := p.BaseTier()
 	if p.Schedule == nil {
 		return highest
 	}
+	separate := !highest.writesShareInputRounding()
 	for _, window := range p.Schedule.Windows {
+		separate = separate || !window.Tier().writesShareInputRounding()
 		highest.InputMicrosPerMillion = max(highest.InputMicrosPerMillion, window.InputMicrosPerMillion)
 		highest.CachedInputMicrosPerMillion = max(highest.CachedInputMicrosPerMillion, window.CachedInputMicrosPerMillion)
+		highest.CacheWriteMicrosPerMillion = max(highest.CacheWriteMicrosPerMillion, window.CacheWriteMicrosPerMillion)
+		highest.CacheWriteLongMicrosPerMillion = max(highest.CacheWriteLongMicrosPerMillion, window.CacheWriteLongMicrosPerMillion)
 		highest.OutputMicrosPerMillion = max(highest.OutputMicrosPerMillion, window.OutputMicrosPerMillion)
 		highest.FixedRequestMicrosUSD = max(highest.FixedRequestMicrosUSD, window.FixedRequestMicrosUSD)
 	}
+	highest.Provenance = &PriceScheduleTier{
+		Timezone: p.Schedule.Timezone, Source: PriceTierZoneUnavailable,
+		SeparateCacheWriteRounding: separate && highest.writesShareInputRounding(),
+	}
 	return highest
+}
+
+// BaseTier is the version's own rates, the ones outside every window.
+func (p DeploymentPriceVersion) BaseTier() PriceTier {
+	return PriceTier{
+		InputMicrosPerMillion:          p.InputMicrosPerMillion,
+		CachedInputMicrosPerMillion:    p.CachedInputMicrosPerMillion,
+		CacheWriteMicrosPerMillion:     p.CacheWriteMicrosPerMillion,
+		CacheWriteLongMicrosPerMillion: p.CacheWriteLongMicrosPerMillion,
+		OutputMicrosPerMillion:         p.OutputMicrosPerMillion,
+		FixedRequestMicrosUSD:          p.FixedRequestMicrosUSD,
+	}
+}
+
+// Tier is the window's rates.
+func (w PriceWindow) Tier() PriceTier {
+	return PriceTier{
+		InputMicrosPerMillion:          w.InputMicrosPerMillion,
+		CachedInputMicrosPerMillion:    w.CachedInputMicrosPerMillion,
+		CacheWriteMicrosPerMillion:     w.CacheWriteMicrosPerMillion,
+		CacheWriteLongMicrosPerMillion: w.CacheWriteLongMicrosPerMillion,
+		OutputMicrosPerMillion:         w.OutputMicrosPerMillion,
+		FixedRequestMicrosUSD:          w.FixedRequestMicrosUSD,
+	}
+}
+
+func (t PriceTier) hasNegativeRate() bool {
+	return t.InputMicrosPerMillion < 0 || t.CachedInputMicrosPerMillion < 0 ||
+		t.CacheWriteMicrosPerMillion < 0 || t.CacheWriteLongMicrosPerMillion < 0 ||
+		t.OutputMicrosPerMillion < 0 || t.FixedRequestMicrosUSD < 0
+}
+
+// isZero says no term bills anything. A metered price must have some
+// positive term and a free one must have none, and both checks read every
+// term through here so that adding one cannot leave it out of either.
+func (t PriceTier) isZero() bool {
+	return t.InputMicrosPerMillion == 0 && t.CachedInputMicrosPerMillion == 0 &&
+		t.CacheWriteMicrosPerMillion == 0 && t.CacheWriteLongMicrosPerMillion == 0 &&
+		t.OutputMicrosPerMillion == 0 && t.FixedRequestMicrosUSD == 0
 }

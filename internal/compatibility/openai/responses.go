@@ -380,7 +380,19 @@ func renderResponseUsage(usage *semantic.Usage) *openaiapi.ResponseUsage {
 	if usage == nil {
 		return nil
 	}
-	return &openaiapi.ResponseUsage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, TotalTokens: usage.TotalTokens, InputTokensDetails: openaiapi.ResponseTokenDetails{CachedTokens: usage.CachedInputTokens, CacheWriteTokens: usage.CacheWriteInputTokens}, OutputTokensDetails: openaiapi.ResponseTokenDetails{ReasoningTokens: usage.ReasoningTokens}}
+	inputDetails := openaiapi.ResponseTokenDetails{
+		CachedTokens: usage.CachedInputTokens, CacheWriteTokens: usage.CacheWriteInputTokens,
+	}
+	if usage.CacheWriteInputTokens > 0 && usage.CacheWriteTTLPair == semantic.CacheWriteTTL30m12h {
+		inputDetails.CacheWriteTokensDetails = &openaiapi.CacheWriteTokenDetails{
+			TTL30mTokens: usage.CacheWriteInputTokens - usage.CacheWriteLongInputTokens,
+			TTL12hTokens: usage.CacheWriteLongInputTokens,
+		}
+	}
+	return &openaiapi.ResponseUsage{
+		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, TotalTokens: usage.TotalTokens,
+		InputTokensDetails: inputDetails, OutputTokensDetails: openaiapi.ResponseTokenDetails{ReasoningTokens: usage.ReasoningTokens},
+	}
 }
 
 func responseStatus(termination string) string {
