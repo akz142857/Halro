@@ -63,8 +63,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("permissions: {}", preflight_block)
         self.assertIn("inputs.publish_packages == true", preflight_block)
         publish_block = self.workflow[publish : self.workflow.index("\n  container-push:\n")]
-        self.assertIn("needs: [prepare, provenance, downstream-preflight]", publish_block)
-        self.assertIn("needs.provenance.result == 'success'", publish_block)
+        self.assertIn("needs: [prepare, provenance, verify-release, downstream-preflight]", publish_block)
+        self.assertIn("needs.verify-release.result == 'success'", publish_block)
         self.assertIn("needs.downstream-preflight.result == 'success'", publish_block)
         self.assertIn("needs.downstream-preflight.result == 'skipped'", publish_block)
 
@@ -151,7 +151,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("for artifact in halro-* halro_*.deb halro.spdx.json checksums.txt; do", signing)
 
         verify = self.workflow[
-            self.workflow.index("- name: Verify release blobs") : self.workflow.index("- name: Create the release tag")
+            self.workflow.index("- name: Verify release blobs") : self.workflow.index("\n  downstream-preflight:\n")
         ]
         self.assertIn(
             "for artifact in release/halro-* release/halro_*.deb release/halro.spdx.json release/checksums.txt; do",
@@ -166,6 +166,22 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("for package_name in halro halro-deadman; do", package_build)
         self.assertIn("for arch in amd64 arm64; do", package_build)
         self.assertIn('test -f "release/${package_name}_${package_version}_${arch}.deb"', package_build)
+
+    def test_rehearsal_and_publication_verify_the_same_immutable_release_assets(self):
+        signing = self.workflow.split("\n  provenance:\n", 1)[1].split("\n  verify-release:\n", 1)[0]
+        verify = self.workflow.split("\n  verify-release:\n", 1)[1].split("\n  downstream-preflight:\n", 1)[0]
+        publish = self.workflow.split("\n  publish:\n", 1)[1].split("\n  container-push:\n", 1)[0]
+        assets = "artifact-ids: ${{ needs.provenance.outputs.release_assets_id }}"
+        for job in (verify, publish):
+            self.assertIn(assets, job)
+        self.assertIn("release_assets_id: ${{ steps.release-assets.outputs.artifact-id }}", signing)
+        self.assertIn("artifact-ids: ${{ needs.provenance.outputs.run_evidence_id }}", verify)
+        self.assertIn("needs: [prepare, provenance]", verify)
+        self.assertNotIn("\n    if:", verify)
+        self.assertIn('verify_blob "${manifest}"', verify)
+        self.assertIn("tools/release/run_evidence.py verify", verify)
+        self.assertIn("needs.prepare.outputs.publish == 'true'", publish)
+        self.assertIn("needs.verify-release.result == 'success'", publish)
 
     def test_debian_prerelease_conversion_cannot_expand_home(self):
         sources = {

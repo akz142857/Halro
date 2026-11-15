@@ -64,6 +64,9 @@ The `website-docs` job checks out that website SHA, verifies release identity,
 byte-identical API contracts and bilingual entry points, and builds the website
 including its generated-content, translation, metadata, links and release-content
 checks. `provenance` depends on it, so failure blocks signing and publication.
+The read-only `verify-release` job downloads the signed assets and run evidence
+by artifact ID, then checks the GitHub attestations, Sigstore bundles, checksums,
+and evidence inventory. Both rehearsal and publication must pass this job.
 The existing release App supplies a website-scoped, contents-read token; this
 read credential is required even for a rehearsal. No website merge or deployment
 occurs in a rehearsal.

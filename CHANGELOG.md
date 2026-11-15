@@ -6,10 +6,41 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-16
+
 ### Added
 
 - Set short- and long-lived prompt cache write prices for model deployments,
   including time-of-day windows. Usage details retain the long-lived write count.
+- Review and apply typed AI configuration plans for deployment aliases and
+  Project access in **Settings & Status → AI configuration**. An administrator
+  previews and confirms each plan.
+
+### Changed
+
+- Use the first-request checklist to connect a Provider, validate a priced
+  deployment and route, grant Project access, and retry verification for the
+  selected Project and model. Project pages link to AI configuration and their
+  Gateway Keys.
+- Import a whole portable configuration or select Projects and model aliases.
+  Review the included route groups and choose whether to issue Gateway Keys.
+- Report cache-write usage by lifetime when a Provider supplies a compatible
+  breakdown. Preserve the reported total through portable translations. Apply
+  a configured fixed request fee to Anthropic token counting.
+- Filter model deployments by Provider and use simplified deployment pricing
+  and outbound proxy forms.
+- Refresh the console and runtime dependencies, and test the SDK contracts
+  against newer Go, Node, and Python SDKs.
+- Verify Cosign signatures and release evidence in both rehearsal and formal
+  release workflows.
+
+### Fixed
+
+- Publish complete Ledger append timing before a caller receives its result.
+
+### Security
+
+- Update OpenTelemetry API in the Python SDK test lock to address CVE-2026-126360.
 
 ### Upgrading
 
@@ -3000,6 +3031,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.15.0]: https://github.com/akz142857/Halro/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/akz142857/Halro/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/akz142857/Halro/compare/v0.12.2...v0.13.0
 [0.12.2]: https://github.com/akz142857/Halro/compare/v0.12.1...v0.12.2

@@ -37,8 +37,11 @@ The dependency graph then enforces these jobs and steps:
   OS/architecture matrix, non-root container archives, and Trivy scanning;
 - `provenance`: source and released-binary SBOMs, build attestations,
   checksums, Sigstore bundles, and the signed run-evidence manifest;
-- `publish`: checksum, attestation, and Sigstore verification before tag and
-  GitHub Release creation; and
+- `verify-release`: independently checks the uploaded release artifacts by ID,
+  including checksums, GitHub attestations, Sigstore bundles, and the signed run
+  manifest and its file inventory, during both rehearsal and formal runs;
+- `publish`: downloads those same assets by ID and creates the tag and GitHub
+  Release after verification passes in a formal run;
 - `container-push`: architecture images and multi-architecture version and
   `latest` manifests after publication;
 - `website-acceptance`: after container publication, wait for the public bilingual
