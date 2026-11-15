@@ -83,27 +83,28 @@ type AttemptEvent struct {
 	ProviderInputTokens   int64                     `json:"provider_input_tokens"`
 	ProviderOutputTokens  int64                     `json:"provider_output_tokens"`
 	// Breakdown subsets of the two totals above, not additions to them.
-	ProviderCachedInputTokens     int64                      `json:"provider_cached_input_tokens,omitempty"`
-	ProviderCacheWriteInputTokens int64                      `json:"provider_cache_write_input_tokens,omitempty"`
-	ProviderReasoningTokens       int64                      `json:"provider_reasoning_tokens,omitempty"`
-	PreparedOutputTokens          int64                      `json:"prepared_output_tokens"`
-	CostMicrosUSD                 *int64                     `json:"cost_micros_usd"`
-	LeaseMode                     ledger.LeaseMode           `json:"lease_mode,omitempty"`
-	PriceEvidenceStatus           domain.PriceEvidenceStatus `json:"price_evidence_status"`
-	CostValueStatus               domain.CostValueStatus     `json:"cost_value_status"`
-	PriceSnapshot                 *domain.PriceSnapshot      `json:"price_snapshot,omitempty"`
-	InputCostMicrosUSD            *int64                     `json:"input_cost_micros_usd"`
-	OutputCostMicrosUSD           *int64                     `json:"output_cost_micros_usd"`
-	FixedCostMicrosUSD            *int64                     `json:"fixed_cost_micros_usd"`
-	Tags                          []string                   `json:"tags,omitempty"`
-	CostEstimated                 bool                       `json:"cost_estimated"`
-	TokensEstimated               bool                       `json:"tokens_estimated"`
-	TokenUsageSource              ledger.TokenUsageSource    `json:"token_usage_source,omitempty"`
-	StartedAt                     time.Time                  `json:"started_at"`
-	CompletedAt                   time.Time                  `json:"completed_at"`
-	Status                        string                     `json:"status"`
-	ErrorClass                    string                     `json:"error_class,omitempty"`
-	HTTPStatus                    int                        `json:"http_status,omitempty"`
+	ProviderCachedInputTokens         int64                      `json:"provider_cached_input_tokens,omitempty"`
+	ProviderCacheWriteInputTokens     int64                      `json:"provider_cache_write_input_tokens,omitempty"`
+	ProviderCacheWriteLongInputTokens int64                      `json:"provider_cache_write_long_input_tokens,omitempty"`
+	ProviderReasoningTokens           int64                      `json:"provider_reasoning_tokens,omitempty"`
+	PreparedOutputTokens              int64                      `json:"prepared_output_tokens"`
+	CostMicrosUSD                     *int64                     `json:"cost_micros_usd"`
+	LeaseMode                         ledger.LeaseMode           `json:"lease_mode,omitempty"`
+	PriceEvidenceStatus               domain.PriceEvidenceStatus `json:"price_evidence_status"`
+	CostValueStatus                   domain.CostValueStatus     `json:"cost_value_status"`
+	PriceSnapshot                     *domain.PriceSnapshot      `json:"price_snapshot,omitempty"`
+	InputCostMicrosUSD                *int64                     `json:"input_cost_micros_usd"`
+	OutputCostMicrosUSD               *int64                     `json:"output_cost_micros_usd"`
+	FixedCostMicrosUSD                *int64                     `json:"fixed_cost_micros_usd"`
+	Tags                              []string                   `json:"tags,omitempty"`
+	CostEstimated                     bool                       `json:"cost_estimated"`
+	TokensEstimated                   bool                       `json:"tokens_estimated"`
+	TokenUsageSource                  ledger.TokenUsageSource    `json:"token_usage_source,omitempty"`
+	StartedAt                         time.Time                  `json:"started_at"`
+	CompletedAt                       time.Time                  `json:"completed_at"`
+	Status                            string                     `json:"status"`
+	ErrorClass                        string                     `json:"error_class,omitempty"`
+	HTTPStatus                        int                        `json:"http_status,omitempty"`
 	// The upstream's own identifiers for this failure, and where along the
 	// request it happened. Absent on every attempt recorded before they were
 	// carried, which the console renders as "this record predates the field"
@@ -352,11 +353,12 @@ func (a *Aggregate) applySettled(record ledger.Record, accumulator *pendingReque
 		ProviderID:            event.ProviderID, RequestedModel: event.RequestedModel,
 		OfferingID: event.OfferingID, ProfileID: event.ProfileID, AccountRegionID: event.AccountRegionID,
 		ProviderModel: event.ProviderModel, ProviderInputTokens: event.ProviderInputTokens,
-		ProviderOutputTokens:          event.ProviderOutputTokens,
-		ProviderCachedInputTokens:     event.ProviderCachedInputTokens,
-		ProviderCacheWriteInputTokens: event.ProviderCacheWriteInputTokens,
-		ProviderReasoningTokens:       event.ProviderReasoningTokens,
-		PreparedOutputTokens:          event.PreparedOutputTokens, CostMicrosUSD: committedCostValue,
+		ProviderOutputTokens:              event.ProviderOutputTokens,
+		ProviderCachedInputTokens:         event.ProviderCachedInputTokens,
+		ProviderCacheWriteInputTokens:     event.ProviderCacheWriteInputTokens,
+		ProviderCacheWriteLongInputTokens: event.ProviderCacheWriteLongInputTokens,
+		ProviderReasoningTokens:           event.ProviderReasoningTokens,
+		PreparedOutputTokens:              event.PreparedOutputTokens, CostMicrosUSD: committedCostValue,
 		LeaseMode: event.LeaseMode, PriceEvidenceStatus: evidenceStatus, CostValueStatus: costStatus,
 		PriceSnapshot: priceSnapshot, InputCostMicrosUSD: inputCost, OutputCostMicrosUSD: outputCost, FixedCostMicrosUSD: fixedCost,
 		Tags:          attemptCostTags(event, evidenceStatus),

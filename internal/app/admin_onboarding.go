@@ -2,6 +2,8 @@ package app
 
 import (
 	"net/http"
+	"net/url"
+	"slices"
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
@@ -54,14 +56,15 @@ type onboardingReadiness struct {
 }
 
 type onboardingResources struct {
-	Credentials      []domain.Credential
-	Providers        []domain.ProviderInstance
-	Deployments      []domain.Deployment
-	Routes           []domain.Route
-	Projects         []domain.Project
-	Keys             []domain.GatewayKey
-	PriceReady       map[string]bool
-	EgressRuntimeIDs map[string]string
+	Credentials       []domain.Credential
+	Providers         []domain.ProviderInstance
+	Deployments       []domain.Deployment
+	Routes            []domain.Route
+	Projects          []domain.Project
+	Keys              []domain.GatewayKey
+	PriceReady        map[string]bool
+	EgressRuntimeIDs  map[string]string
+	RouteWithholdings map[string]routeWithholding
 	// EndpointPolicy is what "is this provider's endpoint usable" means for this
 	// instance. Readiness compares a derived audience against the stored one, and
 	// deriving it under a stricter policy than the one the provider was created
@@ -73,13 +76,22 @@ func (r *Runtime) getAdminOnboardingReadiness(writer http.ResponseWriter, reques
 	if !r.syncUsageAdmin(writer, request) {
 		return
 	}
+	now := time.Now().UTC()
+	metrics := r.usage.Metrics()
+	if metrics.RequestsSuccess > 0 {
+		writeJSON(writer, http.StatusOK, completedOnboarding(now))
+		return
+	}
 	runtimeIDs := map[string]string{}
 	if registry := r.providerEgress.Current(); registry != nil {
 		for _, proxy := range registry.descriptions() {
 			runtimeIDs[proxy.ID] = proxy.Fingerprint
 		}
 	}
-	resources := onboardingResources{EndpointPolicy: providerEndpointPolicy(r.config), EgressRuntimeIDs: runtimeIDs}
+	resources := onboardingResources{
+		EndpointPolicy: providerEndpointPolicy(r.config), EgressRuntimeIDs: runtimeIDs,
+		RouteWithholdings: r.routeWithholdings(),
+	}
 	var err error
 	if resources.Credentials, err = r.store.ListCredentials(request.Context()); err != nil {
 		adminStoreError(writer)
@@ -106,7 +118,6 @@ func (r *Runtime) getAdminOnboardingReadiness(writer http.ResponseWriter, reques
 		return
 	}
 
-	now := time.Now().UTC()
 	resources.PriceReady = make(map[string]bool, len(resources.Deployments))
 	for _, deployment := range resources.Deployments {
 		if deployment.DeletedAt != nil {
@@ -136,6 +147,10 @@ func (r *Runtime) getAdminOnboardingReadiness(writer http.ResponseWriter, reques
 }
 
 func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, metrics usage.Metrics, evidence usage.OnboardingEvidence) onboardingReadiness {
+	if metrics.RequestsSuccess > 0 {
+		return completedOnboarding(now)
+	}
+
 	credentialReady := make(map[string]domain.Credential)
 	for _, credential := range resources.Credentials {
 		if len(credential.Ciphertext) > 0 && !internalCredentialType(credential.Type) {
@@ -150,12 +165,15 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 	// had not started. Evidence collected before the provider was last edited
 	// says nothing about the provider as it now stands, which is why the
 	// instant is kept and compared rather than just the fact of a probe.
+	providers := make(map[string]domain.ProviderInstance, len(resources.Providers))
+	for _, provider := range resources.Providers {
+		providers[provider.ID] = provider
+	}
 	deploymentProvider := make(map[string]string, len(resources.Deployments))
 	downstreamProbe := make(map[string]time.Time)
-	successfulDeployment := make(map[string]time.Time)
-	successfulRoute := make(map[string]time.Time)
-	recordProbe := func(providerID string, at *time.Time) {
-		if providerID == "" || at == nil {
+	recordProbe := func(providerID, runtimeID string, at *time.Time) {
+		provider, exists := providers[providerID]
+		if !exists || at == nil || !onboardingProbeRuntimeCurrent(provider, resources.EgressRuntimeIDs[provider.EgressProxyID], runtimeID) {
 			return
 		}
 		if newest, seen := downstreamProbe[providerID]; !seen || at.After(newest) {
@@ -168,7 +186,7 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 		}
 		deploymentProvider[deployment.ID] = deployment.ProviderID
 		if deployment.LastTestStatus == domain.DeploymentTestHealthy && deployment.LastTestRevision == deployment.Revision {
-			recordProbe(deployment.ProviderID, deployment.LastTestedAt)
+			recordProbe(deployment.ProviderID, deployment.LastTestRuntimeID, deployment.LastTestedAt)
 		}
 	}
 	for _, route := range resources.Routes {
@@ -176,7 +194,7 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 			continue
 		}
 		if route.LastTestStatus == domain.DeploymentTestHealthy && route.LastTestRevision == route.Revision {
-			recordProbe(deploymentProvider[route.DeploymentID], route.LastTestedAt)
+			recordProbe(deploymentProvider[route.DeploymentID], route.LastTestRuntimeID, route.LastTestedAt)
 		}
 	}
 	// A finalized successful request is stronger evidence than an explicit
@@ -184,21 +202,15 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 	// credential, Project grant, and Gateway Key worked together. Keep it tied
 	// to the exact attempt IDs and revision timestamps so a later edit still
 	// invalidates the evidence.
-	for deploymentID, at := range evidence.Deployments {
-		successfulDeployment[deploymentID] = at
-	}
-	for routeID, at := range evidence.Routes {
-		successfulRoute[routeID] = at
-	}
 	for providerID, at := range evidence.Providers {
-		at := at
-		recordProbe(providerID, &at)
+		recordProbe(providerID, "", &at)
 	}
 
 	hasProvider := false
 	hasProviderCredential := false
 	hasEnabledProvider := false
 	hasProviderBinding := false
+	configuredProviders := make(map[string]domain.ProviderInstance)
 	readyProviders := make(map[string]domain.ProviderInstance)
 	for _, provider := range resources.Providers {
 		if provider.DeletedAt != nil {
@@ -206,7 +218,9 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 		}
 		hasProvider = true
 		credential, ok := credentialReady[provider.CredentialID]
-		if !ok || credential.Type != provider.Type {
+		credentialProfile, profileOK := domain.ResolveCredentialProfile(credential.Type, credential.AccessSurface, credential.Scheme)
+		if !ok || credential.Type != provider.Type || !profileOK || provider.AccessSurface != credentialProfile.AccessSurface ||
+			provider.CredentialScheme != credentialProfile.CredentialScheme {
 			continue
 		}
 		audience, audienceErr := safetransport.AudienceWithPolicy(provider.BaseURL, string(provider.Type), resources.EndpointPolicy)
@@ -229,11 +243,12 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 			continue
 		}
 		hasProviderBinding = true
-		if providerTestIsCurrent(provider, resources.EgressRuntimeIDs[provider.EgressProxyID]) && provider.LastTestStatus == domain.DeploymentTestHealthy {
-			readyProviders[provider.ID] = provider
+		if provider.EgressProxyID != "" && resources.EgressRuntimeIDs[provider.EgressProxyID] == "" {
 			continue
 		}
-		if provider.EgressProxyID != "" {
+		configuredProviders[provider.ID] = provider
+		if providerTestIsCurrent(provider, resources.EgressRuntimeIDs[provider.EgressProxyID]) && provider.LastTestStatus == domain.DeploymentTestHealthy {
+			readyProviders[provider.ID] = provider
 			continue
 		}
 		if probedAt, proven := downstreamProbe[provider.ID]; proven && !probedAt.Before(provider.UpdatedAt) {
@@ -253,10 +268,12 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 		connectDetail = "provider_disabled"
 	case !hasProviderBinding:
 		connectDetail = "provider_binding_disabled"
+	case len(configuredProviders) == 0:
+		connectDetail = "provider_egress_unavailable"
 	case len(readyProviders) == 0:
-		connectDetail = "provider_test_required"
+		connectDetail = "provider_configured"
 	}
-	connectReady := len(readyProviders) > 0
+	connectReady := len(configuredProviders) > 0
 
 	hasDeployment := false
 	hasLinkedDeployment := false
@@ -269,7 +286,7 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 			continue
 		}
 		hasDeployment = true
-		provider, ok := readyProviders[deployment.ProviderID]
+		provider, ok := configuredProviders[deployment.ProviderID]
 		if !ok {
 			continue
 		}
@@ -284,9 +301,15 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 			continue
 		}
 		hasDeploymentPrice = true
-		provenAt, provenByTraffic := successfulDeployment[deployment.ID]
-		if (deployment.LastTestStatus != domain.DeploymentTestHealthy || deployment.LastTestRevision != deployment.Revision) &&
-			(!provenByTraffic || provenAt.Before(deployment.UpdatedAt)) {
+		if _, verified := readyProviders[provider.ID]; !verified {
+			continue
+		}
+		runtimeID := resources.EgressRuntimeIDs[provider.EgressProxyID]
+		provenAt, provenByTraffic := evidence.Deployments[deployment.ID]
+		healthyTest := deployment.LastTestStatus == domain.DeploymentTestHealthy && deployment.LastTestRevision == deployment.Revision &&
+			onboardingProbeRuntimeCurrent(provider, runtimeID, deployment.LastTestRuntimeID)
+		currentTraffic := provenByTraffic && provider.EgressProxyID == "" && !provenAt.Before(deployment.UpdatedAt) && !provenAt.Before(provider.UpdatedAt)
+		if !healthyTest && !currentTraffic {
 			continue
 		}
 		hasTestedDeployment = true
@@ -300,13 +323,15 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 	hasRoute := false
 	hasLinkedRoute := false
 	hasEnabledRoute := false
+	hasServingRoute := false
 	readyRoutes := make(map[string]domain.Route)
 	for _, route := range resources.Routes {
 		if route.DeletedAt != nil {
 			continue
 		}
 		hasRoute = true
-		if _, ok := readyDeployments[route.DeploymentID]; !ok {
+		deployment, ok := readyDeployments[route.DeploymentID]
+		if !ok {
 			continue
 		}
 		hasLinkedRoute = true
@@ -314,9 +339,16 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 			continue
 		}
 		hasEnabledRoute = true
-		provenAt, provenByTraffic := successfulRoute[route.ID]
-		if route.LastTestStatus == domain.DeploymentTestHealthy && route.LastTestRevision == route.Revision ||
-			provenByTraffic && !provenAt.Before(route.UpdatedAt) {
+		if _, withheld := resources.RouteWithholdings[route.ID]; withheld {
+			continue
+		}
+		hasServingRoute = true
+		provider := configuredProviders[deployment.ProviderID]
+		provenAt, provenByTraffic := evidence.Routes[route.ID]
+		healthyTest := route.LastTestStatus == domain.DeploymentTestHealthy && route.LastTestRevision == route.Revision &&
+			onboardingProbeRuntimeCurrent(provider, resources.EgressRuntimeIDs[provider.EgressProxyID], route.LastTestRuntimeID)
+		currentTraffic := provenByTraffic && provider.EgressProxyID == "" && !provenAt.Before(route.UpdatedAt) && !provenAt.Before(provider.UpdatedAt)
+		if healthyTest || currentTraffic {
 			readyRoutes[route.PublicModel] = route
 		}
 	}
@@ -324,14 +356,7 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 	publishDetail := "model_ready"
 	switch {
 	case !connectReady:
-		// The earlier step is what blocks this one, so say which of its two
-		// shapes it is. "A provider exists but is unverified" and "there is no
-		// provider yet" need different actions, and describing the second as
-		// the first sends the operator looking for an object that is not there.
-		publishDetail = connectDetail
-		if connectDetail == "provider_test_required" {
-			publishDetail = "provider_not_verified"
-		}
+		publishDetail = "publish_waiting_for_provider"
 	case !hasDeployment:
 		publishDetail = "deployment_missing"
 	case !hasLinkedDeployment:
@@ -348,6 +373,8 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 		publishDetail = "route_deployment_unavailable"
 	case !hasEnabledRoute:
 		publishDetail = "route_disabled"
+	case !hasServingRoute:
+		publishDetail = "route_withheld"
 	case len(readyRoutes) == 0:
 		publishDetail = "route_test_required"
 	}
@@ -356,8 +383,8 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 	hasProject := false
 	hasEnabledProject := false
 	hasAllowedRoute := false
-	hasActiveKey := false
-	readyProjectIDs := make(map[string]struct{})
+	readyProjects := make(map[string]domain.Project)
+	var keyProjectID string
 	for _, project := range resources.Projects {
 		if project.DeletedAt != nil {
 			continue
@@ -378,63 +405,76 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 			continue
 		}
 		hasAllowedRoute = true
-		readyProjectIDs[project.ID] = struct{}{}
+		readyProjects[project.ID] = project
+		if keyProjectID == "" {
+			keyProjectID = project.ID
+		}
 	}
+	activeKeys := make(map[string]domain.GatewayKey)
+	var verifyProjectID, verifyModel string
 	for _, key := range resources.Keys {
-		if key.DeletedAt != nil || !key.Enabled || key.ExpiresAt != nil && !key.ExpiresAt.After(now) {
+		if key.DeletedAt != nil || !key.Enabled || key.ExpiresAt != nil && !key.ExpiresAt.After(now) ||
+			!domain.HasGatewayScope(key.Scopes, domain.GatewayScopeInference) {
 			continue
 		}
-		if _, ok := readyProjectIDs[key.ProjectID]; ok {
-			hasActiveKey = true
-			break
+		project, ok := readyProjects[key.ProjectID]
+		if !ok {
+			continue
+		}
+		activeKeys[key.ID] = key
+		if verifyProjectID == "" {
+			for _, model := range project.AllowedModels {
+				if _, ready := readyRoutes[model]; ready {
+					verifyProjectID, verifyModel = project.ID, model
+					break
+				}
+			}
 		}
 	}
+	accessReady := len(activeKeys) > 0
 
 	accessDetail := "access_ready"
 	switch {
 	case !publishReady:
-		// Same rule as above: propagate what the publish step actually found
-		// unless it is the "exists but unverified" case, which is the only one
-		// this step can describe in its own words.
-		accessDetail = publishDetail
-		if publishDetail == "deployment_test_required" || publishDetail == "route_test_required" {
-			accessDetail = "model_not_verified"
-		}
+		accessDetail = "access_waiting_for_model"
 	case !hasProject:
 		accessDetail = "project_missing"
 	case !hasEnabledProject:
 		accessDetail = "project_disabled"
 	case !hasAllowedRoute:
 		accessDetail = "project_route_unavailable"
-	case !hasActiveKey:
+	case !accessReady:
 		accessDetail = "key_missing"
 	}
-	accessReady := hasActiveKey
+	requestDetail := "request_waiting_for_access"
+	if accessReady {
+		requestDetail = "request_ready"
+	}
 
 	result := onboardingReadiness{
-		Version: 1, TotalGoals: 4, EvaluatedAt: now,
+		Version: 1, State: onboardingConfiguring, TotalGoals: 4, EvaluatedAt: now,
 		Goals: []onboardingGoal{
 			{Key: "connect_provider", DetailCode: connectDetail, ActionHref: onboardingConnectHref(connectDetail)},
 			{Key: "publish_model", DetailCode: publishDetail, ActionHref: onboardingPublishHref(publishDetail)},
-			{Key: "grant_access", DetailCode: accessDetail, ActionHref: onboardingAccessHref(accessDetail)},
-			{Key: "verify_request", DetailCode: "request_ready", ActionHref: "/admin/developer?onboarding=first-request"},
+			{Key: "grant_access", DetailCode: accessDetail, ActionHref: onboardingAccessHref(accessDetail, keyProjectID)},
+			{Key: "verify_request", DetailCode: requestDetail, ActionHref: onboardingRequestHref(verifyProjectID, verifyModel)},
 		},
 	}
 	completed := []bool{connectReady, publishReady, accessReady, false}
 
-	if metrics.RequestsSuccess > 0 {
-		result.State = onboardingFirstValueReached
-		completed[3] = true
-		result.Goals[3].DetailCode = "request_succeeded"
-	} else if accessReady {
+	if accessReady {
 		result.State = onboardingReadyToVerify
-		if verification := latestOnboardingVerification(evidence); verification != nil && verification.Outcome != "success" {
-			result.State = onboardingVerifyFailed
-			result.LastVerification = verification
-			result.Goals[3].DetailCode = "request_failed"
+		if latest := evidence.Latest; latest != nil && latest.Outcome != "success" {
+			key, active := activeKeys[latest.KeyID]
+			project := readyProjects[latest.ProjectID]
+			if _, routed := readyRoutes[latest.RequestedModel]; active && key.ProjectID == latest.ProjectID && routed &&
+				slices.Contains(project.AllowedModels, latest.RequestedModel) {
+				result.State = onboardingVerifyFailed
+				result.LastVerification = latestOnboardingVerification(evidence)
+				result.Goals[3].DetailCode = "request_failed"
+				result.Goals[3].ActionHref = onboardingRequestHref(latest.ProjectID, latest.RequestedModel)
+			}
 		}
-	} else {
-		result.State = onboardingConfiguring
 	}
 
 	currentAssigned := false
@@ -458,6 +498,20 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 	return result
 }
 
+func completedOnboarding(now time.Time) onboardingReadiness {
+	// A successful Gateway request proves the historical milestone even after
+	// the resources used in that request are edited or removed.
+	return onboardingReadiness{
+		Version: 1, State: onboardingFirstValueReached, CompletedGoals: 4, TotalGoals: 4, EvaluatedAt: now,
+		Goals: []onboardingGoal{
+			{Key: "connect_provider", State: onboardingGoalComplete, DetailCode: "request_proven", ActionHref: "/admin/providers"},
+			{Key: "publish_model", State: onboardingGoalComplete, DetailCode: "request_proven", ActionHref: "/admin/routes"},
+			{Key: "grant_access", State: onboardingGoalComplete, DetailCode: "request_proven", ActionHref: "/admin/projects"},
+			{Key: "verify_request", State: onboardingGoalComplete, DetailCode: "request_succeeded", ActionHref: "/admin/developer"},
+		},
+	}
+}
+
 func providerTestIsCurrent(instance domain.ProviderInstance, runtimeID string) bool {
 	if instance.LastTestRevision != instance.Revision {
 		return false
@@ -465,10 +519,14 @@ func providerTestIsCurrent(instance domain.ProviderInstance, runtimeID string) b
 	return instance.EgressProxyID == "" || runtimeID != "" && instance.LastTestRuntimeID == runtimeID
 }
 
-func latestOnboardingVerification(evidence usage.OnboardingEvidence) *onboardingVerification {
-	if evidence.Latest == nil {
-		return nil
+func onboardingProbeRuntimeCurrent(provider domain.ProviderInstance, runtimeID, testedRuntimeID string) bool {
+	if provider.EgressProxyID == "" {
+		return testedRuntimeID == "" || testedRuntimeID == "direct"
 	}
+	return runtimeID != "" && testedRuntimeID == runtimeID
+}
+
+func latestOnboardingVerification(evidence usage.OnboardingEvidence) *onboardingVerification {
 	request := evidence.Latest
 	verification := &onboardingVerification{
 		Outcome: request.Outcome, RequestID: request.RequestID, RequestedModel: request.RequestedModel,
@@ -488,6 +546,9 @@ func onboardingConnectHref(detail string) string {
 	if detail == "provider_missing" {
 		return "/admin/providers?intent=create&onboarding=first-request"
 	}
+	if detail == "provider_egress_unavailable" {
+		return "/admin/providers?view=proxies&onboarding=first-request"
+	}
 	return "/admin/providers?onboarding=first-request"
 }
 
@@ -495,7 +556,7 @@ func onboardingPublishHref(detail string) string {
 	if detail == "route_missing" {
 		return "/admin/routes?intent=create&onboarding=first-request"
 	}
-	if detail == "route_disabled" || detail == "route_test_required" || detail == "route_deployment_unavailable" {
+	if detail == "route_disabled" || detail == "route_withheld" || detail == "route_test_required" || detail == "route_deployment_unavailable" {
 		return "/admin/routes?onboarding=first-request"
 	}
 	if detail == "deployment_missing" {
@@ -504,10 +565,21 @@ func onboardingPublishHref(detail string) string {
 	return "/admin/deployments?onboarding=first-request"
 }
 
-func onboardingAccessHref(detail string) string {
+func onboardingAccessHref(detail, keyProjectID string) string {
 	href := "/admin/projects?onboarding=first-request"
 	if detail == "project_missing" {
 		href += "&intent=create"
+	}
+	if detail == "key_missing" && keyProjectID != "" {
+		href += "&project_id=" + url.QueryEscape(keyProjectID)
+	}
+	return href
+}
+
+func onboardingRequestHref(projectID, model string) string {
+	href := "/admin/developer?onboarding=first-request"
+	if projectID != "" {
+		href += "&project_id=" + url.QueryEscape(projectID) + "&model=" + url.QueryEscape(model)
 	}
 	return href
 }

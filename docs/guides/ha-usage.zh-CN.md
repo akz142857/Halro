@@ -156,6 +156,11 @@ Kubernetes 的 [`halro-ha-statefulset.yaml`](../../deploy/kubernetes/halro-ha-st
 - **全集群恢复**：隔离所有旧成员和客户端，用已验证的 HA 备份恢复为**新的 incarnation**，再播种所有 Replica。旧 PVC 保留旧 incarnation，不能直接加入新集群；见 [恢复流程](../runbooks/ha-operations.md#whole-cluster-restore)。
 - **升级**：一次只动一个成员。先确认不是当前 Primary，必要时先做 `stepdown`；相邻版本及 schema 兼容性必须按 [HA 测试指南](../verification/ha-test-guide.zh-CN.md) 验证。示例 StatefulSet 使用 `OnDelete`，不会替运维完成升级排序。
 
+缓存写入计费将元数据从 schema 42 升到 43。HA 节点要求 schema 一致，新版 Primary
+要求 schema 43 投影。此次升级走离线全集群恢复。暂停写入，确认 Replica 已应用到最终持久索引，
+再报告经验证的 HA 备份。用新版和新的 incarnation 恢复，然后重新播种 Replica。见
+[全集群恢复流程](../runbooks/ha-operations.md#whole-cluster-restore)。
+
 ## 8. 验证清单与常见误判
 
 本机三进程适合验证配置、mTLS、复制、Admin 状态页和计划切换，但不能替代独立节点、PVC、网络分区及 Linux 故障测试。先使用合成请求和模拟 Provider，记录每步各节点 `cluster status`、readiness、复制指标和审计/账本检查结果。按 [HA 测试指南](../verification/ha-test-guide.zh-CN.md) 依次覆盖正常复制、单 Replica 中断、带长请求的计划交接、旧索引拒绝、旧 Primary fencing 后提升、非对称分区、PVC 丢失、全集群恢复、相邻版本、ENOSPC/慢盘与 72 小时浸泡。

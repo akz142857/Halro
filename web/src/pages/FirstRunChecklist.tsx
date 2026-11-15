@@ -1,19 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
+import type { UseQueryResult } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { api } from "../api";
 import { ErrorState } from "../components";
 import { Link } from "../navigation";
 import { useIsReadOnly } from "../session";
-import type { OnboardingGoal } from "../types";
+import type { OnboardingGoal, OnboardingReadiness } from "../types";
 
-export function FirstRunChecklist() {
+export function FirstRunChecklist({ readiness }: { readiness: UseQueryResult<OnboardingReadiness> }) {
   const { t } = useTranslation();
   const readOnly = useIsReadOnly();
-  const readiness = useQuery({
-    queryKey: ["onboarding-readiness"],
-    queryFn: api.onboardingReadiness,
-    refetchInterval: 15_000,
-  });
 
   if (readiness.isPending) {
     return (
@@ -31,7 +25,7 @@ export function FirstRunChecklist() {
       <section className="panel first-run-panel first-run-unavailable" aria-labelledby="first-run-unavailable-title">
         <header className="panel-header">
           <div>
-              <h2 id="first-run-unavailable-title">{t("dashboard.firstRun.unavailable")}</h2>
+            <h2 id="first-run-unavailable-title">{t("dashboard.firstRun.unavailable")}</h2>
           </div>
         </header>
         <ErrorState error={readiness.error} className="first-run-error" />
@@ -43,9 +37,11 @@ export function FirstRunChecklist() {
   }
 
   const data = readiness.data;
-  if (data.state === "first_value_reached") return null;
   const current = data.goals.find((goal) => goal.state === "current" || goal.state === "error") ?? data.goals[0];
   const progressText = t("dashboard.firstRun.progress", { done: data.completed_goals, total: data.total_goals });
+  const actionLabel = t(`dashboard.firstRun.actions.${current.detail_code}`, {
+    defaultValue: t(`dashboard.firstRun.goals.${current.key}.action`),
+  });
 
   return (
     <section className="panel first-run-panel" aria-labelledby="first-run-title">
@@ -98,7 +94,7 @@ export function FirstRunChecklist() {
           ? <button className="button primary first-run-action-button" disabled>{t("dashboard.firstRun.adminRequired")}</button>
           : (
             <Link className="button primary first-run-action-button" href={current.action_href}>
-              <span>{t(`dashboard.firstRun.goals.${current.key}.action`)}</span>
+              <span>{actionLabel}</span>
               <span className="first-run-action-arrow" aria-hidden="true">→</span>
             </Link>
           )}

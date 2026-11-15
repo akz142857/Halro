@@ -153,7 +153,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.click(await screen.findByRole("tab", { name: /出站代理/ }));
     fireEvent.click(screen.getByRole("button", { name: "＋ 出站代理" }));
     fireEvent.change(screen.getByLabelText("代理名称"), { target: { value: "公司出口" } });
-    fireEvent.change(screen.getByLabelText(/^HTTP CONNECT 代理地址/), { target: { value: "https://proxy.example.com:8443" } });
+    fireEvent.change(screen.getByLabelText(/^代理地址/), { target: { value: "https://proxy.example.com:8443" } });
     expandDisclosure("代理认证（可选）");
     fireEvent.change(screen.getByLabelText("Basic Auth 用户名"), { target: { value: "halro" } });
     fireEvent.change(screen.getByLabelText(/^Basic Auth 密码/), { target: { value: "secret" } });
@@ -175,7 +175,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.click(await screen.findByRole("tab", { name: /出站代理/ }));
     fireEvent.click(screen.getByRole("button", { name: "＋ 出站代理" }));
     fireEvent.change(screen.getByLabelText("代理名称"), { target: { value: "Corporate" } });
-    fireEvent.change(screen.getByLabelText(/^HTTP CONNECT 代理地址/), { target: { value: "https://proxy.example:8443" } });
+    fireEvent.change(screen.getByLabelText(/^代理地址/), { target: { value: "https://proxy.example:8443" } });
     expandDisclosure("代理认证（可选）");
     fireEvent.change(screen.getByLabelText("Basic Auth 用户名"), { target: { value: "halro" } });
     const disclosure = screen.getByText("代理认证（可选）", { selector: ".disclosure-title" }).closest("details")!;
@@ -186,6 +186,36 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(disclosure).toHaveAttribute("open");
     await waitFor(() => expect(screen.getByLabelText(/^Basic Auth 密码/)).toHaveFocus());
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it("edits the connection without exposing or replacing the stored proxy credentials", async () => {
+    const proxy = {
+      id: "proxy_1", name: "Office", kind: "http_connect" as const,
+      endpoint: "https://proxy.example.com:8443", endpoint_scheme: "https" as const,
+      endpoint_host: "proxy.example.com", endpoint_port: 8443,
+      allow_private_endpoint: true, allow_loopback_endpoint: false,
+      allow_cleartext_basic_auth: false, authenticated: true, revision: 3,
+    };
+    vi.mocked(api.providerEgressProxies).mockResolvedValue({ runtime_id: "runtime_1", items: [proxy] });
+    const update = vi.spyOn(api, "updateProviderEgressProxy").mockResolvedValue(proxy);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /出站代理/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    const dialog = screen.getByRole("dialog", { name: "编辑出站代理" });
+    const name = within(dialog).getByLabelText("代理名称");
+    expect(name).toHaveValue("Office");
+    expect(within(dialog).getByLabelText(/^代理地址/)).toHaveValue(proxy.endpoint);
+    expect(within(dialog).getByText("已开启 1 项例外")).toBeVisible();
+    expect(within(dialog).getByText("已加密的 Basic Auth")).toBeVisible();
+
+    fireEvent.change(name, { target: { value: "Office proxy" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存并应用" }));
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    expect(update.mock.calls[0].slice(0, 3)).toEqual([proxy.id, {
+      name: "Office proxy", kind: proxy.kind, endpoint: proxy.endpoint,
+      allow_private_endpoint: true, allow_loopback_endpoint: false, allow_cleartext_basic_auth: false,
+    }, proxy.revision]);
   });
 
   it("shows internal address access as an explicit least-privilege exception", async () => {

@@ -113,7 +113,7 @@ function summaryBucket(start: string, end: string, period: string): SummaryBucke
     requests: 1, request_errors: 0, request_latency_samples: 1, request_latency_p95_millis: 10,
     attempts: 1, errors: 0, input_tokens: 0, output_tokens: 0,
     estimated_input_tokens: 0, estimated_output_tokens: 0,
-    provider_cached_input_tokens: 0, provider_cache_write_input_tokens: 0, provider_reasoning_tokens: 0,
+    provider_cached_input_tokens: 0, provider_cache_write_input_tokens: 0, provider_cache_write_long_input_tokens: 0, provider_reasoning_tokens: 0,
     cost_micros_usd: 1_000_000, estimated_cost_micros_usd: 0, unknown_attempts: 0,
     latency_millis: 10, attempt_latency_samples: 1, attempt_latency_p95_millis: 10,
     latency_approximate: true,

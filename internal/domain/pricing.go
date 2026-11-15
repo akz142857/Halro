@@ -197,9 +197,16 @@ type DeploymentPriceVersion struct {
 	// omitting it would read as "cached tokens are free", which is the one
 	// wrong answer this field exists to prevent.
 	CachedInputMicrosPerMillion int64 `json:"cached_input_micros_per_million"`
-	OutputMicrosPerMillion      int64 `json:"output_micros_per_million"`
-	FixedRequestMicrosUSD       int64 `json:"fixed_request_micros_usd"`
-	// Schedule makes the four terms above the rates that apply outside every
+	// CacheWriteMicrosPerMillion and CacheWriteLongMicrosPerMillion price the
+	// prompt span the provider wrote into its cache, at its shorter and longer
+	// lifetime (Anthropic 5m/1h, OpenAI 30m/12h). Both upstreams bill a write
+	// above the ordinary input rate, so these are required for the same reason
+	// the cache-read term is: a missing rate would read as "writes are free".
+	CacheWriteMicrosPerMillion     int64 `json:"cache_write_micros_per_million"`
+	CacheWriteLongMicrosPerMillion int64 `json:"cache_write_long_micros_per_million"`
+	OutputMicrosPerMillion         int64 `json:"output_micros_per_million"`
+	FixedRequestMicrosUSD          int64 `json:"fixed_request_micros_usd"`
+	// Schedule makes the billing terms above the rates that apply outside every
 	// window it declares, instead of the rates that apply all day. It is nil on
 	// a price that bills one rate around the clock, which is what every price
 	// written before schedules existed decodes to and how it keeps billing.
@@ -230,16 +237,16 @@ func (p DeploymentPriceVersion) Validate() error {
 	if p.FormulaVersion != PriceFormulaUSDTokensV1 {
 		problems = append(problems, errors.New("price formula version is unsupported"))
 	}
-	if p.InputMicrosPerMillion < 0 || p.CachedInputMicrosPerMillion < 0 || p.OutputMicrosPerMillion < 0 || p.FixedRequestMicrosUSD < 0 {
+	if p.BaseTier().hasNegativeRate() {
 		problems = append(problems, errors.New("price amounts cannot be negative"))
 	}
 	switch p.BillingMode {
 	case BillingModeMetered:
-		if p.InputMicrosPerMillion == 0 && p.CachedInputMicrosPerMillion == 0 && p.OutputMicrosPerMillion == 0 && p.FixedRequestMicrosUSD == 0 {
+		if p.BaseTier().isZero() {
 			problems = append(problems, errors.New("metered price requires a positive component"))
 		}
 	case BillingModeFree:
-		if p.InputMicrosPerMillion != 0 || p.CachedInputMicrosPerMillion != 0 || p.OutputMicrosPerMillion != 0 || p.FixedRequestMicrosUSD != 0 {
+		if !p.BaseTier().isZero() {
 			problems = append(problems, errors.New("free price components must all be zero"))
 		}
 		if p.Schedule != nil {

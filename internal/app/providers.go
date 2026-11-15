@@ -642,7 +642,7 @@ func loadProviderRegistryWithCatalogAndEgress(
 		if !route.Enabled || route.DeletedAt != nil {
 			continue
 		}
-		inputPrice, cachedInputPrice, outputPrice, fixedPrice := int64(0), int64(0), int64(0), int64(0)
+		var rates domain.PriceTier
 		deploymentID := route.DeploymentID
 		bindingID := ""
 		deploymentLimit := int64(0)
@@ -742,12 +742,7 @@ func loadProviderRegistryWithCatalogAndEgress(
 				continue
 			}
 			if priceErr == nil {
-				inputPrice = price.InputMicrosPerMillion
-				cachedInputPrice = price.CachedInputMicrosPerMillion
-				outputPrice = price.OutputMicrosPerMillion
-				fixedPrice = price.FixedRequestMicrosUSD
-			} else {
-				inputPrice, cachedInputPrice, outputPrice, fixedPrice = 0, 0, 0, 0
+				rates = price.BaseTier()
 			}
 			deploymentLimit = deployment.MaxConcurrency
 			capabilities = deploymentCapabilities(deployment, adapters[bindingID])
@@ -782,32 +777,34 @@ func loadProviderRegistryWithCatalogAndEgress(
 			instanceByID[providerID].BaseURL,
 		)
 		if err := registry.Register(provider.Target{
-			ID:                          route.ID,
-			DeploymentID:                deploymentID,
-			ProviderID:                  providerID,
-			BindingID:                   bindingID,
-			PublicModel:                 route.PublicModel,
-			ProviderModel:               providerModel,
-			CanonicalModelRef:           deploymentByID[deploymentID].ModelCapabilitySnapshot.CanonicalModelRef,
-			AccessSurface:               deploymentByID[deploymentID].AccessSurface,
-			ProfileID:                   deploymentByID[deploymentID].ProfileID,
-			AccountRegionID:             accountRegion,
-			CredentialID:                instanceByID[providerID].CredentialID,
-			CredentialRevision:          credentialRevisions[providerID],
-			Region:                      deploymentByID[deploymentID].Region,
-			Adapter:                     adapter,
-			InputMicrosPerMillion:       inputPrice,
-			CachedInputMicrosPerMillion: cachedInputPrice,
-			OutputMicrosPerMillion:      outputPrice,
-			FixedRequestMicrosUSD:       fixedPrice,
-			Priority:                    route.Priority,
-			Strategy:                    route.Strategy,
-			Capabilities:                capabilities,
-			CapabilityEvidence:          deploymentByID[deploymentID].CapabilityEvidence.Clone(),
-			ReasonsUnasked:              reasonsUnasked(catalog, instanceByID[providerID], deploymentByID[deploymentID]),
-			AllowedAnthropicBetas:       append([]string(nil), instanceByID[providerID].AllowedAnthropicBetas...),
-			MaxConcurrency:              providerLimits[providerID],
-			DeploymentConcurrency:       deploymentLimit,
+			ID:                             route.ID,
+			DeploymentID:                   deploymentID,
+			ProviderID:                     providerID,
+			BindingID:                      bindingID,
+			PublicModel:                    route.PublicModel,
+			ProviderModel:                  providerModel,
+			CanonicalModelRef:              deploymentByID[deploymentID].ModelCapabilitySnapshot.CanonicalModelRef,
+			AccessSurface:                  deploymentByID[deploymentID].AccessSurface,
+			ProfileID:                      deploymentByID[deploymentID].ProfileID,
+			AccountRegionID:                accountRegion,
+			CredentialID:                   instanceByID[providerID].CredentialID,
+			CredentialRevision:             credentialRevisions[providerID],
+			Region:                         deploymentByID[deploymentID].Region,
+			Adapter:                        adapter,
+			InputMicrosPerMillion:          rates.InputMicrosPerMillion,
+			CachedInputMicrosPerMillion:    rates.CachedInputMicrosPerMillion,
+			CacheWriteMicrosPerMillion:     rates.CacheWriteMicrosPerMillion,
+			CacheWriteLongMicrosPerMillion: rates.CacheWriteLongMicrosPerMillion,
+			OutputMicrosPerMillion:         rates.OutputMicrosPerMillion,
+			FixedRequestMicrosUSD:          rates.FixedRequestMicrosUSD,
+			Priority:                       route.Priority,
+			Strategy:                       route.Strategy,
+			Capabilities:                   capabilities,
+			CapabilityEvidence:             deploymentByID[deploymentID].CapabilityEvidence.Clone(),
+			ReasonsUnasked:                 reasonsUnasked(catalog, instanceByID[providerID], deploymentByID[deploymentID]),
+			AllowedAnthropicBetas:          append([]string(nil), instanceByID[providerID].AllowedAnthropicBetas...),
+			MaxConcurrency:                 providerLimits[providerID],
+			DeploymentConcurrency:          deploymentLimit,
 		}); err != nil {
 			report.Dangling = append(report.Dangling, referenceWithholding{
 				RouteID: route.ID, DeploymentID: deploymentID,

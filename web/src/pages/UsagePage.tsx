@@ -577,6 +577,10 @@ function CostEvidence({ attempt }: { attempt: UsageAttempt }) {
               amounts once a price bills by time of day. Without the rung, that
               difference has no explanation anywhere the operator can reach. */}
           {attempt.price_snapshot?.schedule_tier && <>{billedTierLabel(attempt.price_snapshot.schedule_tier, t)}<br /></>}
+          {!!attempt.provider_cache_write_input_tokens && <>{t("usage.cacheWrites", {
+            total: compactNumber(attempt.provider_cache_write_input_tokens),
+            long: compactNumber(attempt.provider_cache_write_long_input_tokens ?? 0),
+          })}{attempt.tokens_estimated && <> · {t("usage.conservative")}</>}<br /></>}
           {attempt.input_cost_micros_usd == null ? "" : t("usage.formulaComponents", { input: money(attempt.input_cost_micros_usd), output: money(attempt.output_cost_micros_usd ?? 0), fixed: money(attempt.fixed_cost_micros_usd ?? 0) })}
         </small>
       </details>

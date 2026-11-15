@@ -31,6 +31,18 @@ export function DashboardPage() {
   const [dimension, setDimension] = useState<BreakdownDimension>("project");
   const [breakdownMetric, setBreakdownMetric] = useState<BreakdownMetric>("calls");
   const query = useQuery({ queryKey: ["dashboard"], queryFn: api.dashboard, refetchInterval: 15_000 });
+  const readiness = useQuery({
+    queryKey: ["onboarding-readiness"],
+    queryFn: api.onboardingReadiness,
+    enabled: Boolean(query.data && !query.data.first_value_reached),
+    refetchInterval: (query) => query.state.data?.state === "first_value_reached" ? false : 15_000,
+  });
+  const onboardingCompleted = readiness.data?.state === "first_value_reached";
+  const dashboardHasSuccess = query.data?.first_value_reached;
+  const refetchDashboard = query.refetch;
+  useEffect(() => {
+    if (onboardingCompleted && dashboardHasSuccess === false) void refetchDashboard();
+  }, [onboardingCompleted, dashboardHasSuccess, refetchDashboard]);
   const dashboardTimeContext = query.data?.time_context;
   useEffect(() => {
     if (dashboardTimeContext) adoptTimeContext(dashboardTimeContext);
@@ -77,7 +89,10 @@ export function DashboardPage() {
   const durablePathStatus = durablePathHealthy && dashboard.wal.queue_depth === 0
     ? t("dashboard.ready")
     : t("dashboard.walStatus", { queued: compactNumber(dashboard.wal.queue_depth), errors: compactNumber(dashboard.wal.errors) });
-  const firstValueReached = dashboard.first_value_reached ?? false;
+  const firstValueReached = dashboard.first_value_reached || onboardingCompleted;
+  const trafficLabel = firstValueReached
+    ? t(acceptingTraffic ? "dashboard.acceptingTraffic" : "dashboard.notAcceptingTraffic")
+    : t(acceptingTraffic ? "dashboard.firstRun.gatewayAccepting" : "dashboard.firstRun.gatewayUnavailable");
   const attention = buildAttention({
     acceptingTraffic, accountingHealthy, unknownAttempts: today.unknown_attempts ?? 0,
     budgetItems, capacityItems, pricingQuarantined: dashboard.governance.pricing?.quarantined ?? 0,
@@ -88,10 +103,10 @@ export function DashboardPage() {
     <>
       <PageHeader
         title={t(firstValueReached ? "dashboard.title" : "dashboard.firstRun.pageTitle")}
-        action={<div className={`health-pill ${acceptingTraffic ? "" : "warning"}`}><StatusDot ok={acceptingTraffic} />{acceptingTraffic ? t("dashboard.acceptingTraffic") : t("dashboard.notAcceptingTraffic")}</div>}
+        action={<div className={`health-pill ${acceptingTraffic ? "" : "warning"}`}><StatusDot ok={acceptingTraffic} />{trafficLabel}</div>}
       />
 
-      {!firstValueReached && <FirstRunChecklist />}
+      {!firstValueReached && <FirstRunChecklist readiness={readiness} />}
       {firstValueReached && (
         <>
           <p className="panel-note">{t("dashboard.periodScope", { timezone: timeZone })}</p>

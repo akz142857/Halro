@@ -20,7 +20,11 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 42
+const schemaVersion uint64 = 43
+
+// The Master Key descriptor and Vault Key Check retain their layout since
+// Key Slots were introduced. They can be read before migrating the store.
+const keySlotMetadataSchemaVersion uint64 = 10
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -127,6 +131,7 @@ var (
 	keyMetadataHMACEnvelope   = []byte("metadata_hmac_envelope")
 	keyAppliedJournalSequence = []byte("applied_journal_sequence")
 	keyMetadataJournalEpoch   = []byte("metadata_journal_epoch")
+	keyJournalEpochPending    = []byte("metadata_journal_schema_epoch_pending")
 )
 
 type MigrationRecord struct {
@@ -238,7 +243,7 @@ var migrations = []migration{
 		return migrationStep(step, "after_create_admin_mfa_buckets")
 	}},
 	{version: 9, name: "provider_profile_bindings", up: migrateProviderProfileBindings},
-	{version: 10, name: "master_key_slots", up: func(_ *Tx, step func(string) error) error {
+	{version: keySlotMetadataSchemaVersion, name: "master_key_slots", up: func(_ *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_reserve_key_slot_descriptor"); err != nil {
 			return err
 		}
@@ -1136,6 +1141,23 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_metadata_journal_fence")
 	}},
+	{version: 43, name: "deployment_price_cache_write_rates", up: func(tx *Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_deployment_price_cache_write_rates"); err != nil {
+			return err
+		}
+		if err := rewriteBucketIfPresent(tx, bucketDeploymentPriceVersions, backfillCacheWriteRates); err != nil {
+			return err
+		}
+		if err := rewriteBucketIfPresent(tx, bucketDeploymentPriceProposals, func(record map[string]json.RawMessage) error {
+			if err := backfillCacheWriteRates(record); err != nil {
+				return err
+			}
+			return redigestPriceProposal(record)
+		}); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_deployment_price_cache_write_rates")
+	}},
 }
 
 func migrateProviderResourceIdempotencyIndex(tx *Tx, step func(string) error) error {
@@ -1269,6 +1291,54 @@ func backfillCachedInputRate(record map[string]json.RawMessage) error {
 		return errors.New("price record has no input rate to reconstruct a cache-read rate from")
 	}
 	record["cached_input_micros_per_million"] = input
+	return nil
+}
+
+// backfillCacheWriteRates copies each old tier's input rate onto both write
+// tiers, preserving the unit price that tier previously charged for writes.
+func backfillCacheWriteRates(record map[string]json.RawMessage) error {
+	fill := func(rates map[string]json.RawMessage) error {
+		input, ok := rates["input_micros_per_million"]
+		if !ok {
+			return errors.New("price record has no input rate to reconstruct cache write rates from")
+		}
+		for _, field := range []string{"cache_write_micros_per_million", "cache_write_long_micros_per_million"} {
+			if _, present := rates[field]; !present {
+				rates[field] = input
+			}
+		}
+		return nil
+	}
+	if err := fill(record); err != nil {
+		return err
+	}
+	raw := record["schedule"]
+	if raw == nil || string(raw) == "null" {
+		return nil
+	}
+	var schedule map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &schedule); err != nil {
+		return err
+	}
+	var windows []map[string]json.RawMessage
+	if err := json.Unmarshal(schedule["windows"], &windows); err != nil {
+		return err
+	}
+	for _, window := range windows {
+		if err := fill(window); err != nil {
+			return err
+		}
+	}
+	encoded, err := json.Marshal(windows)
+	if err != nil {
+		return err
+	}
+	schedule["windows"] = encoded
+	encoded, err = json.Marshal(schedule)
+	if err != nil {
+		return err
+	}
+	record["schedule"] = encoded
 	return nil
 }
 
@@ -1590,6 +1660,13 @@ func Open(path string) (*Store, error) {
 	return openWithMigrationHooks(path, nil, nil)
 }
 
+// OpenWithJournalRecovery authenticates and catches up a Standalone projection
+// before a migration can rewrite it. The loader reads the key using the old
+// schema while the store owns the database lock.
+func OpenWithJournalRecovery(path string, loadKey func(*Store) ([]byte, error)) (*Store, error) {
+	return openMetadata(path, nil, nil, loadKey)
+}
+
 // ErrSchemaVersionMismatch says the stored schema is not the one this build
 // requires. It is a sentinel rather than a bare error because the caller's
 // choice depends on it: a diagnostic command must refuse, since running the
@@ -1600,6 +1677,16 @@ var ErrSchemaVersionMismatch = errors.New("metadata schema version mismatch")
 // OpenReadOnly opens existing metadata without creating files or running
 // migrations. It is intended for diagnostics that must never mutate state.
 func OpenReadOnly(path string) (*Store, error) {
+	return openReadOnly(path, schemaVersion)
+}
+
+// OpenKeySlotMetadata reads the Master Key descriptor and Vault Key Check
+// before a Standalone upgrade changes the metadata projection.
+func OpenKeySlotMetadata(path string) (*Store, error) {
+	return openReadOnly(path, keySlotMetadataSchemaVersion)
+}
+
+func openReadOnly(path string, minimum uint64) (*Store, error) {
 	db, err := bbolt.Open(path, 0o600, &bbolt.Options{ReadOnly: true, Timeout: 2 * time.Second})
 	if err != nil {
 		return nil, fmt.Errorf("open metadata read-only: %w", err)
@@ -1611,10 +1698,14 @@ func OpenReadOnly(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("read metadata schema: %w", err)
 	}
-	if version != schemaVersion {
+	if version < minimum || version > schemaVersion {
 		db.Close()
-		return nil, fmt.Errorf("%w: metadata schema version %d does not match required version %d",
-			ErrSchemaVersionMismatch, version, schemaVersion)
+		if minimum == schemaVersion {
+			return nil, fmt.Errorf("%w: metadata schema version %d does not match required version %d",
+				ErrSchemaVersionMismatch, version, schemaVersion)
+		}
+		return nil, fmt.Errorf("%w: metadata schema version %d is outside the readable range %d–%d",
+			ErrSchemaVersionMismatch, version, minimum, schemaVersion)
 	}
 	return store, nil
 }
@@ -1709,6 +1800,10 @@ const (
 )
 
 func openWithMigrationHooks(path string, afterUp func(uint64) error, stepHook func(uint64, string) error) (*Store, error) {
+	return openMetadata(path, afterUp, stepHook, nil)
+}
+
+func openMetadata(path string, afterUp func(uint64) error, stepHook func(uint64, string) error, loadKey func(*Store) ([]byte, error)) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create metadata directory: %w", err)
 	}
@@ -1724,7 +1819,12 @@ func openWithMigrationHooks(path string, afterUp func(uint64) error, stepHook fu
 	// numbers now.
 	store := &Store{db: db}
 	store.batches.delay, store.batches.size = metadataBatchDelay, metadataBatchSize
-	if err := store.initialize(afterUp, stepHook); err != nil {
+	previousHead, err := store.recoverJournalBeforeSchema43(loadKey)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := store.initialize(afterUp, stepHook, previousHead); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -2009,7 +2109,7 @@ func (s *Store) PutBootstrap(ctx context.Context, records *BootstrapRecords) err
 	})
 }
 
-func (s *Store) initialize(afterUp func(uint64) error, stepHook func(uint64, string) error) error {
+func (s *Store) initialize(afterUp func(uint64) error, stepHook func(uint64, string) error, previousJournalHead []byte) error {
 	return s.migrate(func(tx *Tx) error {
 		meta := tx.Bucket(bucketMeta)
 		var currentVersion uint64
@@ -2086,6 +2186,13 @@ func (s *Store) initialize(afterUp func(uint64) error, stepHook func(uint64, str
 				}
 			}
 			currentVersion = nextVersion
+		}
+		if previousJournalHead != nil {
+			// Persist the pending epoch in the same transaction as schema 43.
+			// Any restart after this point must finish publishing that epoch.
+			if err := meta.Put(keyJournalEpochPending, previousJournalHead); err != nil {
+				return err
+			}
 		}
 		for _, name := range requiredBuckets() {
 			if tx.Bucket(name) == nil {

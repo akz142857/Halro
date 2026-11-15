@@ -2,6 +2,7 @@ package provider
 
 import (
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 // What a profile serves, declared once.
@@ -226,6 +227,23 @@ func profileAllowsPrimitiveDerived(profileID domain.ProviderProfileID, operation
 	for _, binding := range row.Bindings {
 		if binding.Operation == operation {
 			return binding.Primitive == primitive
+		}
+	}
+	return false
+}
+
+// PrimitiveUsesOrdinaryInputEstimate identifies embedding and resource
+// operations that have no generation cache split. Pending leases already
+// pin the provider profile and primitive for recovery.
+func PrimitiveUsesOrdinaryInputEstimate(profileID domain.ProviderProfileID, primitive Primitive) bool {
+	for _, binding := range profileOperationTable[profileID].Bindings {
+		if binding.Primitive == primitive {
+			switch semanticOperationFor(binding.Operation) {
+			case semantic.OperationGenerate, "":
+				return false
+			default:
+				return true
+			}
 		}
 	}
 	return false

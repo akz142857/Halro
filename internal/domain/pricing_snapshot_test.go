@@ -19,7 +19,7 @@ func TestPriceSnapshotDistinguishesFreeFromUnknownAndIsSelfContained(t *testing.
 	if snapshot.FixedRequestMicrosUSD == nil || *snapshot.FixedRequestMicrosUSD != 0 || snapshot.CostValueStatus != CostValueKnown {
 		t.Fatalf("free snapshot=%#v", snapshot)
 	}
-	cost, err := snapshot.Calculate(100, 10, 200)
+	cost, err := snapshot.Calculate(BilledTokens{Input: 100, CachedInput: 10, Output: 200})
 	if err != nil || cost.TotalCostMicrosUSD != 0 {
 		t.Fatalf("free cost=%#v err=%v", cost, err)
 	}
@@ -100,7 +100,55 @@ func TestPriceSnapshotRefusesAMissingCacheReadRate(t *testing.T) {
 	if err := decoded.Validate(); err == nil {
 		t.Fatal("a snapshot without a cache-read rate validated")
 	}
-	if _, err := decoded.Calculate(1_000, 500, 0); err == nil {
+	if _, err := decoded.Calculate(BilledTokens{Input: 1_000, CachedInput: 500, Output: 0}); err == nil {
 		t.Fatal("priced an attempt against a snapshot with no cache-read rate")
+	}
+}
+
+func TestLegacyPriceSnapshotAcceptsAbsentWriteRates(t *testing.T) {
+	price := validPriceVersion(t, "price_legacy_write", 1, "2026-08-04T00:00:00Z")
+	snapshot, err := NewVersionedPriceSnapshot(price, priceTestInstant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.CacheWriteMicrosPerMillion, snapshot.CacheWriteLongMicrosPerMillion = nil, nil
+	wire, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy PriceSnapshot
+	if err := json.Unmarshal(wire, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Calculate(BilledTokens{Input: 100}); err != nil {
+		t.Fatalf("old snapshot: %v", err)
+	}
+	if legacy.CacheWriteMicrosPerMillion != nil || legacy.Tier().CacheWriteLongMicrosPerMillion != 0 {
+		t.Fatal("absent legacy rates did not decode to zero")
+	}
+	legacy.CacheWriteLongMicrosPerMillion = legacy.InputMicrosPerMillion
+	if err := legacy.Validate(); err == nil {
+		t.Fatal("snapshot accepted an incomplete pair of write rates")
+	}
+}
+
+func TestLegacySnapshotKeepsThePinnedBillingRule(t *testing.T) {
+	price := validPriceVersion(t, "price_legacy_cost", 1, "2026-08-04T00:00:00Z")
+	price.InputMicrosPerMillion = 400_000
+	price.CachedInputMicrosPerMillion = 2_000_000
+	price.OutputMicrosPerMillion = 0
+	legacy, err := NewVersionedPriceSnapshot(price, priceTestInstant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy.CacheWriteMicrosPerMillion, legacy.CacheWriteLongMicrosPerMillion = nil, nil
+	cost, err := legacy.Calculate(BilledTokens{Input: 4, CachedInput: 1, CacheWrite: 2, CacheWriteLong: 1})
+	if err != nil || cost.InputCostMicrosUSD != 4 {
+		t.Fatalf("legacy cost=%+v err=%v", cost, err)
+	}
+	recovered := legacy.ConservativeTokens(4, 0)
+	bound, err := legacy.ReservationCost(4, 0)
+	if err != nil || recovered.CachedInput != 0 || bound != 2+price.FixedRequestMicrosUSD {
+		t.Fatalf("legacy estimated split=%+v cost=%d err=%v", recovered, bound, err)
 	}
 }

@@ -482,6 +482,52 @@ func TestInferenceResourcesFixedRequestPriceIsAccounted(t *testing.T) {
 	}
 }
 
+func TestInferenceResourceUnitsUseOrdinaryInputPricing(t *testing.T) {
+	for _, versioned := range []bool{false, true} {
+		name := "legacy rates"
+		if versioned {
+			name = "pinned price"
+		}
+		t.Run(name, func(t *testing.T) {
+			adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI), image: provider.ImageResult{Data: []provider.ImageData{{URL: "https://example.invalid/image"}}}}
+			target := inferenceResourcesTargetFor("image", adapter)
+			target.InputMicrosPerMillion = 17_000_000
+			// Mispricing one resource unit as a long write would exceed the
+			// fixture's entire project budget.
+			target.CacheWriteLongMicrosPerMillion = 2_000_000_000_000
+			f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, target, nil)
+			defer f.close()
+			now := time.Now().UTC()
+			if versioned {
+				f.service.pricing = &fakePricePinStore{price: domain.DeploymentPriceVersion{
+					ID: "priced-image", DeploymentID: target.DeploymentID, Version: 1, Revision: 1,
+					EffectiveFrom: now.Add(-time.Minute), CreatedAt: now.Add(-time.Minute), CreatedBy: "test",
+					BillingMode: domain.BillingModeMetered, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
+					InputMicrosPerMillion: target.InputMicrosPerMillion, CacheWriteLongMicrosPerMillion: target.CacheWriteLongMicrosPerMillion,
+					FixedRequestMicrosUSD: target.FixedRequestMicrosUSD,
+					Source: domain.PriceSource{Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted,
+						Reference: "test", AssertedWithoutArchive: true, ReceivedAt: now.Add(-time.Minute)},
+				}}
+			}
+
+			ctx := context.Background()
+			want := target.FixedRequestMicrosUSD + 17
+			target.OrdinaryInputEstimate = true
+			quote, _, err := f.service.captureTokenGuardPricingView(ctx, auth.AuthResult{}, []provider.Target{target}, 1, 0, now)
+			if err != nil || quote != want {
+				t.Fatalf("Token Guard quote=%d, want %d, err=%v", quote, want, err)
+			}
+			if _, err := f.service.Images(ctx, f.plaintext, openaiapi.ImageGenerationRequest{Model: "image", Prompt: "owl", N: 1}); err != nil {
+				t.Fatal(err)
+			}
+			balance := f.state.Balance(f.project.ID, time.Now().In(time.UTC).Format("2006-01-02"), testTimezoneVersion)
+			if balance.CommittedMicrosUSD != want || balance.ReservedMicrosUSD != 0 || balance.InputTokens != 1 {
+				t.Fatalf("balance=%#v, want one ordinary input unit billed at %d micros", balance, want)
+			}
+		})
+	}
+}
+
 func TestInferenceResourcesFileCleanupFailureKeepsRetryState(t *testing.T) {
 	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI)}
 	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("files", adapter), nil)

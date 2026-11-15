@@ -562,7 +562,7 @@ function ProviderEgressProxyForm({ current, onClose }: { current?: ProviderEgres
   const { ready: reauthReady } = useReauthReadiness(stepUp.values, stepUp.asked);
   const idempotencyKey = useRef(`provider-egress-${crypto.randomUUID()}`);
   const [name, setName] = useState(current?.name ?? "");
-  const [endpoint, setEndpoint] = useState(current?.endpoint ?? "https://");
+  const [endpoint, setEndpoint] = useState(current?.endpoint ?? "");
   const [allowPrivate, setAllowPrivate] = useState(current?.allow_private_endpoint ?? false);
   const [allowLoopback, setAllowLoopback] = useState(current?.allow_loopback_endpoint ?? false);
   const [username, setUsername] = useState("");
@@ -634,47 +634,48 @@ function ProviderEgressProxyForm({ current, onClose }: { current?: ProviderEgres
         if (!Object.keys(nextErrors).length) mutation.mutate();
       }} autoComplete="off">
         <div className="provider-credential-form-body provider-egress-proxy-form-body">
-          <section className="proxy-form-section" aria-label={t("providers.proxyConnectionTitle")}>
-
+          <section className="proxy-settings-group proxy-connection-fields" aria-label={t("providers.proxyConnectionTitle")}>
             <Field label={t("providers.proxyName")} error={errors.name}><input autoFocus value={name} onChange={(event) => { setName(event.target.value); setErrors((previous) => omitError(previous, "name")); }} /></Field>
-            <Field label={t("providers.proxyEndpointInput")} hint={t("providers.proxyEndpointHint")} error={errors.endpoint}><input inputMode="url" value={endpoint} onChange={(event) => { setEndpoint(event.target.value); setErrors((previous) => omitError(previous, "endpoint")); }} /></Field>
+            <Field label={t("providers.proxyEndpointInput")} hint={t("providers.proxyEndpointHint")} error={errors.endpoint}>
+              <input inputMode="url" autoCapitalize="none" spellCheck={false} placeholder="https://proxy.example.com:8443" value={endpoint} onChange={(event) => { setEndpoint(event.target.value); setErrors((previous) => omitError(previous, "endpoint")); }} />
+            </Field>
           </section>
 
-          <DisclosureSection title={t("providers.proxyBoundarySectionTitle")} summary={allowPrivate || allowLoopback ? t("providers.proxyBoundaryExceptions", { count: Number(allowPrivate) + Number(allowLoopback) }) : t("providers.proxyBoundaryProtected")}>
-            <p id="proxy-boundary-description" className="field-hint">{t("providers.proxyBoundarySectionDescription")}</p>
-            <fieldset className="proxy-boundary-options" aria-describedby="proxy-boundary-description">
-              <legend className="visually-hidden">{t("providers.proxyBoundarySectionTitle")}</legend>
-              <label className={`proxy-boundary-option${allowPrivate ? " selected" : ""}`}>
-                <input type="checkbox" checked={allowPrivate} onChange={(event) => setAllowPrivate(event.target.checked)} />
-                <span className="proxy-boundary-option-copy"><strong>{t("providers.proxyPrivateTitle")}</strong><small>{t("providers.proxyPrivateDescription")}</small></span>
-                <span className="proxy-boundary-option-state">{t(allowPrivate ? "providers.proxyExceptionAllowed" : "providers.proxyExceptionBlocked")}</span>
-              </label>
-              <label className={`proxy-boundary-option${allowLoopback ? " selected" : ""}`}>
-                <input type="checkbox" checked={allowLoopback} onChange={(event) => setAllowLoopback(event.target.checked)} />
-                <span className="proxy-boundary-option-copy"><strong>{t("providers.proxyLoopbackTitle")}</strong><small>{t("providers.proxyLoopbackDescription")}</small></span>
-                <span className="proxy-boundary-option-state">{t(allowLoopback ? "providers.proxyExceptionAllowed" : "providers.proxyExceptionBlocked")}</span>
-              </label>
-            </fieldset>
-          </DisclosureSection>
-            {(allowPrivate || allowLoopback) && <div className="proxy-boundary-warning" role="status">
-              <span className="proxy-boundary-warning-icon" aria-hidden="true">!</span>
-              <span><strong>{t("providers.proxyBoundaryTitle")}</strong><small>{t("providers.proxyBoundaryDescription")}</small></span>
-            </div>}
+          <div className="proxy-settings-group">
+            <DisclosureSection title={t("providers.proxyBoundarySectionTitle")} summary={allowPrivate || allowLoopback ? t("providers.proxyBoundaryExceptions", { count: Number(allowPrivate) + Number(allowLoopback) }) : t("providers.proxyBoundaryProtected")}>
+              <p id="proxy-boundary-description" className="field-hint">{t("providers.proxyBoundarySectionDescription")}</p>
+              <fieldset className="proxy-boundary-options" aria-describedby="proxy-boundary-description">
+                <legend className="visually-hidden">{t("providers.proxyBoundarySectionTitle")}</legend>
+                <label className={`proxy-boundary-option${allowPrivate ? " selected" : ""}`}>
+                  <span className="proxy-boundary-option-copy"><strong>{t("providers.proxyPrivateTitle")}</strong><small>{t("providers.proxyPrivateDescription")}</small></span>
+                  <input type="checkbox" checked={allowPrivate} onChange={(event) => setAllowPrivate(event.target.checked)} />
+                </label>
+                <label className={`proxy-boundary-option${allowLoopback ? " selected" : ""}`}>
+                  <span className="proxy-boundary-option-copy"><strong>{t("providers.proxyLoopbackTitle")}</strong><small>{t("providers.proxyLoopbackDescription")}</small></span>
+                  <input type="checkbox" checked={allowLoopback} onChange={(event) => setAllowLoopback(event.target.checked)} />
+                </label>
+              </fieldset>
+              {(allowPrivate || allowLoopback) && <div className="proxy-boundary-warning" role="status">
+                <span className="proxy-boundary-warning-icon" aria-hidden="true">!</span>
+                <span><strong>{t("providers.proxyBoundaryTitle")}</strong><small>{t("providers.proxyBoundaryDescription")}</small></span>
+              </div>}
+            </DisclosureSection>
 
-          <DisclosureSection title={t("providers.proxyAuthenticationTitle")} summary={authWillExist ? t("providers.proxyBasicAuth") : t("providers.proxyNoAuth")} invalid={Boolean(errors.authentication)}>
-            <p className="field-hint">{t("providers.proxyAuthenticationDescription")}</p>
-            <div className="proxy-auth-grid">
-              <Field label={t("providers.proxyUsername")}><input value={username} disabled={clearAuth} autoComplete="username" onChange={(event) => { setUsername(event.target.value); setErrors((previous) => omitError(previous, "authentication")); }} /></Field>
-              <Field label={t("providers.proxyPassword")} hint={current?.authenticated ? t("providers.proxyPasswordPreserveHint") : undefined} error={errors.authentication}><input type="password" value={password} disabled={clearAuth} autoComplete="new-password" onChange={(event) => { setPassword(event.target.value); setErrors((previous) => omitError(previous, "authentication")); }} /></Field>
-            </div>
-            {current?.authenticated && <label className="form-inline-check"><input type="checkbox" checked={clearAuth} onChange={(event) => { setClearAuth(event.target.checked); if (event.target.checked) { setUsername(""); setPassword(""); } }} /><span>{t("providers.proxyClearAuth")}</span></label>}
-          </DisclosureSection>
-          {endpoint.trim().startsWith("http://") && authWillExist && <label className="form-inline-check warning-text"><input type="checkbox" checked={allowCleartextAuth} onChange={(event) => { setAllowCleartextAuth(event.target.checked); setErrors((previous) => omitError(previous, "authentication")); }} /><span>{t("providers.proxyAllowCleartextAuth")}</span></label>}
+            <DisclosureSection title={t("providers.proxyAuthenticationTitle")} summary={authWillExist ? t("providers.proxyBasicAuth") : t("providers.proxyNoAuth")} invalid={Boolean(errors.authentication)}>
+              <p className="field-hint">{t("providers.proxyAuthenticationDescription")}</p>
+              <div className="proxy-auth-grid">
+                <Field label={t("providers.proxyUsername")}><input value={username} disabled={clearAuth} autoComplete="username" onChange={(event) => { setUsername(event.target.value); setErrors((previous) => omitError(previous, "authentication")); }} /></Field>
+                <Field label={t("providers.proxyPassword")} hint={current?.authenticated ? t("providers.proxyPasswordPreserveHint") : undefined} error={errors.authentication}><input type="password" value={password} disabled={clearAuth} autoComplete="new-password" onChange={(event) => { setPassword(event.target.value); setErrors((previous) => omitError(previous, "authentication")); }} /></Field>
+              </div>
+              {current?.authenticated && <label className="form-inline-check"><input type="checkbox" checked={clearAuth} onChange={(event) => { setClearAuth(event.target.checked); if (event.target.checked) { setUsername(""); setPassword(""); } }} /><span>{t("providers.proxyClearAuth")}</span></label>}
+              {endpoint.trim().startsWith("http://") && authWillExist && <label className="form-inline-check warning-text"><input type="checkbox" checked={allowCleartextAuth} onChange={(event) => { setAllowCleartextAuth(event.target.checked); setErrors((previous) => omitError(previous, "authentication")); }} /><span>{t("providers.proxyAllowCleartextAuth")}</span></label>}
+            </DisclosureSection>
+          </div>
           {mutation.isError && !stepUp.probing && <div className="proxy-form-feedback"><ErrorState error={mutation.error} /></div>}
           {stepUp.asked && <div className="proxy-form-feedback"><ReauthFields values={stepUp.values} onChange={stepUp.setValues} description={t("auth.stepUpSecurityControl")} /></div>}
         </div>
         <div className="form-actions sticky-form-actions">
-          <button type="button" className="button ghost" disabled={mutation.isPending} onClick={onClose}>{t("common.cancel")}</button>
+          <button type="button" className="button ghost" disabled={mutation.isPending} data-modal-close>{t("common.cancel")}</button>
           <button className="button primary" disabled={mutation.isPending || !reauthReady}>{t(current ? "providers.saveProxy" : "providers.createProxyAndLoad")}</button>
         </div>
       </form>

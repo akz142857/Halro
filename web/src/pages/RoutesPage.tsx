@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { api } from "../api";
 import {
   ConfirmButton,
@@ -7,7 +7,7 @@ import {
   ErrorState,
   Combobox,
   Field,
-  InlineTestControl,
+  InlineTestResult,
   isStepUpPrompt,
   Loading,
   Modal,
@@ -173,7 +173,7 @@ export function RoutesPage() {
       )}
       {!!routes.data?.items.length && (
         <div className="table-shell">
-          <table className="route-table">
+          <table className="route-table" role="table">
             <caption className="visually-hidden">{t("routes.list")}</caption>
             {/* The columns are declared rather than measured. Under the default
                 auto layout a test failure's sentence — which only some rows
@@ -188,18 +188,18 @@ export function RoutesPage() {
               <col className="route-col-status" />
               <col className="route-col-actions" />
             </colgroup>
-            <thead>
-              <tr>
+            <thead role="rowgroup">
+              <tr role="row">
                 {/* Four columns used to carry one fact between them — the
                     route, its deployment, that deployment's provider and that
                     provider's model — and three of the four repeated what the
                     fourth already implied. They are one target cell now: where
                     the request goes on the first line, which records say so on
                     the second. */}
-                <th scope="col">{t("routes.targetColumn")}</th>
-                <th scope="col">{t("routes.priority")}</th>
-                <th scope="col">{t("routes.status")}</th>
-                <th scope="col" />
+                <th scope="col" role="columnheader">{t("routes.targetColumn")}</th>
+                <th scope="col" role="columnheader">{t("routes.priority")}</th>
+                <th scope="col" role="columnheader">{t("routes.status")}</th>
+                <th scope="col" role="columnheader">{t("common.actions")}</th>
               </tr>
             </thead>
             {aliasGroups.map((group) => {
@@ -231,15 +231,15 @@ export function RoutesPage() {
                 ? group.candidates[0].id
                 : "";
               return (
-            <tbody key={group.alias}>
-              <tr className="route-group-heading">
+            <tbody key={group.alias} role="rowgroup">
+              <tr className="route-group-heading" role="row">
                 {/* The alias is the heading of the rows under it, so it sits
                     where a heading sits — at the left edge, above the target
                     column it governs, in type large enough to be read as the
                     name of the group rather than as one more annotation. The
                     group's own facts ride the far end of the same band: they
                     describe the set, not any one row. */}
-                <th colSpan={4} scope="colgroup">
+                <th colSpan={4} scope="colgroup" role="columnheader" aria-colspan={4}>
                   {/* The band is a div inside the cell rather than the cell
                       itself: a th laid out as flex is no longer a table cell,
                       so its colSpan stops applying and the heading shrinks to
@@ -296,8 +296,10 @@ export function RoutesPage() {
                 const serving = siblingServingCount.get(route.public_model) ?? 0;
                 const remainingAfterDisable = serving - (route.enabled && !route.withheld ? 1 : 0);
                 return (
-                  <tr id={`route-${route.id}`} key={route.id}>
-                    <td>
+                  <RouteRow
+                    key={route.id}
+                    route={route}
+                    target={
                       <div className="route-target">
                         <div className="route-target-head">
                           <StatusDot ok={route.enabled && !route.withheld} />
@@ -327,35 +329,9 @@ export function RoutesPage() {
                           {deployment?.name || route.deployment_id} · <span className="route-id">{route.id}</span>
                         </small>
                       </div>
-                    </td>
-                    <td>{route.priority}</td>
-                    <td>
-                      {/* Enabled is what the operator asked for; it used to be
-                          the only thing this column could say. A route the
-                          registry refused is up and serving nothing, and until
-                          the server started reporting it, only the log knew. */}
-                      {route.enabled && route.withheld ? (
-                        <div className="route-withheld-cell">
-                          <span className="badge warning">{t("routes.withheld")}</span>
-                          {/* The reason is shown rather than hidden in a
-                              tooltip: which of them it is decides whether the
-                              repair is on the deployment, the connection or
-                              this route. */}
-                          <small className="resource-state">{t(
-                            `routes.withheldReasons.${route.withheld.kind === "capability_drift" ? "capability_drift" : route.withheld.reason}`,
-                            { defaultValue: t("routes.withheldReasons.unknown") },
-                          )}</small>
-                        </div>
-                      ) : (
-                        <span className={`resource-state ${route.enabled ? "enabled" : ""}`}>
-                          {route.enabled ? t("common.enabled") : t("common.disabled")}
-                        </span>
-                      )}
-                    </td>
-                    <td>
-                      <div className="row-actions route-row-actions">
-                        <RouteTestAction route={route} />
-                        <div className="row-actions route-management-actions">
+                    }
+                    actions={
+                        <>
                           <button className="button ghost" disabled={readOnly} onClick={() => setEditing(route)}>{t("common.edit")}</button>
                           {route.enabled ? (
                             <ConfirmButton
@@ -378,10 +354,9 @@ export function RoutesPage() {
                             onConfirm={(reauth) => remove.mutateAsync({ route, reauth })}
                             disabled={remove.isPending}
                           />
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
+                        </>
+                    }
+                  />
                 );
               })}
             </tbody>
@@ -429,7 +404,10 @@ function CopyAlias({ alias }: { alias: string }) {
   );
 }
 
-function RouteTestAction({ route }: { route: Route }) {
+function RouteRow({ route, target, actions }: { route: Route; target: ReactNode; actions: ReactNode }) {
+  const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
+  const testStatusID = useId();
   const queryClient = useQueryClient();
   const test = useMutation({ mutationFn: () => api.testRoute(route.id), onSettled: () => queryClient.invalidateQueries({ queryKey: ["routes"] }) });
   const persistedTestIsCurrent = route.last_test_current ?? route.last_test_revision === route.revision;
@@ -446,14 +424,42 @@ function RouteTestAction({ route }: { route: Route }) {
             : "idle";
   const failureReason = useTestFailureReason(test.error, persistedTestIsCurrent ? route.last_test_error_class : undefined);
   return (
-    // The control and its reason stack, so a wrapped sentence pushes the rest of
-    // the action row down rather than sitting between the buttons.
-    <div className="inline-test-cell">
-      <InlineTestControl state={state} latency={test.data?.latency_ms ?? route.last_test_latency_millis} disabled={!route.enabled} onTest={() => test.mutate()} />
-      {state === "failure" && failureReason && (
-        <p className="row-test-failure" role="status">{failureReason}</p>
-      )}
-    </div>
+    <tr id={`route-${route.id}`} role="row">
+      <td role="cell">{target}</td>
+      <td role="cell"><span className="compact-table-label" aria-hidden="true">{t("routes.priority")}</span>{route.priority}</td>
+      <td role="cell">
+        <span className="compact-table-label" aria-hidden="true">{t("routes.status")}</span>
+        {route.enabled && route.withheld ? (
+          <div className="route-withheld-cell">
+            <span className="badge warning">{t("routes.withheld")}</span>
+            {/* The reason is shown rather than hidden in a
+                tooltip: which of them it is decides whether the
+                repair is on the deployment, the connection or
+                this route. */}
+            <small className="resource-state">{t(
+              `routes.withheldReasons.${route.withheld.kind === "capability_drift" ? "capability_drift" : route.withheld.reason}`,
+              { defaultValue: t("routes.withheldReasons.unknown") },
+            )}</small>
+          </div>
+        ) : (
+          <span className={`resource-state ${route.enabled ? "enabled" : ""}`}>
+            {route.enabled ? t("common.enabled") : t("common.disabled")}
+          </span>
+        )}
+        <div className="route-test-status">
+          <InlineTestResult id={testStatusID} state={state} latency={test.data?.latency_ms ?? route.last_test_latency_millis} />
+          {state === "failure" && failureReason && <p className="row-test-failure" role="status">{failureReason}</p>}
+        </div>
+      </td>
+      <td role="cell">
+        <div className="row-actions route-row-actions">
+          <button type="button" className="button secondary" disabled={readOnly || !route.enabled || test.isPending}
+            title={readOnly ? t("navigation.readOnlyAction") : undefined}
+            aria-describedby={testStatusID} onClick={() => test.mutate()}>{t("common.test")}</button>
+          {actions}
+        </div>
+      </td>
+    </tr>
   );
 }
 

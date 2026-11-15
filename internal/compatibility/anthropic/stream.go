@@ -60,6 +60,8 @@ func (renderer *StreamRenderer) Accept(event semantic.Event) ([]anthropicapi.Str
 		events = append(events, closed...)
 		stop := renderStopReason(renderer.termination)
 		usage := renderUsage(*event.Usage)
+		// MessageDeltaUsage exposes the cumulative cache creation total.
+		usage.CacheCreation = nil
 		events = append(events,
 			anthropicapi.StreamEvent{Type: "message_delta", Delta: map[string]any{"stop_reason": stop, "stop_sequence": nil}, Usage: &usage},
 			anthropicapi.StreamEvent{Type: "message_stop"},
