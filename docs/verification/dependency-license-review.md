@@ -1,6 +1,6 @@
 # Dependency and License Review
 
-Date: 2026-11-15
+Date: 2026-11-16
 
 Halro is distributed under Apache-2.0. The source tree includes the project
 license in `LICENSE`, required attribution in `NOTICE`, and the runtime
@@ -561,6 +561,13 @@ limited to the Python SDK compatibility tests. Existing notices remain
 applicable. See the [upstream release](https://github.com/open-telemetry/opentelemetry-python/releases/tag/v1.45.2)
 and the [PyPI release](https://pypi.org/project/opentelemetry-api/1.45.2/).
 
+The 2026-11-16 Go SDK contract-test update (#510) upgrades `openai-go/v3`
+from 3.91.1 to 3.98.0 and `tidwall/gjson` from 1.19.0 to 1.20.0. The existing
+AWS and Azure modules also move in the checksums. The module path set is
+unchanged, and all 18 changed modules retain byte-identical LICENSE and, where
+present, NOTICE files. The Go SDK black-box tests pass against the local
+compatibility server. These modules stay outside the distributed Halro binary.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -576,8 +583,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `go.sum`: `c838c88b891fc02db2bc14cbe3017cfdf08e46cf`
 - `web/package.json`: `1b751f198e9e5c152cff8b6dc974667bcd3a2e37`
 - `web/package-lock.json`: `6e08b4e385761c8207c25e286057ef7487caec8f`
-- `tests/compatibility/go/go.mod`: `2ae800a3be32f0a292f5687bb19cfefdc5a3d997`
-- `tests/compatibility/go/go.sum`: `143e853813d133ca51a3072792146408073101e9`
+- `tests/compatibility/go/go.mod`: `773676f6449c95c2b9f3ea98d70003de7c4aa014`
+- `tests/compatibility/go/go.sum`: `504b5da47dd9e08145d2f8fcf0afc8f6a445d91c`
 - `tests/compatibility/node/package.json`: `5d6d3511925689da5e8b2d05ef20f31685321b8a`
 - `tests/compatibility/node/package-lock.json`: `b2fcb4114be5f3d83069da1f50f0115f6bfa14bd`
 - `tests/compatibility/python/requirements.in`: `2f1d85bd1d30eaf3338abc05d1d5607bfec61622`
