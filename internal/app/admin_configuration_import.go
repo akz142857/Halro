@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,8 +19,9 @@ import (
 )
 
 type configurationImportInput struct {
-	Bundle   configurationBundle                    `json:"bundle"`
-	Bindings map[string]configurationProviderTarget `json:"bindings"`
+	Bundle    configurationBundle                    `json:"bundle"`
+	Bindings  map[string]configurationProviderTarget `json:"bindings"`
+	Selection *configurationImportSelection          `json:"selection,omitempty"`
 }
 
 type configurationProviderTarget struct {
@@ -38,15 +40,16 @@ type configurationApplyInput struct {
 }
 
 type configurationImportPreview struct {
-	Counts              map[string]int                `json:"counts"`
-	Providers           []configurationProviderReview `json:"providers"`
-	DeploymentsToEnable []configurationObject         `json:"deployments_to_enable"`
-	RoutesToEnable      []configurationObject         `json:"routes_to_enable"`
-	Issues              []configurationIssue          `json:"issues"`
-	Notices             []configurationNotice         `json:"notices,omitempty"`
-	Declarations        []configurationDeclaration    `json:"operator_declarations,omitempty"`
-	RegionChanges       []configurationRegionChange   `json:"region_changes,omitempty"`
-	PlanID              string                        `json:"plan_id,omitempty"`
+	Counts              map[string]int                 `json:"counts"`
+	SelectionOptions    *configurationSelectionOptions `json:"selection_options,omitempty"`
+	Providers           []configurationProviderReview  `json:"providers"`
+	DeploymentsToEnable []configurationObject          `json:"deployments_to_enable"`
+	RoutesToEnable      []configurationObject          `json:"routes_to_enable"`
+	Issues              []configurationIssue           `json:"issues"`
+	Notices             []configurationNotice          `json:"notices,omitempty"`
+	Declarations        []configurationDeclaration     `json:"operator_declarations,omitempty"`
+	RegionChanges       []configurationRegionChange    `json:"region_changes,omitempty"`
+	PlanID              string                         `json:"plan_id,omitempty"`
 }
 
 type configurationObject struct {
@@ -80,10 +83,11 @@ type configurationProviderReview struct {
 }
 
 type configurationIssue struct {
-	Resource string `json:"resource"`
-	ID       string `json:"id,omitempty"`
-	Code     string `json:"code"`
-	Message  string `json:"message"`
+	Resource string            `json:"resource"`
+	ID       string            `json:"id,omitempty"`
+	Code     string            `json:"code"`
+	Message  string            `json:"message"`
+	Fields   map[string]string `json:"fields,omitempty"`
 }
 
 type configurationIssuedKey struct {
@@ -102,6 +106,10 @@ var (
 )
 
 func configurationBindingIssueCode(err error) string {
+	var credentialMatch credentialMatchError
+	if errors.As(err, &credentialMatch) {
+		return credentialMatch.code
+	}
 	switch {
 	case errors.Is(err, errConfigurationEndpoint):
 		return "target_endpoint_required"
@@ -122,7 +130,7 @@ func decodeConfigurationImport(writer http.ResponseWriter, request *http.Request
 	request.Body = http.MaxBytesReader(writer, request.Body, limit)
 	if err := decodeAdminJSONLimit(request, input, limit); err != nil {
 		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
+		if errors.As(err, &tooLarge) || errors.Is(err, errConfigurationBundleTooLarge) {
 			writeJSON(writer, http.StatusRequestEntityTooLarge, map[string]string{
 				"code": "configuration_bundle_too_large", "error": "configuration exceeds the bundle limit",
 			})
@@ -200,7 +208,11 @@ func (r *Runtime) applyAdminConfigurationImport(writer http.ResponseWriter, requ
 		config.GatewayKeys[i] = key
 		issuedKeys = append(issuedKeys, configurationIssuedKey{configurationObject: configurationObject{ID: key.ID, Name: key.Name}, ProjectID: key.ProjectID, Key: plaintext})
 	}
-	intents, err := r.configurationImportAudit(request, config, preview.PlanID, input.Bundle.recordCount())
+	count := 0
+	for _, value := range preview.Counts {
+		count += value
+	}
+	intents, err := r.configurationImportAudit(request, config, preview.PlanID, count)
 	if err != nil {
 		adminStoreError(writer)
 		return
@@ -222,8 +234,13 @@ func (r *Runtime) applyAdminConfigurationImport(writer http.ResponseWriter, requ
 				"counts": preview.Counts, "keys_to_reissue": issuedKeys,
 			})
 		case errors.Is(err, boltstore.ErrConfigurationTargetNotEmpty):
-			writeJSON(writer, http.StatusConflict, map[string]string{
+			preview.PlanID = ""
+			preview.SelectionOptions = nil
+			preview.Providers = []configurationProviderReview{}
+			preview.issue("target", "", "target_not_empty", err)
+			writeJSON(writer, http.StatusConflict, map[string]any{
 				"code": "configuration_target_not_empty", "error": "the target already has configuration",
+				"preview": preview,
 			})
 		default:
 			r.logger.Error("configuration import failed", "error", err)
@@ -245,7 +262,7 @@ func (r *Runtime) applyAdminConfigurationImport(writer http.ResponseWriter, requ
 }
 
 func (r *Runtime) configurationImportAudit(request *http.Request, config boltstore.PortableConfiguration, planID string, count int) ([]*domain.AdminAuditIntent, error) {
-	summary, err := r.newAdminAuditIntentWithMetadata(request, "configuration.import", "configuration", "v1",
+	summary, err := r.newAdminAuditIntentWithMetadata(request, "configuration.import", "configuration", "v"+strconv.Itoa(configurationBundleVersion),
 		map[string]string{"plan_id": planID, "record_count": fmt.Sprint(count)})
 	if err != nil {
 		return nil, err
@@ -304,11 +321,7 @@ func (r *Runtime) configurationImportAudit(request *http.Request, config boltsto
 func (r *Runtime) prepareConfigurationImport(request *http.Request, input configurationImportInput, now time.Time) (configurationImportPreview, boltstore.PortableConfiguration, error) {
 	b := input.Bundle
 	preview := configurationImportPreview{
-		Counts: map[string]int{
-			"providers": len(b.Providers), "deployments": len(b.Deployments), "routes": len(b.Routes),
-			"redaction_policies": len(b.RedactionPolicies), "token_guard_policies": len(b.TokenGuardPolicies),
-			"projects": len(b.Projects), "gateway_keys": len(b.GatewayKeys),
-		},
+		Counts:    b.counts(),
 		Providers: []configurationProviderReview{}, Issues: []configurationIssue{},
 		DeploymentsToEnable: []configurationObject{}, RoutesToEnable: []configurationObject{},
 		Notices: append([]configurationNotice(nil), b.Omissions...),
@@ -331,6 +344,16 @@ func (r *Runtime) prepareConfigurationImport(request *http.Request, input config
 			return preview, config, err
 		}
 		preview.issue("target", "", "target_not_empty", err)
+		return preview, config, nil
+	}
+	preview.SelectionOptions = b.selectionOptions()
+	if input.Selection != nil {
+		var ok bool
+		b, ok = preview.selectConfiguration(b, *input.Selection)
+		preview.Counts = b.counts()
+		if !ok {
+			return preview, config, nil
+		}
 	}
 
 	providers := make(map[string]domain.ProviderInstance, len(b.Providers))
@@ -349,8 +372,12 @@ func (r *Runtime) prepareConfigurationImport(request *http.Request, input config
 		providers[item.ID] = candidate
 		config.Providers = append(config.Providers, candidate)
 	}
+	fileProviderIDs := make(map[string]struct{}, len(input.Bundle.Providers))
+	for _, item := range input.Bundle.Providers {
+		fileProviderIDs[item.ID] = struct{}{}
+	}
 	for providerID := range input.Bindings {
-		if _, ok := providerIDs[providerID]; !ok {
+		if _, ok := fileProviderIDs[providerID]; !ok {
 			preview.issue("providers", providerID, "unknown_provider", errors.New("binding names a provider outside the bundle"))
 		}
 	}
@@ -406,6 +433,7 @@ func (r *Runtime) prepareConfigurationImport(request *http.Request, input config
 
 	aliases := make(map[string]struct{}, len(b.Routes))
 	routeIDs := make(map[string]struct{}, len(b.Routes))
+	enabledRoutes := make(map[string][]domain.Route)
 	for _, item := range b.Routes {
 		if !preview.checkID(routeIDs, "routes", item.ID) {
 			continue
@@ -424,6 +452,15 @@ func (r *Runtime) prepareConfigurationImport(request *http.Request, input config
 				preview.issue("routes", item.ID, "missing_deployment", errors.New("route deployment is outside the bundle"))
 			}
 			continue
+		}
+		if route.Enabled {
+			for _, peer := range enabledRoutes[route.PublicModel] {
+				if err := validateEnabledRoutePeer(route, peer); err != nil {
+					preview.issue("routes", item.ID, "invalid_route_group", err)
+					break
+				}
+			}
+			enabledRoutes[route.PublicModel] = append(enabledRoutes[route.PublicModel], route)
 		}
 		route.Enabled = false
 		config.Routes = append(config.Routes, route)
@@ -628,8 +665,8 @@ func (p *configurationImportPreview) prepareProjects(b configurationBundle, alia
 		}
 		for _, alias := range project.AllowedModels {
 			if _, ok := aliases[alias]; !ok {
-				// Keep the explicit allowlist: pruning the last alias would
-				// grant access to every model. Missing aliases are unavailable.
+				// Preserve the exact grant even when the alias has no route to
+				// import. The preview explains why it will be unavailable.
 				p.Notices = append(p.Notices, configurationNotice{
 					Resource: "projects", ID: item.ID, Code: "unavailable_alias", Alias: alias,
 				})
@@ -681,5 +718,10 @@ func (p *configurationImportPreview) checkID(seen map[string]struct{}, resource,
 }
 
 func (p *configurationImportPreview) issue(resource, id, code string, err error) {
-	p.Issues = append(p.Issues, configurationIssue{Resource: resource, ID: id, Code: code, Message: err.Error()})
+	issue := configurationIssue{Resource: resource, ID: id, Code: code, Message: err.Error()}
+	var credentialMatch credentialMatchError
+	if errors.As(err, &credentialMatch) {
+		issue.Fields = credentialMatch.fields
+	}
+	p.Issues = append(p.Issues, issue)
 }

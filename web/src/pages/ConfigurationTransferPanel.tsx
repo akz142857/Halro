@@ -3,14 +3,16 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ApiError, api, type Reauth } from "../api";
 import { ConfirmButton, ErrorState } from "../components";
+import { localizedError } from "../i18n/errors";
 import { setNavigationBlocked } from "../navigation";
 import type {
-  ConfigurationBindings, ConfigurationImportPreview, ConfigurationImportResult,
+  ConfigurationBindings, ConfigurationImportPreview, ConfigurationImportResult, ConfigurationImportSelection,
   ConfigurationNotice, ConfigurationObject, ConfigurationProviderReview, ConfigurationProviderTarget, ConfigurationResource, Credential, ProviderEgressProxy,
 } from "../types";
 
 const fileLimit = 2 * 1024 * 1024;
 const emptyTarget: ConfigurationProviderTarget = { credential_id: "" };
+const defaultSelection: ConfigurationImportSelection = { mode: "all", include_gateway_keys: false };
 const resources: ConfigurationResource[] = [
   "providers", "deployments", "routes", "redaction_policies", "token_guard_policies", "projects", "gateway_keys",
 ];
@@ -38,6 +40,9 @@ export function ConfigurationTransferPanel() {
   const [importError, setImportError] = useState<unknown>(null);
   const [bundle, setBundle] = useState("");
   const [targets, setTargets] = useState(new Map<string, ConfigurationProviderTarget>());
+  const [selection, setSelection] = useState(defaultSelection);
+  const [scopeDirty, setScopeDirty] = useState(false);
+  const [showBindingIssues, setShowBindingIssues] = useState(false);
   const [preview, setPreview] = useState<ConfigurationImportPreview>();
   const [result, setResult] = useState<ConfigurationImportResult>();
   const [acceptDeclarations, setAcceptDeclarations] = useState(false);
@@ -57,9 +62,14 @@ export function ConfigurationTransferPanel() {
   const hasProviders = Boolean(preview?.providers.length);
   const fileRejected = preview?.issues.some(({ code }) => code === "record_count" || code === "unsupported_version" || code === "reexport_required");
   const emptyBundle = preview && resources.every((resource) => preview.counts[resource] === 0);
-  const canApply = Boolean(preview?.plan_id);
-  const credentials = useQuery({ queryKey: ["credentials"], queryFn: api.credentials, enabled: hasProviders, refetchOnWindowFocus: true });
-  const proxies = useQuery({ queryKey: ["provider-egress-proxies"], queryFn: api.providerEgressProxies, enabled: hasProviders, refetchOnWindowFocus: true });
+  const targetBlocked = preview?.issues.some(({ code }) => code === "target_not_empty");
+  const hasSelection = selection.mode === "all" || selection.project_ids.length > 0 || selection.route_aliases.length > 0;
+  const showBindings = hasProviders && !scopeDirty && !targetBlocked;
+  const canApply = Boolean(preview?.plan_id) && !scopeDirty && !targetBlocked;
+  const issues = targetBlocked ? preview?.issues.filter(({ resource }) => resource === "target") ?? [] :
+    scopeDirty ? [] : preview?.issues.filter(({ code }) => showBindingIssues || code !== "target_credential_required") ?? [];
+  const credentials = useQuery({ queryKey: ["credentials"], queryFn: api.credentials, enabled: showBindings, refetchOnWindowFocus: true });
+  const proxies = useQuery({ queryKey: ["provider-egress-proxies"], queryFn: api.providerEgressProxies, enabled: showBindings, refetchOnWindowFocus: true });
 
   async function exportBundle() {
     setExportError(null);
@@ -82,6 +92,9 @@ export function ConfigurationTransferPanel() {
     setFileName(file.name);
     setBundle("");
     setTargets(new Map());
+    setSelection(defaultSelection);
+    setScopeDirty(false);
+    setShowBindingIssues(false);
     setPreview(undefined);
     setAcceptDeclarations(false);
     setFileError(null);
@@ -101,9 +114,14 @@ export function ConfigurationTransferPanel() {
         return;
       }
       setBundle(content);
-      setPreview(await api.previewConfigurationImport(content, {}));
+      setPreview(await api.previewConfigurationImport(content, {}, defaultSelection));
     } catch (error) {
-      setImportError(error);
+      if (error instanceof ApiError && (error.status === 413 || error.code === "invalid_request")) {
+        setFileError(error.status === 413 ? "fileSize" : "fileInvalid");
+        setBundle("");
+      } else {
+        setImportError(error);
+      }
     } finally {
       setBusy(false);
     }
@@ -112,6 +130,14 @@ export function ConfigurationTransferPanel() {
   function updateTarget(id: string, change: Partial<ConfigurationProviderTarget>) {
     setAcceptDeclarations(false);
     setTargets((previous) => new Map(previous).set(id, { ...(previous.get(id) ?? emptyTarget), ...change }));
+    setPreview((previous) => previous && { ...previous, plan_id: undefined });
+  }
+
+  function updateSelection(value: ConfigurationImportSelection) {
+    setSelection(value.mode === "selected" && value.project_ids.length === 0 ? { ...value, include_gateway_keys: false } : value);
+    setScopeDirty(true);
+    setAcceptDeclarations(false);
+    setImportError(null);
     setPreview((previous) => previous && { ...previous, plan_id: undefined });
   }
 
@@ -125,7 +151,9 @@ export function ConfigurationTransferPanel() {
     setImportError(null);
     setPreview((previous) => previous && { ...previous, plan_id: undefined });
     try {
-      setPreview(await api.previewConfigurationImport(bundle, bindings()));
+      setPreview(await api.previewConfigurationImport(bundle, bindings(), selection));
+      setScopeDirty(false);
+      setShowBindingIssues(true);
     } catch (error) {
       setImportError(error);
     } finally {
@@ -134,9 +162,10 @@ export function ConfigurationTransferPanel() {
   }
 
   async function applyImport(reauth: Reauth) {
-    if (!preview?.plan_id) return;
+    if (!preview?.plan_id || !canApply) return;
+    setBusy(true);
     try {
-      const imported = await api.applyConfigurationImport(bundle, bindings(), preview.plan_id, reauth, acceptDeclarations);
+      const imported = await api.applyConfigurationImport(bundle, bindings(), preview.plan_id, reauth, acceptDeclarations, selection);
       setResult(imported);
       setKeysSaved(false);
       setBundle("");
@@ -149,7 +178,10 @@ export function ConfigurationTransferPanel() {
       const current = (error.payload as { preview?: ConfigurationImportPreview } | undefined)?.preview;
       setPreview({ ...(current ?? preview), plan_id: undefined });
       setAcceptDeclarations(false);
-      setImportError(error);
+      if (!current?.issues.length) setImportError(error);
+      setShowBindingIssues(true);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -194,16 +226,20 @@ export function ConfigurationTransferPanel() {
         {fileError && <p className="notice error configuration-list" role="alert">{t(`configurationTransfer.${fileError}`)}</p>}
         {Boolean(importError) && <ErrorState error={importError} />}
         {preview && <>
-          {!fileRejected && <ConfigurationCounts counts={preview.counts} />}
-          {preview.issues.length > 0 && <div className={`notice ${fileRejected ? "error" : "warning"} configuration-list`} role={fileRejected ? "alert" : "status"}>
+          {!targetBlocked && preview.selection_options && <ConfigurationSelectionFields
+            options={preview.selection_options} selection={selection} disabled={busy} onChange={updateSelection} />}
+          {!fileRejected && !scopeDirty && <ConfigurationCounts counts={preview.counts} pending={targetBlocked} />}
+          {targetBlocked && <p className="configuration-transfer-note">{t("configurationTransfer.targetBlockedHelp")}</p>}
+          {issues.length > 0 && <div className={`notice ${fileRejected || targetBlocked ? "error" : "warning"} configuration-list`} role={fileRejected || targetBlocked ? "alert" : "status"}>
             <strong>{t("configurationTransfer.issues")}</strong>
-            <ul>{preview.issues.map((issue, index) => <li key={index}>
+            <ul>{issues.map((issue, index) => <li key={index}>
               {issue.id ? <>{preview.providers.find((provider) => provider.id === issue.id)?.name ?? issue.id}{" — "}</> : null}
-              {issue.code === "record_count" && emptyBundle ? t("configurationTransfer.emptyFile") :
-                t(`configurationTransfer.issueCodes.${issue.code}`, { defaultValue: issue.message })}
+              {issue.fields ? localizedError(t, new ApiError(400, issue.message, issue.code, "", issue.fields)) :
+                issue.code === "record_count" && emptyBundle ? t("configurationTransfer.emptyFile") :
+                  t(`configurationTransfer.issueCodes.${issue.code}`, { defaultValue: issue.message })}
             </li>)}</ul>
           </div>}
-          {hasProviders && <>
+          {showBindings && <>
             <div className="configuration-transfer-row configuration-section-header">
               <div>
                 <h4>{t("configurationTransfer.targetBindings")}</h4>
@@ -214,10 +250,10 @@ export function ConfigurationTransferPanel() {
             {(credentials.error || proxies.error) && <ErrorState error={credentials.error || proxies.error} />}
             {preview.providers.map((provider) => <ConfigurationProviderBinding key={provider.id}
               provider={provider} target={targets.get(provider.id) ?? emptyTarget}
-              credentials={credentials.data?.items ?? []} proxies={proxies.data?.items ?? []}
+              credentials={credentials.data?.items ?? []} credentialsReady={credentials.isSuccess} proxies={proxies.data?.items ?? []}
               disabled={busy} onChange={(change) => updateTarget(provider.id, change)} />)}
           </>}
-          <ConfigurationNotices notices={preview.notices ?? []} />
+          {!scopeDirty && <ConfigurationNotices notices={preview.notices ?? []} />}
           {canApply && Boolean(preview.region_changes?.length) && <div className="notice info configuration-list">
             <strong>{t("configurationTransfer.regionChanges")}</strong>
             <ul>{preview.region_changes?.map((change) => <li key={change.id}>{change.name} ({change.source_region || "—"} → {change.target_region})</li>)}</ul>
@@ -235,11 +271,11 @@ export function ConfigurationTransferPanel() {
           {canApply && <ConfigurationActivationSteps deployments={preview.deployments_to_enable} routes={preview.routes_to_enable} />}
         </>}
         {bundle && !fileRejected && <div className="form-actions configuration-transfer-actions">
-          <button type="button" className={`button${canApply ? "" : " primary"}`} disabled={busy} onClick={() => void reviewImport()}>
-            {busy ? t("common.working") : t("configurationTransfer.preview")}
+          <button type="button" className={`button${canApply || targetBlocked ? "" : " primary"}`} disabled={busy || !hasSelection} onClick={() => void reviewImport()}>
+            {busy ? t("common.working") : t(targetBlocked ? "configurationTransfer.recheckTarget" : "configurationTransfer.preview")}
           </button>
-          {preview?.plan_id && <ConfirmButton className="button primary" label={t("configurationTransfer.apply")}
-            title={t("configurationTransfer.apply")} confirmLabel={t("configurationTransfer.confirm")}
+          {preview && canApply && <ConfirmButton className="button primary" label={t("configurationTransfer.apply")}
+            title={t("configurationTransfer.apply")} confirmLabel={t(preview.counts.gateway_keys > 0 ? "configurationTransfer.confirm" : "configurationTransfer.confirmWithoutKeys")}
             disabled={busy || (Boolean(preview.operator_declarations?.length) && !acceptDeclarations)} requireStepUp onConfirm={applyImport} />}
         </div>}
       </>}
@@ -297,43 +333,117 @@ function ConfigurationNotices({ notices }: { notices: ConfigurationNotice[] }) {
   </div>;
 }
 
-function ConfigurationCounts({ counts }: { counts: ConfigurationImportPreview["counts"] }) {
+function ConfigurationSelectionFields({ options, selection, disabled, onChange }: {
+  options: NonNullable<ConfigurationImportPreview["selection_options"]>;
+  selection: ConfigurationImportSelection;
+  disabled: boolean;
+  onChange: (selection: ConfigurationImportSelection) => void;
+}) {
+  const { t } = useTranslation();
+  const canSelect = options.projects.length > 0 || options.route_aliases.length > 0;
+  const toggle = (values: string[], value: string, checked: boolean) => checked ? [...values, value] : values.filter((entry) => entry !== value);
+  return <fieldset className="configuration-binding" disabled={disabled}>
+    <legend>{t("configurationTransfer.selectionTitle")}</legend>
+    {canSelect && <>
+      <div className="configuration-scope-modes">
+        <label className="configuration-acknowledgement"><input type="radio" name="configuration-scope" checked={selection.mode === "all"}
+          onChange={() => onChange({ mode: "all", include_gateway_keys: selection.include_gateway_keys })} />
+          <span>{t("configurationTransfer.allConfiguration")}</span></label>
+        <label className="configuration-acknowledgement"><input type="radio" name="configuration-scope" checked={selection.mode === "selected"}
+          onChange={() => onChange({ mode: "selected", project_ids: [], route_aliases: [], include_gateway_keys: false })} />
+          <span>{t("configurationTransfer.selectedConfiguration")}</span></label>
+      </div>
+      {selection.mode === "selected" && <>
+        <p className="configuration-transfer-description">{t("configurationTransfer.selectionHelp")}</p>
+        <div className="configuration-binding-fields configuration-scope-choices">
+          {options.projects.length > 0 && <fieldset className="configuration-scope-options">
+            <legend>{t("configurationTransfer.resources.projects")}</legend>
+            {options.projects.map((project) => <label className="configuration-acknowledgement" key={project.id}>
+              <input type="checkbox" checked={selection.project_ids.includes(project.id)} onChange={(event) =>
+                onChange({ ...selection, project_ids: toggle(selection.project_ids, project.id, event.target.checked) })} />
+              <span>{project.name} <small className="configuration-transfer-note">{project.id}</small></span>
+            </label>)}
+          </fieldset>}
+          {options.route_aliases.length > 0 && <fieldset className="configuration-scope-options">
+            <legend>{t("configurationTransfer.modelAliases")}</legend>
+            {options.route_aliases.map((alias) => <label className="configuration-acknowledgement" key={alias}>
+              <input type="checkbox" checked={selection.route_aliases.includes(alias)} onChange={(event) =>
+                onChange({ ...selection, route_aliases: toggle(selection.route_aliases, alias, event.target.checked) })} />
+              <span>{alias}</span>
+            </label>)}
+          </fieldset>}
+        </div>
+      </>}
+    </>}
+    {options.gateway_keys > 0 && <label className="configuration-acknowledgement">
+      <input type="checkbox" checked={selection.include_gateway_keys} disabled={selection.mode === "selected" && !selection.project_ids.length} onChange={(event) =>
+        onChange({ ...selection, include_gateway_keys: event.target.checked })} />
+      <span>{t("configurationTransfer.issueGatewayKeys")}</span>
+    </label>}
+  </fieldset>;
+}
+
+function ConfigurationCounts({ counts, pending = false }: { counts: ConfigurationImportPreview["counts"]; pending?: boolean }) {
   const { t } = useTranslation();
   const populated = resources.filter((resource) => counts[resource] > 0);
   if (!populated.length) return null;
-  return <section className="configuration-count-summary" aria-label={t("configurationTransfer.configurationSummary")}>
-    <h4>{t("configurationTransfer.configurationSummary")}</h4>
+  const title = t(pending ? "configurationTransfer.fileSummary" : "configurationTransfer.configurationSummary");
+  return <section className="configuration-count-summary" aria-label={title}>
+    <h4>{title}</h4>
     <dl className="configuration-counts">{populated.map((resource) => <div key={resource}>
       <dt>{t(`configurationTransfer.resources.${resource}`)}</dt><dd>{counts[resource]}</dd>
     </div>)}</dl>
   </section>;
 }
 
-function ConfigurationProviderBinding({ provider, target, credentials, proxies, disabled, onChange }: {
+function configurationEndpointOrigin(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return;
+    url.hostname = url.hostname.replace(/\.$/, "");
+    return url.origin;
+  } catch {
+    return undefined;
+  }
+}
+
+function ConfigurationProviderBinding({ provider, target, credentials, credentialsReady, proxies, disabled, onChange }: {
   provider: ConfigurationProviderReview;
   target: ConfigurationProviderTarget;
   credentials: Credential[];
+  credentialsReady: boolean;
   proxies: ProviderEgressProxy[];
   disabled: boolean;
   onChange: (change: Partial<ConfigurationProviderTarget>) => void;
 }) {
   const { t } = useTranslation();
-  const compatible = credentials.filter((credential) => credential.secret_configured && credential.type === provider.type &&
+  const endpoint = target.base_url ?? provider.base_url;
+  const origin = configurationEndpointOrigin(endpoint);
+  const sameType = credentials.filter((credential) => credential.secret_configured && credential.type === provider.type &&
     credential.access_surface === provider.access_surface && credential.scheme === provider.credential_scheme);
+  const compatible = origin ? sameType.filter((credential) => configurationEndpointOrigin(credential.bound_base_url) === origin) : [];
+  const selectedCredential = sameType.find((credential) => credential.id === target.credential_id);
+  const policyIsCurrent = endpoint.trim() === provider.base_url;
   return <fieldset className="configuration-binding" disabled={disabled}>
     <legend>{provider.name}</legend>
     <div className="configuration-binding-fields">
       <label className="field configuration-endpoint"><span>{t("configurationTransfer.endpoint")}</span>
-        <input type="url" value={target.base_url ?? provider.base_url} onChange={(event) =>
-          onChange({ base_url: event.target.value, acknowledged_policy_revision: undefined })} />
+        <input type="url" value={endpoint} onChange={(event) => {
+          const next = event.target.value;
+          onChange({ base_url: next, acknowledged_policy_revision: undefined,
+            ...(selectedCredential && configurationEndpointOrigin(next) !== configurationEndpointOrigin(selectedCredential.bound_base_url) ? { credential_id: "" } : {}),
+          });
+        }} />
       </label>
       <label className="field"><span>{t("configurationTransfer.credential")}</span>
-        <select value={target.credential_id} onChange={(event) => onChange({ credential_id: event.target.value })}>
+        <select value={compatible.some((credential) => credential.id === target.credential_id) ? target.credential_id : ""}
+          disabled={compatible.length === 0} onChange={(event) => onChange({ credential_id: event.target.value })}>
           <option value="">{t("configurationTransfer.selectCredential")}</option>
           {compatible.map((credential) => <option key={credential.id} value={credential.id}>
             {credential.name} ({credential.bound_base_url})
           </option>)}
         </select>
+        {credentialsReady && compatible.length === 0 && <small>{t(origin ? "configurationTransfer.noMatchingCredential" : "configurationTransfer.enterEndpointFirst")}</small>}
       </label>
       <label className="field"><span>{t("configurationTransfer.proxy")}</span>
         <select value={target.egress_proxy_id ?? ""} onChange={(event) => onChange({ egress_proxy_id: event.target.value })}>
@@ -346,7 +456,7 @@ function ConfigurationProviderBinding({ provider, target, credentials, proxies, 
           onChange({ bedrock_project_id: event.target.value })} />
       </label>}
     </div>
-    {provider.policy_revision && <label className="configuration-acknowledgement">
+    {policyIsCurrent && provider.policy_revision && <label className="configuration-acknowledgement">
       <input type="checkbox" checked={target.acknowledged_policy_revision === provider.policy_revision} onChange={(event) =>
         onChange({ acknowledged_policy_revision: event.target.checked ? provider.policy_revision : undefined })} />
       <span>{t("configurationTransfer.policyAcknowledgement")}{" "}

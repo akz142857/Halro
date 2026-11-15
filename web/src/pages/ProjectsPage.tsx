@@ -14,6 +14,7 @@ import {
   Loading,
   LoadMore,
   Modal,
+  OverflowMenu,
   PageHeader,
   ReauthFields,
   ResourceToolbar,
@@ -24,7 +25,7 @@ import {
 } from "../components";
 import { compactNumber, money, useInstantFormatter } from "../format";
 import { useAccountingTimeZone, zonedInputToISO } from "../timezone";
-import type { CreatedGatewayKey, GatewayKey, GatewayScope, Project } from "../types";
+import type { CreatedGatewayKey, Deployment, GatewayKey, GatewayScope, Project, Route } from "../types";
 import { useTranslation } from "react-i18next";
 import { GatewayKeyScopes } from "./GatewayKeyScopes";
 import { useNotify } from "../notifications";
@@ -88,6 +89,19 @@ type ProjectValue = z.output<ReturnType<typeof projectSchema>>;
 
 function pageQuery(cursor: string) {
   return `?${new URLSearchParams({ limit: PAGE_SIZE, ...(cursor ? { cursor } : {}) })}`;
+}
+
+function routeHasUsableTarget(route: Route, deployment: Deployment | undefined) {
+  return route.enabled && !route.withheld && deployment?.enabled && !deployment.pricing_quarantined &&
+    deployment.probe?.state !== "unhealthy";
+}
+
+function gatewayKeyScopes(key: GatewayKey): GatewayScope[] {
+  return key.scopes?.length ? key.scopes : ["inference"];
+}
+
+function gatewayKeyExpired(key: GatewayKey) {
+  return Boolean(key.expires_at && new Date(key.expires_at).getTime() <= Date.now());
 }
 
 function projectUpdateBody(project: Project, enabled: boolean) {
@@ -155,7 +169,7 @@ export function ProjectsPage() {
         title={t("projects.title")}
         action={
           <div className="button-group">
-            {!readOnly && <Link className="button secondary" href="/admin/settings/ai-configuration">{t("settings.panes.ai-configuration")}</Link>}
+            {!readOnly && <Link className="button secondary" href="/admin/settings/ai-configuration">{t("projects.aiConfigurationEntry")}</Link>}
             <button className="button primary" disabled={readOnly} onClick={() => setCreating(true)}>{t("projects.create")}</button>
           </div>
         }
@@ -197,7 +211,11 @@ export function ProjectsPage() {
                     <strong>{project.name}</strong>
                   </span>
                   <span className="resource-meta">
-                    {compactNumber(project.rpm)} RPM · {money(project.daily_budget_micros_usd)}{t("projects.perDay")}
+                    {project.rpm ? `${compactNumber(project.rpm)} RPM` : t("projects.noProjectRateLimit")}
+                    {" · "}
+                    {project.daily_budget_micros_usd
+                      ? t("projects.budgetPerDay", { amount: money(project.daily_budget_micros_usd) })
+                      : t("projects.noProjectBudgetLimit")}
                   </span>
                   <code>{project.id}</code>
                 </button>
@@ -233,6 +251,37 @@ function ProjectDetail({ project }: { project: Project }) {
     getNextPageParam: (page) => page.next_cursor || undefined,
   });
   const keyItems = keys.data?.pages.flatMap((page) => page.items) ?? [];
+  const aliases = new Set(project.allowed_models ?? []);
+  const checkRoutes = project.enabled && aliases.size > 0;
+  const routes = useQuery({ queryKey: ["routes"], queryFn: api.routes, enabled: checkRoutes });
+  const deployments = useQuery({ queryKey: ["deployments"], queryFn: api.deployments, enabled: checkRoutes });
+  const routeStatusKnown = checkRoutes && routes.isSuccess && deployments.isSuccess;
+  const authorizedRoutes = routeStatusKnown ? routes.data.items.filter((route) =>
+    route.enabled && aliases.has(route.public_model)
+  ) : undefined;
+  const deploymentByID = new Map(deployments.data?.items.map((deployment) => [deployment.id, deployment]));
+  const routableAliases = authorizedRoutes
+    ? new Set(authorizedRoutes.filter((route) =>
+      routeHasUsableTarget(route, deploymentByID.get(route.deployment_id))
+    ).map((route) => route.public_model))
+    : undefined;
+  const inferenceKeys = keyItems.filter((key) => !gatewayKeyExpired(key) && gatewayKeyScopes(key).includes("inference"));
+  const hasInferenceKey = inferenceKeys.some((key) => key.enabled);
+  let callState: "disabled" | "missingModels" | "checking" | "routesUnknown" | "missingRoutes" | "missingTargets" |
+    "keysUnknown" | "moreKeys" | "missingKey" | "noInferenceKey" | "disabledInferenceKey" | "ready";
+  if (!project.enabled) callState = "disabled";
+  else if (!aliases.size) callState = "missingModels";
+  else if (routes.isError || deployments.isError) callState = "routesUnknown";
+  else if (!routableAliases) callState = "checking";
+  else if (!routableAliases.size) callState = authorizedRoutes?.length ? "missingTargets" : "missingRoutes";
+  else if (keys.isPending) callState = "checking";
+  else if (keys.isError && !keys.isFetchNextPageError) callState = "keysUnknown";
+  else if (hasInferenceKey) callState = "ready";
+  else if (keys.hasNextPage) callState = "moreKeys";
+  else if (!keyItems.length) callState = "missingKey";
+  else if (inferenceKeys.length) callState = "disabledInferenceKey";
+  else callState = "noInferenceKey";
+
   const { notify } = useNotify();
   const unblock = useMutation({
     mutationFn: (reauth: ReauthValues) => api.unblockProject(project.id, reauth),
@@ -254,11 +303,10 @@ function ProjectDetail({ project }: { project: Project }) {
     },
   });
   return (
-    <section className="detail-panel">
+    <section className="detail-panel project-detail" aria-labelledby="selected-project-name">
       <header className="detail-title">
         <div>
-          <p className="eyebrow">{t("projects.policy")}</p>
-          <h2>
+          <h2 id="selected-project-name">
             {project.name}
             <span className={`badge ${project.enabled ? "good" : "muted"}`}>
               {project.enabled ? t("common.enabled") : t("common.disabled")}
@@ -267,103 +315,129 @@ function ProjectDetail({ project }: { project: Project }) {
           <code>{project.id}</code>
         </div>
         <div className="row-actions">
-          <button type="button" className="button secondary" onClick={() => setAIIntegration(true)}>{t("aiIntegration.title")}</button>
-          {/* Lifting the block switches off a control that is currently in
-              force, so it asks for the same proof a deletion does. */}
-          <ConfirmButton
-            className="button ghost"
-            label={t("projects.unblock")}
-            confirmLabel={t("projects.unblockConfirm", { name: project.name })}
-            disabled={unblock.isPending}
-            requireStepUp
-            onConfirm={(reauth) => unblock.mutateAsync(reauth)}
-          />
-          {/* Disabling a project revokes every gateway key under it at once, which
-              is strictly larger than disabling one key — and that already asks.
-              The count comes from the keys actually loaded, so a list still being
-              paged says "at least". */}
-          {project.enabled
-            ? <ConfirmButton
-              className="button secondary"
-              label={t("common.disable")}
-              title={t("projects.disableTitle")}
-              confirmLabel={t(keys.hasNextPage ? "projects.disableConfirmMoreKeys" : "projects.disableConfirm", { name: project.name, count: keyItems.length })}
+          <button className="button secondary" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setEditing(true)}>{t("projects.edit")}</button>
+          {!readOnly && <OverflowMenu label={t("projects.moreActions")}>
+            {project.enabled && <ConfirmButton
+              className="button ghost"
+              label={t("projects.disableProject")}
+              confirmLabel={keys.isSuccess
+                ? t(keys.hasNextPage ? "projects.disableConfirmMoreKeys" : "projects.disableConfirm", { name: project.name, count: keyItems.length })
+                : t("projects.disableConfirmAllKeys", { name: project.name })}
               disabled={toggleStatus.isPending}
               onConfirm={() => toggleStatus.mutateAsync()}
+            />}
+            <ConfirmButton
+              label={t("projects.deleteProject")}
+              confirmLabel={t("projects.deleteConfirm", { name: project.name })}
+              disabled={remove.isPending}
+              requireStepUp
+              onConfirm={(reauth) => remove.mutateAsync(reauth)}
             />
-            : <button className="button secondary" disabled={readOnly || toggleStatus.isPending} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => toggleStatus.mutate()}>{toggleStatus.isPending ? t("common.working") : t("common.enable")}</button>}
-          <button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setEditing(true)}>{t("common.edit")}</button>
-          <ConfirmButton
-            label={t("common.delete")}
-            confirmLabel={t("projects.deleteConfirm", { name: project.name })}
-            disabled={remove.isPending}
-            requireStepUp
-            onConfirm={(reauth) => remove.mutateAsync(reauth)}
-          />
+          </OverflowMenu>}
         </div>
       </header>
-      {/* Quotas are read rarely and changed through the edit form anyway. Gateway keys are
-          what an operator comes here for, so the policy block starts folded away. */}
+
+      <section className="project-call-status" aria-labelledby="project-call-status-title">
+        <div className="project-call-copy">
+          <h3 id="project-call-status-title">{t("projects.callStatusTitle")}</h3>
+          <div role="status">
+            <strong className={`project-call-verdict ${callState === "ready" ? "ready" : ""}`}>{t(`projects.callStatus.${callState}.title`)}</strong>
+            <p>{t(`projects.callStatus.${callState}.description`)}</p>
+          </div>
+          <div className="project-call-counts">
+            <span>{t("projects.modelCount", { count: aliases.size })}</span>
+            {routableAliases && <span>{t("projects.routableModelCount", { count: routableAliases.size })}</span>}
+          </div>
+        </div>
+        {callState === "disabled" && <button className="button primary" disabled={readOnly || toggleStatus.isPending} onClick={() => toggleStatus.mutate()}>{toggleStatus.isPending ? t("common.working") : t("projects.enableProject")}</button>}
+        {callState === "missingModels" && <button className="button primary" disabled={readOnly} onClick={() => setEditing(true)}>{t("projects.authorizeModels")}</button>}
+        {(callState === "missingRoutes" || callState === "missingTargets") && <Link className="button primary" href="/admin/routes">{t("projects.viewModelRoutes")}</Link>}
+        {callState === "routesUnknown" && <button className="button secondary" disabled={routes.isFetching || deployments.isFetching} onClick={() => { void routes.refetch(); void deployments.refetch(); }}>{t("common.retry")}</button>}
+        {callState === "keysUnknown" && <button className="button secondary" disabled={keys.isFetching} onClick={() => void keys.refetch()}>{t("common.retry")}</button>}
+      </section>
+      {toggleStatus.isError && <ErrorState error={toggleStatus.error} />}
+      {remove.isError && !isStepUpPrompt(remove.error) && <ErrorState error={remove.error} />}
+
+      <section className="project-keys" aria-labelledby="project-keys-title">
+        <header className="section-header">
+          <div>
+            <h3 id="project-keys-title">{t("projects.gatewayKeys")}</h3>
+            <p>{t("projects.gatewayKeysPurpose")}</p>
+          </div>
+          <div className="row-actions">
+            {keyItems.length > 0 && <button className="button secondary" disabled={readOnly} onClick={() => setKeyDialog(true)}>{t("projects.createKey")}</button>}
+            <button className="button secondary" onClick={() => setAIIntegration(true)}>{t("aiIntegration.title")}</button>
+          </div>
+        </header>
+        {keys.isPending && <Loading label={t("projects.loadingKeys")} />}
+        {keys.isError && <ErrorState error={keys.error} />}
+        {keys.isSuccess && keyItems.length === 0 && !keys.hasNextPage && (
+          <div className="project-key-empty">
+            <strong>{t("projects.noKeysTitle")}</strong>
+            <button className={`button ${callState === "missingKey" ? "primary" : "secondary"}`} disabled={readOnly} onClick={() => setKeyDialog(true)}>{t("projects.createFirstKey")}</button>
+          </div>
+        )}
+        {keyItems.map((key) => <KeyRow project={project} value={key} key={key.id} />)}
+        {keys.hasNextPage && (
+          <LoadMore
+            label={keys.isFetchingNextPage ? t("common.loadingMore") : t("common.loadMore")}
+            busy={keys.isFetchingNextPage}
+            onLoad={keys.fetchNextPage}
+          />
+        )}
+      </section>
+
       <details className="policy-details">
         <summary>
           <svg className="policy-details-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" /></svg>
           <span className="policy-details-label">{t("projects.policyDetails")}</span>
           <small>{[
-            (project.allowed_models ?? []).length
-              ? t("projects.modelCount", { count: (project.allowed_models ?? []).length })
-              : t("common.none"),
-            `${compactNumber(project.rpm)} RPM`,
-            project.daily_budget_micros_usd ? money(project.daily_budget_micros_usd) : t("common.unlimited"),
-            project.run_governance?.enabled ? t("projects.runGovernanceEnabled") : t("projects.runGovernanceDisabled"),
+            project.rpm ? `${compactNumber(project.rpm)} RPM` : t("projects.noProjectRateLimit"),
+            project.daily_budget_micros_usd
+              ? t("projects.budgetPerDay", { amount: money(project.daily_budget_micros_usd) })
+              : t("projects.noProjectBudgetLimit"),
           ].join(" · ")}</small>
-          {/* Looks and behaves like the expand control the provider and deployment rows
-              use. Not a real button — nesting one inside <summary> is invalid, and the
-              summary already exposes the expanded state to assistive tech. */}
           <span className="button ghost policy-details-toggle" aria-hidden="true">
             <span className="on-closed">{t("common.expandDetails")}</span>
             <span className="on-open">{t("common.collapseDetails")}</span>
           </span>
         </summary>
         <div className="policy-grid">
-          <Policy label={t("projects.allowedModels")} value={(project.allowed_models ?? []).join(", ") || t("common.none")} />
-          <Policy label={t("projects.rateLimit")} value={`${compactNumber(project.rpm)} RPM / ${compactNumber(project.tpm)} TPM`} />
+          <Policy label={t("projects.allowedModels")} value={[...aliases].join(", ") || t("common.none")} />
+          <Policy label={t("projects.rateLimit")} value={[
+            project.rpm ? `${compactNumber(project.rpm)} RPM` : t("projects.noProjectRateLimit"),
+            project.tpm ? `${compactNumber(project.tpm)} TPM` : t("projects.noProjectTokenLimit"),
+          ].join(" · ")} />
           <Policy label={t("projects.concurrency")} value={String(project.max_concurrency || t("common.unlimited"))} />
           <Policy label={t("projects.dailyBudget")} value={project.daily_budget_micros_usd ? money(project.daily_budget_micros_usd) : t("common.unlimited")} />
-          <Policy label={t("projects.tokenGuardPolicy")} value={project.token_guard_policy_id || t("projects.notAttached")} />
           <Policy label={t("projects.runGovernance")} value={project.run_governance?.enabled
-            ? `${money(project.run_governance.default_run_budget_micros_usd)} / ${project.run_governance.default_run_ttl_seconds / 3600}h`
+            ? `${t("projects.runGovernanceEnabled")} · ${money(project.run_governance.default_run_budget_micros_usd)} / ${project.run_governance.default_run_ttl_seconds / 3600}h`
             : t("projects.runGovernanceDisabled")} />
         </div>
         {project.run_governance?.enabled && <Link className="notice-link" href={`/admin/run-governance?project_id=${encodeURIComponent(project.id)}`}>{t("projects.openRunGovernance")} →</Link>}
+        <div className="project-security">
+          <h3>{t("projects.securityControls")}</h3>
+          <div className="policy-grid">
+            <Policy label={t("projects.tokenGuardPolicy")} value={project.token_guard_policy_id || t("projects.notAttached")} />
+            <Policy label={t("projects.redactionPolicy")} value={project.redaction_policy_id || t("projects.notAttached")} />
+          </div>
+          {!readOnly && <div className="project-guard-action">
+            <p>{t("projects.unblockDescription")}</p>
+            <ConfirmButton
+              className="button secondary"
+              label={t("projects.unblock")}
+              confirmLabel={t("projects.unblockConfirm", { name: project.name })}
+              disabled={unblock.isPending}
+              requireStepUp
+              onConfirm={(reauth) => unblock.mutateAsync(reauth)}
+            />
+          </div>}
+          {unblock.isError && !isStepUpPrompt(unblock.error) && <ErrorState error={unblock.error} />}
+        </div>
       </details>
-      {unblock.isError && !isStepUpPrompt(unblock.error) && <ErrorState error={unblock.error} />}
-      {toggleStatus.isError && <ErrorState error={toggleStatus.error} />}
-      {remove.isError && !isStepUpPrompt(remove.error) && <ErrorState error={remove.error} />}
-      <header className="section-header">
-        <div><p className="eyebrow">{t("projects.credentials")}</p><h3>{t("projects.gatewayKeys")}</h3></div>
-        <button className="button secondary" disabled={readOnly} onClick={() => setKeyDialog(true)}>{t("projects.createKey")}</button>
-      </header>
-      {keys.isPending && <Loading label={t("projects.loadingKeys")} />}
-      {keys.isError && <ErrorState error={keys.error} />}
-      {keys.isSuccess && keyItems.length === 0 && (
-        <EmptyState
-          title={t("projects.noKeysTitle")}
-          action={<button className="button secondary" disabled={readOnly} onClick={() => setKeyDialog(true)}>{t("projects.createKey")}</button>}
-        >
-          {t("projects.noKeys")}
-        </EmptyState>
-      )}
-      {keyItems.map((key) => <KeyRow project={project} value={key} key={key.id} />)}
-      {keys.hasNextPage && (
-        <LoadMore
-          label={keys.isFetchingNextPage ? t("common.loadingMore") : t("common.loadMore")}
-          busy={keys.isFetchingNextPage}
-          onLoad={keys.fetchNextPage}
-        />
-      )}
       {keyDialog && <CreateKey project={project} onClose={() => setKeyDialog(false)} />}
       {editing && <ProjectForm current={project} onClose={() => setEditing(false)} />}
-      {aiIntegration && <ProjectAIIntegration project={project} onClose={() => setAIIntegration(false)} />}
+      {aiIntegration && <ProjectAIIntegration project={project} preferredModel={routableAliases?.values().next().value} onClose={() => setAIIntegration(false)} />}
     </section>
   );
 }
@@ -379,7 +453,7 @@ function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
     mutationFn: () => api.updateKey(
       project.id,
       value.id,
-      { name: value.name, enabled: !value.enabled, scopes: value.scopes ?? ["inference"], ...(value.expires_at ? { expires_at: value.expires_at } : {}) },
+      { name: value.name, enabled: !value.enabled, scopes: gatewayKeyScopes(value), ...(value.expires_at ? { expires_at: value.expires_at } : {}) },
       value.revision,
     ),
     onSuccess: () => {
@@ -397,18 +471,18 @@ function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
       notify({ tone: "success", title: t("projects.notifyKeyDeleted"), description: value.name });
     },
   });
-  const expired = Boolean(value.expires_at && new Date(value.expires_at).getTime() <= Date.now());
+  const expired = gatewayKeyExpired(value);
   const live = value.enabled && !expired;
   return (
     <>
       <div id={`gateway-key-${value.id}`} className="key-row">
         <div>
           <span>
-            <StatusDot ok={live} label={live ? t("common.enabled") : expired ? t("projects.expired") : t("common.disabled")} />
             <strong>{value.name}</strong>
+            <span className={`badge ${live ? "good" : "muted"}`}>{t(live ? "common.enabled" : expired ? "projects.expired" : "common.disabled")}</span>
           </span>
           <code>{value.id}</code>
-          <small>{t("projects.keyScopes")}: {(value.scopes ?? ["inference"]).join(", ")}</small>
+          <small>{t("projects.keyScopes")}: {gatewayKeyScopes(value).join(", ")}</small>
         </div>
         <div className="key-dates">
           <small>{t("projects.created", { date: dateTime(value.created_at) })}</small>
@@ -485,7 +559,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
       // contradictory answers about the same alias — one said two targets, the
       // other said one of them was withheld.
       const deployment = deploymentByID.get(route.deployment_id);
-      if (!route.withheld && deployment?.enabled && deployment.probe?.state !== "unhealthy") {
+      if (routeHasUsableTarget(route, deployment)) {
         existing.targetCount += 1;
         existing.strategies.add(route.strategy || "ordered");
       }

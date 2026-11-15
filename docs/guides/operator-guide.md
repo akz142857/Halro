@@ -116,10 +116,13 @@ inference and discovery scopes for the intended project to list `/v1/models`.
 In the source console, open **Settings → Configuration transfer** and download
 the JSON bundle. Sign in to a fresh target instance, create target provider
 credentials and any required egress proxies, then upload the file in the same
-settings pane. Review the endpoints, select target credentials and check the
-import before confirming. Review any listed model capability declarations and
-changes to Bedrock Mantle regions. Download and save the newly issued gateway
-keys from the result, then validate and enable the deployments and their routes.
+settings pane. Import the whole configuration or select projects and model
+aliases. Halro includes the dependencies, including each alias's complete
+route group. Review the endpoints, select matching target credentials and check
+the import before confirming. Review any listed capability declarations and
+changes to Bedrock Mantle regions. If you opt in to issuing new gateway keys,
+download and save them from the result. Then validate and enable deployments
+and their routes.
 If the primary saves the import but replica confirmation is unavailable, use
 the displayed operation ID to check the import. After the cluster recovers,
 revoke and replace the listed keys from Projects.

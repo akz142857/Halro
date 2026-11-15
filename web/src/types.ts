@@ -1680,10 +1680,15 @@ export interface ConfigurationNotice {
   alias?: string;
 }
 
+export type ConfigurationImportSelection = { include_gateway_keys: boolean } & (
+  { mode: "all" } | { mode: "selected"; project_ids: string[]; route_aliases: string[] }
+);
+
 export interface ConfigurationImportPreview {
   counts: Record<ConfigurationResource, number>;
+  selection_options?: { projects: ConfigurationObject[]; route_aliases: string[]; gateway_keys: number };
   providers: ConfigurationProviderReview[];
-  issues: { resource: ConfigurationResource | "bundle" | "target"; id?: string; code: string; message: string }[];
+  issues: { resource: ConfigurationResource | "bundle" | "target"; id?: string; code: string; message: string; fields?: Record<string, string> }[];
   deployments_to_enable: ConfigurationObject[];
   routes_to_enable: ConfigurationObject[];
   notices?: ConfigurationNotice[];

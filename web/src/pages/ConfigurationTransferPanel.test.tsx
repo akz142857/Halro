@@ -57,6 +57,10 @@ it("requires a fresh preview after binding edits and offers newly issued keys on
     .mockResolvedValueOnce({ ...unbound, issues: [], plan_id: "reviewed-plan" });
   vi.spyOn(api, "credentials").mockResolvedValue({ items: [{
     id: "crd_target", name: "Test credential", type: "openai", access_surface: "openai-api",
+    scheme: "bearer.static", secret_configured: true, bound_base_url: "https://api.openai.com:443",
+    key_version: 1, revision: 1, offering_id: "", region_id: "",
+  }, {
+    id: "crd_other", name: "Credential for another endpoint", type: "openai", access_surface: "openai-api",
     scheme: "bearer.static", secret_configured: true, bound_base_url: "https://target.example",
     key_version: 1, revision: 1, offering_id: "", region_id: "",
   }], next_cursor: "" });
@@ -80,12 +84,13 @@ it("requires a fresh preview after binding edits and offers newly issued keys on
   Object.defineProperty(file, "text", { value: () => Promise.resolve(source) });
   fireEvent.change(await screen.findByLabelText("配置文件"), { target: { files: [file] } });
   await screen.findByRole("option", { name: /Test credential/ });
+  expect(screen.queryByRole("option", { name: /Credential for another endpoint/ })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "导入配置" })).not.toBeInTheDocument();
 
   fireEvent.change(screen.getByLabelText("目标凭据"), { target: { value: "crd_target" } });
   fireEvent.click(screen.getByRole("button", { name: "检查导入" }));
   await screen.findByRole("button", { name: "导入配置" });
-  fireEvent.change(screen.getByLabelText("目标端点"), { target: { value: "https://target.example" } });
+  fireEvent.change(screen.getByLabelText("目标端点"), { target: { value: "https://api.openai.com/v1" } });
   expect(screen.queryByRole("button", { name: "导入配置" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "检查导入" }));
   const importButton = await screen.findByRole("button", { name: "导入配置" });
@@ -102,8 +107,8 @@ it("requires a fresh preview after binding edits and offers newly issued keys on
   expect(await screen.findByText("配置已导入。")).toBeVisible();
   expect(preview).toHaveBeenCalledTimes(3);
   expect(apply).toHaveBeenLastCalledWith(source, {
-    prv_source: { credential_id: "crd_target", base_url: "https://target.example", acknowledged_policy_revision: undefined },
-  }, "reviewed-plan", { currentPassword: "local test password", totpCode: "" }, true);
+    prv_source: { credential_id: "crd_target", base_url: "https://api.openai.com/v1", acknowledged_policy_revision: undefined },
+  }, "reviewed-plan", { currentPassword: "local test password", totpCode: "" }, true, { mode: "all", include_gateway_keys: false });
   expect(screen.getByRole("link", { name: "chat → Chat deployment" })).toHaveAttribute("href", "/admin/routes#route-rte_chat");
   expect(screen.getByRole("button", { name: "下载新密钥" })).toBeVisible();
   const dismiss = screen.getByRole("button", { name: "关闭密钥下载" });
@@ -153,10 +158,44 @@ it("shows the current preview after a conflict and explains recovery after a loc
   await screen.findByText("目标实例已有配置或删除记录，请使用新实例。", { exact: false });
   expect(screen.queryByRole("button", { name: "导入配置" })).not.toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole("button", { name: "检查导入" }));
+  fireEvent.click(screen.getByRole("button", { name: "重新检查目标" }));
   await submitImport();
   expect(await screen.findByText("配置已写入主节点，暂时无法确认副本。")).toBeVisible();
   expect(screen.getByText("aud_local")).toBeVisible();
   expect(screen.getByRole("link", { name: "Test key" })).toHaveAttribute("href", "/admin/projects?project_id=project_fixture");
   expect(screen.queryByRole("button", { name: "下载新密钥" })).not.toBeInTheDocument();
+});
+
+it("invalidates approval when import scope changes and hides binding work on a configured target", async () => {
+  const plan: ConfigurationImportPreview = {
+    counts: { providers: 1, deployments: 1, routes: 1, redaction_policies: 0, token_guard_policies: 0, projects: 2, gateway_keys: 0 },
+    selection_options: { projects: [{ id: "prj_one", name: "Project one" }, { id: "prj_two", name: "Project two" }], route_aliases: ["chat"], gateway_keys: 1 },
+    providers: [], issues: [], deployments_to_enable: [], routes_to_enable: [], plan_id: "initial-plan",
+  };
+  const preview = vi.spyOn(api, "previewConfigurationImport").mockResolvedValueOnce(plan)
+    .mockResolvedValueOnce({ ...plan, issues: [{ resource: "target", code: "target_not_empty", message: "target already configured" }] });
+  window.history.replaceState(null, "", "/admin/settings/transfer");
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client.setQueryData(["session"], { username: "admin", role: "administrator" });
+  render(<QueryClientProvider client={client}><SettingsPage /></QueryClientProvider>);
+  const source = '{"version":2}';
+  const file = new File([source], "transfer.json");
+  Object.defineProperty(file, "text", { value: () => Promise.resolve(source) });
+  fireEvent.change(await screen.findByLabelText("配置文件"), { target: { files: [file] } });
+
+  expect(await screen.findByRole("button", { name: "导入配置" })).toBeEnabled();
+  expect(screen.getByRole("checkbox", { name: "为导入的项目重新签发网关密钥" })).not.toBeChecked();
+  fireEvent.click(screen.getByRole("radio", { name: "选择导入" }));
+  expect(screen.queryByRole("button", { name: "导入配置" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "检查导入" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("checkbox", { name: /Project two/ }));
+  fireEvent.click(screen.getByRole("button", { name: "检查导入" }));
+
+  expect(preview).toHaveBeenLastCalledWith(source, {}, {
+    mode: "selected", project_ids: ["prj_two"], route_aliases: [], include_gateway_keys: false,
+  });
+  expect(await screen.findByRole("alert")).toHaveTextContent("目标实例已有配置或删除记录，请使用新实例。");
+  expect(screen.queryByRole("radio", { name: "选择导入" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "导入配置" })).not.toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "文件摘要" })).toBeVisible();
 });

@@ -107,12 +107,12 @@ export function DeveloperPage() {
     () => (projects.data?.items ?? []).filter((project) => project.enabled && (project.allowed_models ?? []).length > 0),
     [projects.data?.items],
   );
-  // The routes page hands the alias over rather than making the reader retype
-  // it; the project is then whichever enabled one authorizes that alias.
-  const requestedAlias = useMemo(() => new URLSearchParams(window.location.search).get("model") ?? "", []);
-  const [projectID, setProjectID] = useState("");
+  const params = useMemo(() => new URLSearchParams(window.location.search), []);
+  const requestedAlias = params.get("model") ?? "";
+  const onboarding = params.get("onboarding") === "first-request";
+  const [projectID, setProjectID] = useState(() => onboarding ? params.get("project_id") ?? "" : "");
   const selectedProject = availableProjects.find((project) => project.id === projectID)
-    // A deep link names an alias, not a project: open on one that can send it.
+    // A route deep link supplies only an alias.
     ?? (requestedAlias ? availableProjects.find((project) => (project.allowed_models ?? []).includes(requestedAlias)) : undefined)
     ?? availableProjects[0];
   const [model, setModel] = useState(requestedAlias);
@@ -541,7 +541,9 @@ export function DeveloperPage() {
       />
       <OnboardingContextBanner />
       {developerConfig.data?.enabled === false && (
-        <EmptyState title={t("developer.disabledTitle")}>{t("developer.disabledDescription")}</EmptyState>
+        <EmptyState title={t("developer.disabledTitle")}>
+          {t(onboarding ? "dashboard.firstRun.verifyFromClient" : "developer.disabledDescription")}
+        </EmptyState>
       )}
       {projects.isPending && <Loading label={t("developer.loading")} />}
       {projects.isError && <ErrorState error={projects.error} />}

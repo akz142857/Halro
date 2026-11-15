@@ -139,8 +139,9 @@ func TestAdminConfigurationTransferRoundTrip(t *testing.T) {
 	}
 	mismatchedBaseURL := "https://another.example"
 	input.Bindings[bootstrap.ProviderID] = configurationProviderTarget{CredentialID: credential.ID, BaseURL: &mismatchedBaseURL}
-	if preview := previewImport(input); preview.PlanID != "" || len(preview.Issues) == 0 {
-		t.Fatal("credential audience mismatch was accepted")
+	if preview := previewImport(input); preview.PlanID != "" || len(preview.Issues) != 1 ||
+		preview.Issues[0].Code != "credential_base_url_mismatch" || preview.Issues[0].Fields["credential_base_url"] == "" {
+		t.Fatal("credential audience mismatch was not reported")
 	}
 	input.Bindings[bootstrap.ProviderID] = configurationProviderTarget{CredentialID: credential.ID, BaseURL: &targetBaseURL}
 	input.Bundle.Routes[0].DeploymentID = "missing_deployment"
@@ -153,8 +154,31 @@ func TestAdminConfigurationTransferRoundTrip(t *testing.T) {
 	}}); response.Code != http.StatusBadRequest {
 		t.Fatalf("unknown secret fields were accepted: %d", response.Code)
 	}
+	if response := request("/preview", map[string]any{"bundle": map[string]any{
+		"version": configurationBundleVersion, "projects": []map[string]string{{"name": strings.Repeat("x", configurationBundleLimit)}},
+	}}); response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversize bundle accepted: %d", response.Code)
+	}
+	duplicateRoute := input.Bundle.Routes[0]
+	duplicateRoute.ID = "duplicate_target_route"
+	input.Bundle.Routes = append(input.Bundle.Routes, duplicateRoute)
+	if preview := previewImport(input); preview.PlanID != "" || len(preview.Issues) != 1 || preview.Issues[0].Code != "invalid_route_group" {
+		t.Fatalf("duplicate enabled route target was accepted: %+v", preview)
+	}
+	input.Bundle.Routes = input.Bundle.Routes[:1]
+	input.Bundle.Providers = append(input.Bundle.Providers, configurationProvider{ID: "prv_unselected", Name: "Unselected"})
+	input.Bundle.Projects = append(input.Bundle.Projects, configurationProject{
+		ID: "prj_unselected", projectInput: projectInput{Name: "Unselected project"},
+	})
+	input.Selection = &configurationImportSelection{Mode: "selected", ProjectIDs: []string{bootstrap.ProjectID}}
+	withoutKeys := previewImport(input)
+	if withoutKeys.PlanID == "" || len(withoutKeys.SelectionOptions.Projects) != 2 || withoutKeys.Counts["gateway_keys"] != 0 {
+		t.Fatalf("selected import should exclude unselected records and keys by default: %+v", withoutKeys)
+	}
+	input.Selection.IncludeGatewayKeys = true
 	preview := previewImport(input)
 	if preview.PlanID == "" || len(preview.Issues) != 0 || len(preview.DeploymentsToEnable) != 1 || len(preview.RoutesToEnable) != 1 ||
+		preview.PlanID == withoutKeys.PlanID || preview.Counts["providers"] != 1 || preview.Counts["gateway_keys"] != 1 ||
 		len(preview.Declarations) != 1 || len(preview.Notices) != 1 || preview.Notices[0].Alias != "retired-alias" {
 		t.Fatalf("valid configuration did not produce a plan: %+v", preview)
 	}
@@ -165,7 +189,7 @@ func TestAdminConfigurationTransferRoundTrip(t *testing.T) {
 		}
 	}
 	apply.CurrentPassword = stepUpTestPassword
-	apply.PlanID = "outdated-plan"
+	apply.PlanID = withoutKeys.PlanID
 	if response := request("", apply); response.Code != http.StatusConflict {
 		t.Fatalf("import accepted an outdated preview: %d %s", response.Code, response.Body)
 	}
@@ -193,6 +217,10 @@ func TestAdminConfigurationTransferRoundTrip(t *testing.T) {
 	}
 	if response := request("", apply); response.Code != http.StatusConflict || strings.Contains(response.Body.String(), freshKey) {
 		t.Fatalf("replay did not refuse cleanly: %d", response.Code)
+	}
+	if blocked := previewImport(input); blocked.PlanID != "" || len(blocked.Providers) != 0 || blocked.SelectionOptions != nil ||
+		len(blocked.Issues) != 1 || blocked.Issues[0].Code != "target_not_empty" {
+		t.Fatalf("configured target asked for bindings: %+v", blocked)
 	}
 	if err := target.drainAdminAuditIntents(ctx); err != nil {
 		t.Fatal(err)
@@ -381,6 +409,40 @@ func TestConfigurationExportOmitsRetiredDependents(t *testing.T) {
 		!slices.Contains(bundle.Omissions, configurationNotice{Resource: "gateway_keys", ID: bootstrap.KeyID, Code: "retired_project"}) ||
 		!slices.Contains(bundle.Omissions, configurationNotice{Resource: "routes", ID: "dangling_route", Code: "retired_deployment"}) {
 		t.Fatalf("export did not close references: %+v", bundle.Omissions)
+	}
+}
+
+func TestConfigurationImportSelectionClosesAliasGroupsAndPreservesEmptyProjectGrants(t *testing.T) {
+	bundle := configurationBundle{
+		Projects: []configurationProject{
+			{ID: "empty", projectInput: projectInput{Name: "No model grants"}},
+			{ID: "chat", projectInput: projectInput{AllowedModels: []string{"chat"}}},
+		},
+		Routes: []configurationRoute{
+			{ID: "chat_one", routeInput: routeInput{PublicModel: "chat", DeploymentID: "dep_one"}},
+			{ID: "chat_two", routeInput: routeInput{PublicModel: "chat", DeploymentID: "dep_two"}},
+			{ID: "other", routeInput: routeInput{PublicModel: "other", DeploymentID: "dep_other"}},
+		},
+		Deployments: []configurationDeployment{
+			{ID: "dep_one", ProviderID: "prv_one"}, {ID: "dep_two", ProviderID: "prv_one"},
+			{ID: "dep_other", ProviderID: "prv_other"},
+		},
+		Providers:   []configurationProvider{{ID: "prv_one"}, {ID: "prv_other"}},
+		GatewayKeys: []configurationKey{{ID: "one", ProjectID: "chat"}},
+	}
+	var preview configurationImportPreview
+	first, ok := preview.selectConfiguration(bundle, configurationImportSelection{Mode: "selected", ProjectIDs: []string{"empty"}})
+	if !ok || first.recordCount() != 1 || len(first.Projects) != 1 || len(first.Projects[0].AllowedModels) != 0 {
+		t.Fatalf("empty allowlist pulled in unrelated routes: %v, %+v", ok, first.counts())
+	}
+	selected, ok := preview.selectConfiguration(bundle, configurationImportSelection{Mode: "selected", RouteAliases: []string{"chat"}, IncludeGatewayKeys: true})
+	if !ok || len(selected.Routes) != 2 || len(selected.Deployments) != 2 || len(selected.Providers) != 1 ||
+		len(selected.Projects) != 0 || len(selected.GatewayKeys) != 0 {
+		t.Fatalf("alias selection did not preserve its complete group: %v, %+v", ok, selected.counts())
+	}
+	if _, ok := preview.selectConfiguration(bundle, configurationImportSelection{Mode: "selected", ProjectIDs: []string{"not_in_file"}}); ok ||
+		len(preview.Issues) != 1 || preview.Issues[0].Code != "unknown_selected_project" {
+		t.Fatalf("unknown project selection accepted: %+v", preview.Issues)
 	}
 }
 

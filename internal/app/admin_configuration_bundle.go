@@ -1,7 +1,9 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -32,6 +34,18 @@ type configurationBundle struct {
 	Projects           []configurationProject    `json:"projects"`
 	GatewayKeys        []configurationKey        `json:"gateway_keys"`
 	Omissions          []configurationNotice     `json:"omissions,omitempty"`
+}
+
+var errConfigurationBundleTooLarge = errors.New("configuration exceeds the bundle limit")
+
+func (b *configurationBundle) UnmarshalJSON(raw []byte) error {
+	if len(raw) > configurationBundleLimit {
+		return errConfigurationBundleTooLarge
+	}
+	type fields configurationBundle
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode((*fields)(b))
 }
 
 type configurationProvider struct {
