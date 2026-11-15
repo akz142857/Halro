@@ -17,17 +17,17 @@ module and lock files.
 
 | Module | Version | License | Distribution scope |
 |---|---:|---|---|
-| `github.com/aws/aws-sdk-go-v2` | 1.47.4 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/config` | 1.33.11 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/credentials` | 1.20.11 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.62.0 | Apache-2.0 | runtime |
-| `github.com/aws/smithy-go` | 1.28.6 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2` | 1.47.8 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/config` | 1.33.17 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/credentials` | 1.20.17 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.62.5 | Apache-2.0 | runtime |
+| `github.com/aws/smithy-go` | 1.28.9 | Apache-2.0 | runtime |
 | `github.com/go-chi/chi/v5` | 5.5.0 | MIT | runtime |
 | `github.com/google/jsonschema-go` | 0.4.3 | MIT | test/release tooling |
 | `github.com/parquet-go/parquet-go` | 0.32.0 | Apache-2.0 | runtime |
 | `go.etcd.io/bbolt` | 1.5.0 | MIT | runtime |
 | `golang.org/x/crypto` | 0.58.0 | BSD-3-Clause | runtime |
-| `golang.org/x/sys` | 0.49.0 | BSD-3-Clause | runtime |
+| `golang.org/x/sys` | 0.50.0 | BSD-3-Clause | runtime |
 | `gopkg.in/yaml.v3` | 3.0.1 | MIT and Apache-2.0 | runtime |
 
 The 2026-10-23 refresh (Dependabot #460) moves
@@ -599,6 +599,13 @@ its optional binaries stay MIT build tooling under the unchanged upstream
 license. The console's translation helpers match the new i18next overloads,
 and the embedded assets are rebuilt from the reviewed Node 22 lock.
 
+The 2026-11-16 Go runtime refresh (#517) moves `aws-sdk-go-v2` to 1.47.8,
+`config` to 1.33.17, `credentials` to 1.20.17, KMS to 1.62.5, `smithy-go`
+to 1.28.9, and `golang.org/x/sys` to 0.50.0. Nine existing indirect AWS
+modules also move. All 15 modules retain byte-identical LICENSE and, where
+present, NOTICE files. The module path set and distribution notices are
+unchanged. The existing Parquet compression security pins are preserved.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -610,8 +617,8 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `f5f9ef6631db7aa3e576388a1cd3306c67d9fae5`
-- `go.sum`: `c838c88b891fc02db2bc14cbe3017cfdf08e46cf`
+- `go.mod`: `2d3a0ad8b1288f6766cf9a2c5eb8c6d7deea037e`
+- `go.sum`: `6f8c4480662e038e09ec5182f9682a76bda7213c`
 - `web/package.json`: `dfe436bfb8cea30f76c399d8d4999575163db24a`
 - `web/package-lock.json`: `30cf3c5dbae878a2dd3b56ffcd639797b2dd4e2e`
 - `tests/compatibility/go/go.mod`: `773676f6449c95c2b9f3ea98d70003de7c4aa014`
