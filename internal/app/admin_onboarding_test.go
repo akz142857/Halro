@@ -157,6 +157,20 @@ func TestOnboardingRequiresOneUsableTopology(t *testing.T) {
 	}
 }
 
+func TestOnboardingRequiresAnAvailableRoute(t *testing.T) {
+	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	resources := readyOnboardingResources(now)
+	resources.RouteWithholdings = map[string]routeWithholding{
+		resources.Routes[0].ID: {Kind: routeWithheldCapabilityDrift},
+	}
+
+	result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.OnboardingEvidence{})
+	if result.CompletedGoals != 1 || result.Goals[1].DetailCode != "route_withheld" ||
+		result.Goals[1].ActionHref != "/admin/routes?onboarding=first-request" {
+		t.Fatalf("withheld route was counted as available: %#v", result)
+	}
+}
+
 func TestOnboardingRejectsDeploymentThatIsNotCurrentlyUsable(t *testing.T) {
 	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
 	tests := []struct {
@@ -304,6 +318,15 @@ func TestOnboardingRejectsDownstreamProbeWithoutAnInstant(t *testing.T) {
 
 func TestOnboardingKeepsFailedVerificationRecoverable(t *testing.T) {
 	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	resources := readyOnboardingResources(now)
+	// The initial verification link selects the first usable project. If a
+	// different project was used for the failed request, retry it there.
+	resources.Projects = append([]domain.Project{{
+		ID: "project_preferred", Enabled: true, AllowedModels: []string{"halro-chat"},
+	}}, resources.Projects...)
+	resources.Keys = append([]domain.GatewayKey{{
+		ID: "key_preferred", ProjectID: "project_preferred", Enabled: true,
+	}}, resources.Keys...)
 	snapshot := usage.OnboardingEvidence{
 		Latest: &usage.RequestSummary{
 			RequestID: "request_failed", ProjectID: "project_1", KeyID: "key_1", RequestedModel: "halro-chat", Outcome: "provider_error", CompletedAt: now,
@@ -312,15 +335,18 @@ func TestOnboardingKeepsFailedVerificationRecoverable(t *testing.T) {
 			RequestID: "request_failed", Status: "provider_error", HTTPStatus: 502, ErrorClass: "upstream_timeout", CompletedAt: now,
 		},
 	}
-	result := evaluateOnboardingReadiness(now, readyOnboardingResources(now), usage.Metrics{RequestsError: 1}, snapshot)
+	result := evaluateOnboardingReadiness(now, resources, usage.Metrics{RequestsError: 1}, snapshot)
 	if result.State != onboardingVerifyFailed || result.CompletedGoals != 3 || result.Goals[3].State != onboardingGoalError || result.LastVerification == nil {
 		t.Fatalf("result=%#v", result)
+	}
+	if result.Goals[3].ActionHref != "/admin/developer?onboarding=first-request&project_id=project_1&model=halro-chat" {
+		t.Fatalf("retry targets the wrong project: %#v", result.Goals[3])
 	}
 	if result.LastVerification.RequestID != "request_failed" || result.LastVerification.HTTPStatus != 502 || result.LastVerification.ErrorClass != "upstream_timeout" {
 		t.Fatalf("verification=%#v", result.LastVerification)
 	}
 	snapshot.Latest.RequestedModel = "unrelated-model"
-	result = evaluateOnboardingReadiness(now, readyOnboardingResources(now), usage.Metrics{RequestsError: 1}, snapshot)
+	result = evaluateOnboardingReadiness(now, resources, usage.Metrics{RequestsError: 1}, snapshot)
 	if result.State != onboardingReadyToVerify || result.LastVerification != nil {
 		t.Fatalf("unrelated failure was shown as a verification attempt: %#v", result)
 	}

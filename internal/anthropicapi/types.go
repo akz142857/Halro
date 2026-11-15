@@ -721,8 +721,11 @@ type Usage struct {
 	OutputTokens             int64                 `json:"output_tokens"`
 	CacheCreationInputTokens int64                 `json:"cache_creation_input_tokens,omitempty"`
 	CacheCreation            *CacheCreationDetails `json:"cache_creation,omitempty"`
-	CacheReadInputTokens     int64                 `json:"cache_read_input_tokens,omitempty"`
-	ThinkingTokens           int64                 `json:"thinking_tokens,omitempty"`
+	// CacheCreationPartial marks earlier details when a stream later reports
+	// a higher cumulative total without a new breakdown.
+	CacheCreationPartial bool  `json:"-"`
+	CacheReadInputTokens int64 `json:"cache_read_input_tokens,omitempty"`
+	ThinkingTokens       int64 `json:"thinking_tokens,omitempty"`
 	// OutputTokensDetails is where Kimi's Anthropic-shaped face puts the same
 	// number, and it is a second place to look rather than a second meaning.
 	// Measured against a real Kimi account on 2026-09-01: a Messages response

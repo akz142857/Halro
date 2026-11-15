@@ -14,6 +14,10 @@ import (
 
 const maxPriceProposalsPerDeployment = 10_000
 
+func (s *Store) PricingProposalIdempotencyRequestSHA256(ctx context.Context, keySHA256 string) (string, bool, error) {
+	return s.pricingIdempotencyRequestSHA256(ctx, bucketPricingProposalIdempotency, keySHA256)
+}
+
 func (s *Store) CreateDeploymentPriceProposal(ctx context.Context, proposal domain.DeploymentPriceProposal, intent domain.PricingAuditIntent, keySHA256 string) (domain.DeploymentPriceProposal, domain.PricingAuditIntent, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return proposal, intent, false, err

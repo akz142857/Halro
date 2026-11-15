@@ -127,6 +127,10 @@ func TestStreamUsageMergesCacheWriteLifetimeDetails(t *testing.T) {
 	if got := semanticUsage(*usage).CacheWriteLongInputTokens; got != 12 {
 		t.Fatalf("omitted details lost the start's long write count: %d", got)
 	}
+	usage = updateUsage(usage, usageEvent("message_delta", `{"cache_creation_input_tokens":14,"output_tokens":3}`))
+	if got := semanticUsage(*usage); got.CacheWriteInputTokens != 14 || got.CacheWriteLongInputTokens != 12 || got.CacheWriteTTLPair != "" {
+		t.Fatalf("a higher cumulative total erased a known long span or fabricated a complete split: %+v", got)
+	}
 	usage = updateUsage(usage, usageEvent("message_delta",
 		`{"cache_creation_input_tokens":16,"cache_creation":{"ephemeral_5m_input_tokens":12,"ephemeral_1h_input_tokens":4},"output_tokens":5}`))
 	if got := portableUsage(*usage); got.CacheWritePromptTokens() != 16 || got.CacheWriteLongTokens != 4 {

@@ -21,6 +21,7 @@ import (
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/semantic"
+	"github.com/akz142857/Halro/internal/tokenguard"
 )
 
 type nativeMessagesFake struct {
@@ -671,6 +672,44 @@ func TestMessagesCountTokensRunsUnderEveryMeteredPriceShape(t *testing.T) {
 				t.Fatalf("the count_tokens lease was stranded: pending=%d", fake.ledgerState.PendingReservations())
 			}
 		})
+	}
+}
+
+func TestMessagesCountTokensQuotesOnlyTheFixedFeeToTokenGuard(t *testing.T) {
+	service, fake, plaintext, closeFixture := newNativeMessagesFixtureWithPrice(t, 1_000_000, 5)
+	defer closeFixture()
+	service.pricing.(*fakePricePinStore).price.CacheWriteLongMicrosPerMillion = 100_000_000
+	now := time.Now().UTC().Truncate(time.Minute).Add(30 * time.Second)
+	service.now = func() time.Time { return now }
+	principal, err := service.auth.Authenticate(plaintext, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := principal.Project
+	project.TokenGuardPolicyID = "guard_cost"
+	err = service.auth.Refresh(context.Background(), source{keys: []domain.GatewayKey{principal.Key}, projects: []domain.Project{project}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.tokenGuard, err = tokenguard.New([]domain.TokenGuardPolicy{{
+		ID: "guard_cost", Name: "cost", Enabled: true, Action: "temporary_block",
+		CostMicrosPerMinute: 50, MinimumSamples: 2, ViolationsBeforeBlock: 2,
+		BlockTTL: time.Minute, Cooldown: 30 * time.Second, Revision: 1,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(`{"model":"claude","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := service.MessagesCountTokens(context.Background(), plaintext, anthropicapi.SupportedVersion, nil, request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if fake.countCalls != 2 {
+		t.Fatalf("provider token count calls=%d, want 2", fake.countCalls)
 	}
 }
 

@@ -35,10 +35,9 @@ func unlockMasterKey(ctx context.Context, cfg config.Config, stores ...*boltstor
 	return unlockKMSMasterKey(ctx, cfg, store, masterkey.KeySlotPrimary, defaultKMSWrapperFactory)
 }
 
-// unlockMemberMasterKey is the HA startup path. Unlike unlockMasterKey's
-// Standalone bootstrap behavior, it may neither create nor migrate metadata
-// before state.json has been authenticated and startup recovery has selected a
-// role. Key Slots are therefore read through the exact-schema, read-only store.
+// unlockMemberMasterKey is the HA startup path. It reads Key Slots through the
+// exact-schema, read-only store before authenticating state.json and selecting
+// the member's runtime role.
 func unlockMemberMasterKey(ctx context.Context, cfg config.Config) ([]byte, error) {
 	return unlockMemberMasterKeyWithFactory(ctx, cfg, defaultKMSWrapperFactory)
 }

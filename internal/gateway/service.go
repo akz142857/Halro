@@ -1857,7 +1857,8 @@ func (s *Service) MessagesCountTokens(ctx context.Context, plaintextKey, version
 	if err := s.checkNativeInboundRedaction(principal, payload); err != nil {
 		return anthropicapi.TokenCount{}, err
 	}
-	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, inputTokens, inputTokens, 0, request, admitFullRequest)
+	// Count the prompt for token admission and quote only the fixed request fee.
+	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, inputTokens, 0, 0, request, admitFullRequest)
 	if err != nil {
 		return anthropicapi.TokenCount{}, err
 	}
@@ -2693,6 +2694,9 @@ func (s *Service) Embeddings(
 	targets = filterTokenCapabilities(targets, inputTokens, 0)
 	if len(targets) == 0 {
 		return openaiapi.EmbeddingResponse{}, gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
+	}
+	for i := range targets {
+		targets[i].OrdinaryInputEstimate = true
 	}
 	run, err := s.beginRequestRun(ctx, principal, request.Model, targets, inputTokens, inputTokens, 0, request, admitFullRequest)
 	if err != nil {

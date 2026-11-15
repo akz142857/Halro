@@ -56,14 +56,15 @@ type onboardingReadiness struct {
 }
 
 type onboardingResources struct {
-	Credentials      []domain.Credential
-	Providers        []domain.ProviderInstance
-	Deployments      []domain.Deployment
-	Routes           []domain.Route
-	Projects         []domain.Project
-	Keys             []domain.GatewayKey
-	PriceReady       map[string]bool
-	EgressRuntimeIDs map[string]string
+	Credentials       []domain.Credential
+	Providers         []domain.ProviderInstance
+	Deployments       []domain.Deployment
+	Routes            []domain.Route
+	Projects          []domain.Project
+	Keys              []domain.GatewayKey
+	PriceReady        map[string]bool
+	EgressRuntimeIDs  map[string]string
+	RouteWithholdings map[string]routeWithholding
 	// EndpointPolicy is what "is this provider's endpoint usable" means for this
 	// instance. Readiness compares a derived audience against the stored one, and
 	// deriving it under a stricter policy than the one the provider was created
@@ -87,7 +88,10 @@ func (r *Runtime) getAdminOnboardingReadiness(writer http.ResponseWriter, reques
 			runtimeIDs[proxy.ID] = proxy.Fingerprint
 		}
 	}
-	resources := onboardingResources{EndpointPolicy: providerEndpointPolicy(r.config), EgressRuntimeIDs: runtimeIDs}
+	resources := onboardingResources{
+		EndpointPolicy: providerEndpointPolicy(r.config), EgressRuntimeIDs: runtimeIDs,
+		RouteWithholdings: r.routeWithholdings(),
+	}
 	var err error
 	if resources.Credentials, err = r.store.ListCredentials(request.Context()); err != nil {
 		adminStoreError(writer)
@@ -319,6 +323,7 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 	hasRoute := false
 	hasLinkedRoute := false
 	hasEnabledRoute := false
+	hasServingRoute := false
 	readyRoutes := make(map[string]domain.Route)
 	for _, route := range resources.Routes {
 		if route.DeletedAt != nil {
@@ -334,6 +339,10 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 			continue
 		}
 		hasEnabledRoute = true
+		if _, withheld := resources.RouteWithholdings[route.ID]; withheld {
+			continue
+		}
+		hasServingRoute = true
 		provider := configuredProviders[deployment.ProviderID]
 		provenAt, provenByTraffic := evidence.Routes[route.ID]
 		healthyTest := route.LastTestStatus == domain.DeploymentTestHealthy && route.LastTestRevision == route.Revision &&
@@ -364,6 +373,8 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 		publishDetail = "route_deployment_unavailable"
 	case !hasEnabledRoute:
 		publishDetail = "route_disabled"
+	case !hasServingRoute:
+		publishDetail = "route_withheld"
 	case len(readyRoutes) == 0:
 		publishDetail = "route_test_required"
 	}
@@ -436,10 +447,8 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 		accessDetail = "key_missing"
 	}
 	requestDetail := "request_waiting_for_access"
-	requestHref := "/admin/developer?onboarding=first-request"
 	if accessReady {
 		requestDetail = "request_ready"
-		requestHref += "&project_id=" + url.QueryEscape(verifyProjectID) + "&model=" + url.QueryEscape(verifyModel)
 	}
 
 	result := onboardingReadiness{
@@ -448,7 +457,7 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 			{Key: "connect_provider", DetailCode: connectDetail, ActionHref: onboardingConnectHref(connectDetail)},
 			{Key: "publish_model", DetailCode: publishDetail, ActionHref: onboardingPublishHref(publishDetail)},
 			{Key: "grant_access", DetailCode: accessDetail, ActionHref: onboardingAccessHref(accessDetail, keyProjectID)},
-			{Key: "verify_request", DetailCode: requestDetail, ActionHref: requestHref},
+			{Key: "verify_request", DetailCode: requestDetail, ActionHref: onboardingRequestHref(verifyProjectID, verifyModel)},
 		},
 	}
 	completed := []bool{connectReady, publishReady, accessReady, false}
@@ -463,6 +472,7 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 				result.State = onboardingVerifyFailed
 				result.LastVerification = latestOnboardingVerification(evidence)
 				result.Goals[3].DetailCode = "request_failed"
+				result.Goals[3].ActionHref = onboardingRequestHref(latest.ProjectID, latest.RequestedModel)
 			}
 		}
 	}
@@ -546,7 +556,7 @@ func onboardingPublishHref(detail string) string {
 	if detail == "route_missing" {
 		return "/admin/routes?intent=create&onboarding=first-request"
 	}
-	if detail == "route_disabled" || detail == "route_test_required" || detail == "route_deployment_unavailable" {
+	if detail == "route_disabled" || detail == "route_withheld" || detail == "route_test_required" || detail == "route_deployment_unavailable" {
 		return "/admin/routes?onboarding=first-request"
 	}
 	if detail == "deployment_missing" {
@@ -562,6 +572,14 @@ func onboardingAccessHref(detail, keyProjectID string) string {
 	}
 	if detail == "key_missing" && keyProjectID != "" {
 		href += "&project_id=" + url.QueryEscape(keyProjectID)
+	}
+	return href
+}
+
+func onboardingRequestHref(projectID, model string) string {
+	href := "/admin/developer?onboarding=first-request"
+	if projectID != "" {
+		href += "&project_id=" + url.QueryEscape(projectID) + "&model=" + url.QueryEscape(model)
 	}
 	return href
 }

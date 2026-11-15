@@ -22,6 +22,10 @@ import (
 
 const schemaVersion uint64 = 43
 
+// The Master Key descriptor and Vault Key Check retain their layout since
+// Key Slots were introduced. They can be read before migrating the store.
+const keySlotMetadataSchemaVersion uint64 = 10
+
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
 // no code path can produce it for new data. It survives here for one reason: the
@@ -239,7 +243,7 @@ var migrations = []migration{
 		return migrationStep(step, "after_create_admin_mfa_buckets")
 	}},
 	{version: 9, name: "provider_profile_bindings", up: migrateProviderProfileBindings},
-	{version: 10, name: "master_key_slots", up: func(_ *Tx, step func(string) error) error {
+	{version: keySlotMetadataSchemaVersion, name: "master_key_slots", up: func(_ *Tx, step func(string) error) error {
 		if err := migrationStep(step, "before_reserve_key_slot_descriptor"); err != nil {
 			return err
 		}
@@ -1676,10 +1680,10 @@ func OpenReadOnly(path string) (*Store, error) {
 	return openReadOnly(path, schemaVersion)
 }
 
-// OpenKeySlotMetadata reads the Master Key descriptor before a Standalone
-// schema 42 upgrade. The descriptor and Vault Key Check retain their layout.
+// OpenKeySlotMetadata reads the Master Key descriptor and Vault Key Check
+// before a Standalone upgrade changes the metadata projection.
 func OpenKeySlotMetadata(path string) (*Store, error) {
-	return openReadOnly(path, 42)
+	return openReadOnly(path, keySlotMetadataSchemaVersion)
 }
 
 func openReadOnly(path string, minimum uint64) (*Store, error) {

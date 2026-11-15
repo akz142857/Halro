@@ -396,11 +396,12 @@ func (state *responseStreamState) accept(event openaiapi.ResponseStreamEvent) er
 		if event.Type == "response.incomplete" {
 			termination = "max_output"
 		}
+		usage := openaiwire.DecodeResponseUsage(event.Response.Usage)
+		state.usage = openaiwire.RenderUsage(usage)
 		if err := state.emit(semantic.Event{Kind: semantic.EventDelta, ID: state.id, Created: state.created, Model: state.model, Outputs: []semantic.OutputDelta{{Index: 0, Termination: termination, NativeTermination: event.Type}}, Translation: semantic.TranslationNone, MappingRevision: openaiwire.MappingRevision}); err != nil {
 			return err
 		}
-		if usage := openaiwire.DecodeResponseUsage(event.Response.Usage); usage != nil {
-			state.usage = openaiwire.RenderUsage(usage)
+		if usage != nil {
 			if err := state.emit(semantic.Event{Kind: semantic.EventUsage, ID: state.id, Created: state.created, Model: state.model, Usage: usage, Translation: semantic.TranslationNone, MappingRevision: openaiwire.MappingRevision}); err != nil {
 				return err
 			}

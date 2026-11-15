@@ -288,7 +288,7 @@ func renderUsage(usage semantic.Usage) anthropicapi.Usage {
 		CacheReadInputTokens: usage.CachedInputTokens, CacheCreationInputTokens: usage.CacheWriteInputTokens,
 		ThinkingTokens: usage.ReasoningTokens,
 	}
-	if usage.CacheWriteInputTokens > 0 {
+	if usage.CacheWriteInputTokens > 0 && usage.CacheWriteTTLPair == semantic.CacheWriteTTL5m1h {
 		rendered.CacheCreation = &anthropicapi.CacheCreationDetails{
 			Ephemeral5mInputTokens: usage.CacheWriteInputTokens - usage.CacheWriteLongInputTokens,
 			Ephemeral1hInputTokens: usage.CacheWriteLongInputTokens,
@@ -586,13 +586,23 @@ func DecodeResult(message anthropicapi.Message) (semantic.GenerateResult, error)
 func DecodeUsage(usage anthropicapi.Usage) semantic.Usage {
 	prompt := usage.PromptTokens()
 	var long int64
+	var ttlPair semantic.CacheWriteTTLPair
 	if detail := usage.CacheCreation; detail != nil {
-		long = compatibility.NormalizeCacheWriteLong(usage.CacheCreationInputTokens, detail.Ephemeral5mInputTokens, detail.Ephemeral1hInputTokens)
+		if usage.CacheCreationPartial {
+			long = min(max(0, detail.Ephemeral1hInputTokens), max(0, usage.CacheCreationInputTokens))
+		} else {
+			var exact bool
+			long, exact = compatibility.NormalizeCacheWriteLong(usage.CacheCreationInputTokens, detail.Ephemeral5mInputTokens, detail.Ephemeral1hInputTokens)
+			if exact {
+				ttlPair = semantic.CacheWriteTTL5m1h
+			}
+		}
 	}
 	return semantic.Usage{
 		InputTokens: prompt, CachedInputTokens: usage.CacheReadInputTokens,
 		CacheWriteInputTokens: usage.CacheCreationInputTokens, CacheWriteLongInputTokens: long,
-		OutputTokens: usage.OutputTokens, ReasoningTokens: usage.ReasoningTokens(),
+		CacheWriteTTLPair: ttlPair,
+		OutputTokens:      usage.OutputTokens, ReasoningTokens: usage.ReasoningTokens(),
 		TotalTokens: prompt + usage.OutputTokens, Source: semantic.UsageProviderReported,
 	}
 }

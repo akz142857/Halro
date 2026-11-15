@@ -383,7 +383,7 @@ func renderResponseUsage(usage *semantic.Usage) *openaiapi.ResponseUsage {
 	inputDetails := openaiapi.ResponseTokenDetails{
 		CachedTokens: usage.CachedInputTokens, CacheWriteTokens: usage.CacheWriteInputTokens,
 	}
-	if usage.CacheWriteInputTokens > 0 {
+	if usage.CacheWriteInputTokens > 0 && usage.CacheWriteTTLPair == semantic.CacheWriteTTL30m12h {
 		inputDetails.CacheWriteTokensDetails = &openaiapi.CacheWriteTokenDetails{
 			TTL30mTokens: usage.CacheWriteInputTokens - usage.CacheWriteLongInputTokens,
 			TTL12hTokens: usage.CacheWriteLongInputTokens,

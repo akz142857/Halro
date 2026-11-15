@@ -55,15 +55,24 @@ type priceWindowInput struct {
 // for the life of the price — the cache-read and cache-write rates especially,
 // whose spans an operator rarely thinks about.
 type priceRatesInput struct {
-	InputUSDPerMillion          string `json:"input_usd_per_million"`
-	CachedInputUSDPerMillion    string `json:"cached_input_usd_per_million"`
-	CacheWriteUSDPerMillion     string `json:"cache_write_usd_per_million"`
-	CacheWriteLongUSDPerMillion string `json:"cache_write_long_usd_per_million"`
-	OutputUSDPerMillion         string `json:"output_usd_per_million"`
-	FixedRequestUSD             string `json:"fixed_request_usd"`
+	InputUSDPerMillion          string  `json:"input_usd_per_million"`
+	CachedInputUSDPerMillion    string  `json:"cached_input_usd_per_million"`
+	CacheWriteUSDPerMillion     *string `json:"cache_write_usd_per_million,omitempty"`
+	CacheWriteLongUSDPerMillion *string `json:"cache_write_long_usd_per_million,omitempty"`
+	OutputUSDPerMillion         string  `json:"output_usd_per_million"`
+	FixedRequestUSD             string  `json:"fixed_request_usd"`
 }
 
-func (input priceRatesInput) parse() (domain.PriceTier, error) {
+var errPriceWriteRatesRequired = errors.New("both cache_write_usd_per_million and cache_write_long_usd_per_million are required")
+
+func (input priceRatesInput) parse(legacyReplay bool) (domain.PriceTier, error) {
+	short, long := input.InputUSDPerMillion, input.InputUSDPerMillion
+	if !legacyReplay {
+		if input.CacheWriteUSDPerMillion == nil || input.CacheWriteLongUSDPerMillion == nil {
+			return domain.PriceTier{}, errPriceWriteRatesRequired
+		}
+		short, long = *input.CacheWriteUSDPerMillion, *input.CacheWriteLongUSDPerMillion
+	}
 	var tier domain.PriceTier
 	for _, field := range []struct {
 		value  string
@@ -71,8 +80,8 @@ func (input priceRatesInput) parse() (domain.PriceTier, error) {
 	}{
 		{input.InputUSDPerMillion, &tier.InputMicrosPerMillion},
 		{input.CachedInputUSDPerMillion, &tier.CachedInputMicrosPerMillion},
-		{input.CacheWriteUSDPerMillion, &tier.CacheWriteMicrosPerMillion},
-		{input.CacheWriteLongUSDPerMillion, &tier.CacheWriteLongMicrosPerMillion},
+		{short, &tier.CacheWriteMicrosPerMillion},
+		{long, &tier.CacheWriteLongMicrosPerMillion},
 		{input.OutputUSDPerMillion, &tier.OutputMicrosPerMillion},
 		{input.FixedRequestUSD, &tier.FixedRequestMicrosUSD},
 	} {
@@ -88,6 +97,26 @@ func (input priceRatesInput) parse() (domain.PriceTier, error) {
 type priceScheduleInput struct {
 	Timezone string             `json:"timezone"`
 	Windows  []priceWindowInput `json:"windows"`
+}
+
+func (input priceRatesInput) omitsWriteRates() bool {
+	return input.CacheWriteUSDPerMillion == nil && input.CacheWriteLongUSDPerMillion == nil
+}
+
+// legacyPriceRetry recognizes an old request shape for digest lookup. A price
+// with new fields in any tier has to supply them in every tier.
+func legacyPriceRetry(rates priceRatesInput, schedule *priceScheduleInput) bool {
+	if !rates.omitsWriteRates() {
+		return false
+	}
+	if schedule != nil {
+		for _, window := range schedule.Windows {
+			if !window.omitsWriteRates() {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 type createPriceInput struct {
@@ -106,7 +135,7 @@ type createPriceInput struct {
 // are parsed here rather than in the domain so the stored rule stays minutes
 // from midnight — one representation, comparable and hashable, with no room for
 // "09:00" and "9:00" to be the same window with two digests.
-func priceScheduleFromInput(input *priceScheduleInput) (*domain.PriceSchedule, error) {
+func priceScheduleFromInput(input *priceScheduleInput, legacyReplay bool) (*domain.PriceSchedule, error) {
 	if input == nil {
 		return nil, nil
 	}
@@ -120,7 +149,7 @@ func priceScheduleFromInput(input *priceScheduleInput) (*domain.PriceSchedule, e
 		if err != nil {
 			return nil, fmt.Errorf("schedule window %d end: %w", index, err)
 		}
-		rates, err := window.parse()
+		rates, err := window.parse(legacyReplay)
 		if err != nil {
 			return nil, fmt.Errorf("schedule window %d: %w", index, err)
 		}
@@ -203,7 +232,8 @@ func (r *Runtime) createAdminDeploymentPrice(writer http.ResponseWriter, request
 	priceID := deterministicMutationID("price", keyDigest)
 	now := time.Now().UTC()
 	password, totpCode := input.CurrentPassword, input.TOTPCode
-	price, err := priceVersionFromInput(priceID, deploymentID, admin.session.Username, now, input)
+	legacyReplay := legacyPriceRetry(input.priceRatesInput, input.Schedule)
+	price, err := priceVersionFromInput(priceID, deploymentID, admin.session.Username, now, input, legacyReplay)
 	clear([]byte(input.CurrentPassword))
 	input.CurrentPassword, input.TOTPCode = "", ""
 	if err != nil {
@@ -213,16 +243,21 @@ func (r *Runtime) createAdminDeploymentPrice(writer http.ResponseWriter, request
 	canonicalRequest := price
 	canonicalRequest.ID, canonicalRequest.CreatedBy, canonicalRequest.CreatedAt = "", "", time.Time{}
 	canonicalRequest.Source.ReceivedAt = time.Time{}
-	var canonicalPayload any = canonicalRequest
 	if input.EffectiveImmediately {
 		// The server-selected timestamp must not enter the request digest. A retry
 		// with the same idempotency key represents the same immediate intent even
 		// though it reaches the server at a later wall-clock time.
 		canonicalRequest.EffectiveFrom = time.Time{}
+	}
+	var canonicalPayload any = canonicalRequest
+	if legacyReplay {
+		canonicalPayload = legacyDeploymentPriceRequest(canonicalRequest)
+	}
+	if input.EffectiveImmediately {
 		canonicalPayload = struct {
-			Price                domain.DeploymentPriceVersion `json:"price"`
-			EffectiveImmediately bool                          `json:"effective_immediately"`
-		}{canonicalRequest, true}
+			Price                any  `json:"price"`
+			EffectiveImmediately bool `json:"effective_immediately"`
+		}{canonicalPayload, true}
 	}
 	intent, err := newPricingAuditIntent("deployment_price.create", price.ID, admin.session.Username, request.Header.Get("X-Request-ID"), canonicalPayload, &price.Source)
 	if err != nil {
@@ -232,6 +267,9 @@ func (r *Runtime) createAdminDeploymentPrice(writer http.ResponseWriter, request
 	priorRequest, priorExists, err := r.store.PricingIdempotencyRequestSHA256(request.Context(), keyDigest)
 	if err != nil {
 		adminStoreError(writer)
+		return
+	}
+	if legacyReplay && !matchesLegacyPriceRetry(writer, priorRequest, priorExists, intent.RequestSHA256) {
 		return
 	}
 	if priorExists && priorRequest == intent.RequestSHA256 {
@@ -338,7 +376,7 @@ func (r *Runtime) previewAdminDeploymentPrice(writer http.ResponseWriter, reques
 		return
 	}
 	now := time.Now().UTC()
-	price, err := priceVersionFromInput("price_preview", chi.URLParam(request, "id"), "admin:preview", now, input.createPriceInput)
+	price, err := priceVersionFromInput("price_preview", chi.URLParam(request, "id"), "admin:preview", now, input.createPriceInput, false)
 	clear([]byte(input.CurrentPassword))
 	if err != nil {
 		writePriceError(writer, err)
@@ -503,7 +541,8 @@ func (r *Runtime) createAdminDeploymentPriceProposal(writer http.ResponseWriter,
 		writePriceError(writer, errors.New("proposal expiry must be within the next 30 days"))
 		return
 	}
-	rates, err := input.parse()
+	legacyReplay := legacyPriceRetry(input.priceRatesInput, input.Schedule)
+	rates, err := input.parse(legacyReplay)
 	if err != nil {
 		writePriceError(writer, err)
 		return
@@ -513,7 +552,7 @@ func (r *Runtime) createAdminDeploymentPriceProposal(writer http.ResponseWriter,
 		writePriceError(writer, err)
 		return
 	}
-	schedule, err := priceScheduleFromInput(input.Schedule)
+	schedule, err := priceScheduleFromInput(input.Schedule, legacyReplay)
 	if err != nil {
 		writePriceError(writer, err)
 		return
@@ -544,6 +583,16 @@ func (r *Runtime) createAdminDeploymentPriceProposal(writer http.ResponseWriter,
 	if err != nil {
 		adminStoreError(writer)
 		return
+	}
+	if legacyReplay {
+		digest, exists, err := r.store.PricingProposalIdempotencyRequestSHA256(request.Context(), keyDigest)
+		if err != nil {
+			adminStoreError(writer)
+			return
+		}
+		if !matchesLegacyPriceRetry(writer, digest, exists, intent.RequestSHA256) {
+			return
+		}
 	}
 	intent.DeploymentID = proposal.DeploymentID
 	intent.ChangeSummary = fmt.Sprintf("proposal=%s match=%s tier=%s billing=%s input=%d cached_input=%d cache_write=%d cache_write_long=%d output=%d fixed=%d", proposal.ID, proposal.Match, proposal.Tier, proposal.BillingMode, proposal.InputMicrosPerMillion, proposal.CachedInputMicrosPerMillion, proposal.CacheWriteMicrosPerMillion, proposal.CacheWriteLongMicrosPerMillion, proposal.OutputMicrosPerMillion, proposal.FixedRequestMicrosUSD) + proposal.Schedule.AuditSummary()
@@ -719,8 +768,8 @@ func resolvePriceEffectiveFrom(effectiveFrom time.Time, immediately bool, now ti
 	return effectiveFrom.UTC(), nil
 }
 
-func priceVersionFromInput(priceID, deploymentID, actor string, now time.Time, input createPriceInput) (domain.DeploymentPriceVersion, error) {
-	rates, err := input.parse()
+func priceVersionFromInput(priceID, deploymentID, actor string, now time.Time, input createPriceInput, legacyReplay bool) (domain.DeploymentPriceVersion, error) {
+	rates, err := input.parse(legacyReplay)
 	if err != nil {
 		return domain.DeploymentPriceVersion{}, err
 	}
@@ -746,7 +795,7 @@ func priceVersionFromInput(priceID, deploymentID, actor string, now time.Time, i
 	if err != nil {
 		return domain.DeploymentPriceVersion{}, err
 	}
-	schedule, err := priceScheduleFromInput(input.Schedule)
+	schedule, err := priceScheduleFromInput(input.Schedule, legacyReplay)
 	if err != nil {
 		return domain.DeploymentPriceVersion{}, err
 	}

@@ -50,12 +50,16 @@ func migrateVersionedDeploymentPricing(tx *Tx, step func(string) error) error {
 }
 
 func (s *Store) PricingIdempotencyRequestSHA256(ctx context.Context, keySHA256 string) (string, bool, error) {
+	return s.pricingIdempotencyRequestSHA256(ctx, bucketPricingIdempotency, keySHA256)
+}
+
+func (s *Store) pricingIdempotencyRequestSHA256(ctx context.Context, bucket []byte, keySHA256 string) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
 	}
 	var record pricingIdempotencyRecord
 	err := s.view(func(tx *Tx) error {
-		raw := tx.Bucket(bucketPricingIdempotency).Get([]byte(keySHA256))
+		raw := tx.Bucket(bucket).Get([]byte(keySHA256))
 		if raw == nil {
 			return nil
 		}

@@ -201,6 +201,24 @@ func TestResponsesAdapterValidatesStreamLifecycleAndUsage(t *testing.T) {
 	}
 }
 
+func TestResponsesTerminalUsageSurvivesDeliveryFailure(t *testing.T) {
+	deliveryErr := errors.New("client disconnected")
+	state := responseStreamState{
+		started: true, id: "resp_1", model: "amazon.nova-pro",
+		emit: func(semantic.Event) error { return deliveryErr },
+	}
+	var terminal openaiapi.ResponseStreamEvent
+	if err := json.Unmarshal([]byte(`{"type":"response.completed","response":{"id":"resp_1","model":"amazon.nova-pro","status":"completed","usage":{"input_tokens":2,"input_tokens_details":{"cache_write_tokens":2,"cache_write_tokens_details":{"ttl_30m_tokens":1,"ttl_12h_tokens":1}},"output_tokens":1,"total_tokens":3}}}`), &terminal); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.accept(terminal); !errors.Is(err, deliveryErr) {
+		t.Fatalf("terminal error=%v", err)
+	}
+	if usage := state.usage; usage == nil || usage.CacheWritePromptTokens() != 2 || usage.CacheWriteLongTokens != 1 {
+		t.Fatalf("terminal delivery failure lost reported usage: %+v", usage)
+	}
+}
+
 // Enumeration and claim production are separate jobs, and this route can only
 // do the first: the OpenAI-shaped catalog carries an identifier and an owner,
 // so any capability read off it would be a guess wearing declared evidence.

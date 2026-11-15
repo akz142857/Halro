@@ -335,7 +335,11 @@ func DecodeResponseUsage(usage *openaiapi.ResponseUsage) *semantic.Usage {
 		Source:                semantic.UsageProviderReported,
 	}
 	if detail := usage.InputTokensDetails.CacheWriteTokensDetails; detail != nil {
-		decoded.CacheWriteLongInputTokens = compatibility.NormalizeCacheWriteLong(decoded.CacheWriteInputTokens, detail.TTL30mTokens, detail.TTL12hTokens)
+		var exact bool
+		decoded.CacheWriteLongInputTokens, exact = compatibility.NormalizeCacheWriteLong(decoded.CacheWriteInputTokens, detail.TTL30mTokens, detail.TTL12hTokens)
+		if exact {
+			decoded.CacheWriteTTLPair = semantic.CacheWriteTTL30m12h
+		}
 	}
 	if sum := decoded.InputTokens + decoded.OutputTokens; decoded.TotalTokens < sum {
 		decoded.TotalTokens = sum

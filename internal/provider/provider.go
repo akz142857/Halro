@@ -555,8 +555,8 @@ type Target struct {
 	OutputMicrosPerMillion         int64
 	FixedRequestMicrosUSD          int64
 	PriceScheduleTier              *domain.PriceScheduleTier
-	// OrdinaryInputEstimate applies to resource operations whose accounting
-	// units represent bytes, files, or requests without a prompt cache split.
+	// OrdinaryInputEstimate applies to embedding inputs and synthetic
+	// resource units that have no generation cache split.
 	OrdinaryInputEstimate bool
 	Priority              int
 	Strategy              string

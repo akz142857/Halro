@@ -1337,6 +1337,30 @@ func TestEmbeddingsUsesSameAuthorizationAndAccounting(t *testing.T) {
 	}
 }
 
+func TestEmbeddingsUseOrdinaryRateWhenUsageIsAbsent(t *testing.T) {
+	f := newFixture(t, 10)
+	defer f.close()
+	f.adapter.embeddingResponse.Usage = nil
+	now := time.Now().UTC()
+	prices := &fakePricePinStore{price: domain.DeploymentPriceVersion{
+		ID: "price_embeddings", DeploymentID: "dep_target_1", Version: 1, Revision: 1,
+		BillingMode: domain.BillingModeMetered, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
+		InputMicrosPerMillion: 1_000_000, CacheWriteLongMicrosPerMillion: 100_000_000,
+		EffectiveFrom: now.Add(-time.Hour), CreatedBy: "test", CreatedAt: now.Add(-time.Hour),
+		Source: domain.PriceSource{Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted,
+			ReceivedAt: now.Add(-time.Hour), Reference: "test", AssertedWithoutArchive: true},
+	}}
+	f.service.pricing = prices
+	request := openaiapi.EmbeddingRequest{Model: "chat", Input: json.RawMessage(`["hello"]`)}
+	if _, err := f.service.Embeddings(context.Background(), f.plaintext, request); err != nil {
+		t.Fatal(err)
+	}
+	balance := f.state.Balance(f.project.ID, now.Format("2006-01-02"), testTimezoneVersion)
+	if balance.CommittedMicrosUSD != request.EstimatedInputTokens() || balance.ReservedMicrosUSD != 0 {
+		t.Fatalf("embedding balance used the cache-write rate: %+v", balance)
+	}
+}
+
 func TestEmbeddingsRejectsRouteWithoutCapabilityBeforeProviderCall(t *testing.T) {
 	f := newFixture(t, 1_000)
 	defer f.close()

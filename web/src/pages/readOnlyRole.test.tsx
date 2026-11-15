@@ -169,9 +169,10 @@ describe("read-only role", () => {
     expect(row).not.toBeNull();
     expect(within(row!).getByRole("button", { name: "删除" })).toBeDisabled();
     expect(within(row!).getByRole("button", { name: /^编辑/ })).toBeDisabled();
-    // Reading has to stay unimpeded — a read-only console that cannot test a
-    // route is not read-only, it is broken.
-    expect(within(row!).getByRole("button", { name: /^测试/ })).toBeEnabled();
+    const test = within(row!).getByRole("button", { name: "测试" });
+    expect(test).toBeDisabled();
+    expect(test).toHaveAttribute("title", readOnlyReason);
+    expect(within(row!).getByRole("status")).toBeVisible();
   });
 
   // Disabled with a stated reason, not hidden. Every other page tells a

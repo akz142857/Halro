@@ -12,6 +12,14 @@ const (
 	UsageLocallyEstimated UsageSource = "locally_estimated"
 )
 
+// CacheWriteTTLPair identifies the lifetimes behind a reported breakdown.
+type CacheWriteTTLPair string
+
+const (
+	CacheWriteTTL5m1h   CacheWriteTTLPair = "5m_1h"
+	CacheWriteTTL30m12h CacheWriteTTLPair = "30m_12h"
+)
+
 // Usage normalizes provider token reporting onto one convention, because the
 // upstreams disagree about what their own prompt-token field means: Anthropic
 // reports input_tokens *excluding* cache reads and writes, while OpenAI reports
@@ -35,15 +43,16 @@ const (
 // bills reasoning at the output rate, so it is reported for observability and
 // must not be added to OutputTokens when pricing.
 type Usage struct {
-	InputTokens               int64       `json:"input_tokens"`
-	CachedInputTokens         int64       `json:"cached_input_tokens,omitempty"`
-	CacheWriteInputTokens     int64       `json:"cache_write_input_tokens,omitempty"`
-	CacheWriteLongInputTokens int64       `json:"cache_write_long_input_tokens,omitempty"`
-	OutputTokens              int64       `json:"output_tokens"`
-	ReasoningTokens           int64       `json:"reasoning_tokens,omitempty"`
-	AudioTokens               int64       `json:"audio_tokens,omitempty"`
-	TotalTokens               int64       `json:"total_tokens"`
-	Source                    UsageSource `json:"source,omitempty"`
+	InputTokens               int64             `json:"input_tokens"`
+	CachedInputTokens         int64             `json:"cached_input_tokens,omitempty"`
+	CacheWriteInputTokens     int64             `json:"cache_write_input_tokens,omitempty"`
+	CacheWriteLongInputTokens int64             `json:"cache_write_long_input_tokens,omitempty"`
+	CacheWriteTTLPair         CacheWriteTTLPair `json:"cache_write_ttl_pair,omitempty"`
+	OutputTokens              int64             `json:"output_tokens"`
+	ReasoningTokens           int64             `json:"reasoning_tokens,omitempty"`
+	AudioTokens               int64             `json:"audio_tokens,omitempty"`
+	TotalTokens               int64             `json:"total_tokens"`
+	Source                    UsageSource       `json:"source,omitempty"`
 }
 
 // UncachedInputTokens is the prompt span billed at the ordinary input rate.
@@ -59,6 +68,11 @@ func (usage Usage) Validate() error {
 	if usage.CachedInputTokens < 0 || usage.CacheWriteInputTokens < 0 ||
 		usage.CacheWriteLongInputTokens < 0 || usage.CacheWriteLongInputTokens > usage.CacheWriteInputTokens {
 		return errors.New("semantic usage cache tokens are invalid")
+	}
+	switch usage.CacheWriteTTLPair {
+	case "", CacheWriteTTL5m1h, CacheWriteTTL30m12h:
+	default:
+		return errors.New("semantic usage cache write lifetimes are invalid")
 	}
 	// The cache tiers partition InputTokens. A sum that overruns it means an
 	// adapter added the tiers on top instead of translating into the subset

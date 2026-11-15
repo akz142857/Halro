@@ -154,12 +154,13 @@ func TestAdminDeploymentPriceLifecycleUsesVersionedTimelineAndAuditIntent(t *tes
 
 func TestImmediateFreePriceUsesServerTimeAndIsImmediatelySelectable(t *testing.T) {
 	now := time.Date(2026, 8, 10, 6, 0, 0, 0, time.UTC)
+	zero := "0"
 	price, err := priceVersionFromInput("price_immediate", "deployment_immediate", "admin", now, createPriceInput{
 		BillingMode: domain.BillingModeFree, Currency: "USD",
-		priceRatesInput:      priceRatesInput{InputUSDPerMillion: "0", CachedInputUSDPerMillion: "0", CacheWriteUSDPerMillion: "0", CacheWriteLongUSDPerMillion: "0", OutputUSDPerMillion: "0", FixedRequestUSD: "0"},
+		priceRatesInput:      priceRatesInput{InputUSDPerMillion: "0", CachedInputUSDPerMillion: "0", CacheWriteUSDPerMillion: &zero, CacheWriteLongUSDPerMillion: &zero, OutputUSDPerMillion: "0", FixedRequestUSD: "0"},
 		EffectiveImmediately: true,
 		Source:               priceSourceInput{Type: domain.PriceSourceManual, Reference: "temporary_estimate", AssertedWithoutArchive: true},
-	})
+	}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,11 +178,12 @@ func TestImmediateFreePriceUsesServerTimeAndIsImmediatelySelectable(t *testing.T
 }
 
 func TestPriceWriteRatesMustBeExplicit(t *testing.T) {
+	short, long := "1.25", "2"
 	for _, rates := range []priceRatesInput{
-		{InputUSDPerMillion: "1", CachedInputUSDPerMillion: "0", CacheWriteUSDPerMillion: "1.25", OutputUSDPerMillion: "0", FixedRequestUSD: "0"},
-		{InputUSDPerMillion: "1", CachedInputUSDPerMillion: "0", CacheWriteLongUSDPerMillion: "2", OutputUSDPerMillion: "0", FixedRequestUSD: "0"},
+		{InputUSDPerMillion: "1", CachedInputUSDPerMillion: "0", CacheWriteUSDPerMillion: &short, OutputUSDPerMillion: "0", FixedRequestUSD: "0"},
+		{InputUSDPerMillion: "1", CachedInputUSDPerMillion: "0", CacheWriteLongUSDPerMillion: &long, OutputUSDPerMillion: "0", FixedRequestUSD: "0"},
 	} {
-		if _, err := rates.parse(); err == nil {
+		if _, err := rates.parse(false); err == nil {
 			t.Fatalf("price input accepted with a missing write rate: %+v", rates)
 		}
 	}

@@ -216,15 +216,17 @@ func TestFailedAttemptSettlesAtZeroUnderFixedRequestFee(t *testing.T) {
 
 func TestRecoverStartedLeaseUsesFrozenPriceAndPreparedBounds(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		legacy   bool
-		resource bool
-		wantCost int64
-		wantLong int64
+		name      string
+		legacy    bool
+		profile   domain.ProviderProfileID
+		primitive provider.Primitive
+		wantCost  int64
+		wantLong  int64
 	}{
 		{name: "legacy snapshot", legacy: true, wantCost: 50},
 		{name: "long write rate", wantCost: 70, wantLong: 10},
-		{name: "ordinary resource units", resource: true, wantCost: 50},
+		{name: "ordinary resource units", profile: domain.ProfileOpenAIMediaResources, primitive: provider.PrimitiveOpenAIFiles, wantCost: 50},
+		{name: "ordinary embedding tokens", profile: domain.ProfileOpenAIChatEmbeddings, primitive: provider.PrimitiveOpenAIEmbeddings, wantCost: 50},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			manager, state, closeLog := newTestManager(t)
@@ -241,10 +243,10 @@ func TestRecoverStartedLeaseUsesFrozenPriceAndPreparedBounds(t *testing.T) {
 				*snapshot.CacheWriteLongMicrosPerMillion = 3_000_000
 			}
 			metadata := AttemptMetadata{DeploymentID: "dep_test"}
-			if tc.resource {
+			if tc.profile != "" {
 				metadata.OfferingID = domain.OfferingOpenAIAPI
-				metadata.ProfileID = domain.ProfileOpenAIMediaResources
-				metadata.ProviderPrimitive = provider.PrimitiveOpenAIFiles
+				metadata.ProfileID = tc.profile
+				metadata.ProviderPrimitive = tc.primitive
 			}
 			attempt, err := manager.ReserveLeaseDetailed(context.Background(), request, 10_000, LeaseSpec{
 				Mode: ledger.LeaseModeMetered, ReservationMicrosUSD: tc.wantCost,

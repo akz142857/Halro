@@ -24,7 +24,11 @@ rounding whenever grouping could understate a configured window's charge.
 
 A provider's total write count is authoritative. If its lifetime counts disagree,
 Halro clamps the long count to the total and logs a warning with token counts.
-With only a total, Halro uses the short rate. The documented
+With only a total, Halro uses the short rate. When rendering a response, Halro
+includes the lifetime breakdown only when the upstream reported it and its TTLs
+match the response protocol. See the [Anthropic TTL breakdown](https://platform.claude.com/docs/en/build-with-claude/prompt-caching#1-hour-cache-duration)
+and [OpenAI Responses TTL breakdown](https://developers.openai.com/api/docs/guides/prompt-caching#monitor-cache-performance).
+The documented
 [OpenAI Chat Completions usage](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)
 and [Bedrock Mantle Chat usage](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html)
 supply the write total. Bedrock Mantle's Messages and Responses adapters share the
@@ -38,7 +42,9 @@ the assumed split so the Ledger can validate its cost against the snapshot.
 If provider-reported usage overflows the monetary range, settlement uses the
 prepared token bounds and records the charge as estimated. Synthetic resource
 operation units, such as Files and Batches requests, use the ordinary input rate
-for admission, settlement, and recovery.
+for admission, settlement, and recovery. Embedding token estimates also use the
+ordinary input rate. Anthropic token counting uses its fixed request fee for the
+cost quote and counts prompt tokens toward token limits.
 
 Metadata schema 43 initializes both write rates from each existing price's
 ordinary input rate, including windows and Proposals. Proposal digests are
@@ -55,5 +61,9 @@ zero. Export can resume from an unlisted older partition whose rows still
 match the Ledger. Import requires a version 2 configuration bundle with both
 write rates explicit for the base price and every window. Re-export older
 bundles from an upgraded source.
+
+New Admin price versions, proposals, and previews require explicit write rates.
+An Admin price or proposal request from before the upgrade can replay if its
+idempotency key and original request digest match the stored mutation.
 
 Prompt-length price tiers and metered provider-executed tools remain follow-up work.

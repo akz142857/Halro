@@ -232,15 +232,14 @@ func profileAllowsPrimitiveDerived(profileID domain.ProviderProfileID, operation
 	return false
 }
 
-// ResourcePrimitiveUsesOrdinaryInputEstimate identifies the resource
-// operations that account for synthetic units. Pending leases already pin
-// the provider profile and primitive, so recovery can recover the estimate
-// rule without storing a second copy of their operation.
-func ResourcePrimitiveUsesOrdinaryInputEstimate(profileID domain.ProviderProfileID, primitive Primitive) bool {
+// PrimitiveUsesOrdinaryInputEstimate identifies embedding and resource
+// operations that have no generation cache split. Pending leases already
+// pin the provider profile and primitive for recovery.
+func PrimitiveUsesOrdinaryInputEstimate(profileID domain.ProviderProfileID, primitive Primitive) bool {
 	for _, binding := range profileOperationTable[profileID].Bindings {
 		if binding.Primitive == primitive {
 			switch semanticOperationFor(binding.Operation) {
-			case semantic.OperationGenerate, semantic.OperationEmbed, "":
+			case semantic.OperationGenerate, "":
 				return false
 			default:
 				return true

@@ -900,26 +900,34 @@ func updateUsage(current *anthropicapi.Usage, event anthropicapi.RawStreamEvent)
 		var value struct {
 			Usage struct {
 				anthropicapi.Usage
+				Input              *int64 `json:"input_tokens"`
+				CacheRead          *int64 `json:"cache_read_input_tokens"`
 				CacheCreationTotal *int64 `json:"cache_creation_input_tokens"`
 			} `json:"usage"`
 		}
 		if json.Unmarshal(event.Data, &value) == nil {
-			if value.Usage.InputTokens != 0 {
-				current.InputTokens = value.Usage.InputTokens
+			if value.Usage.Input != nil {
+				current.InputTokens = *value.Usage.Input
 			}
 			// message_start carries the cache tiers today and the full-struct copy
 			// above captures them, but a delta that restates them must win rather
 			// than be dropped — losing either tier here silently under-prices the
 			// whole stream.
-			if value.Usage.CacheReadInputTokens != 0 {
-				current.CacheReadInputTokens = value.Usage.CacheReadInputTokens
+			if value.Usage.CacheRead != nil {
+				current.CacheReadInputTokens = *value.Usage.CacheRead
 			}
 			if total := value.Usage.CacheCreationTotal; total != nil && *total != current.CacheCreationInputTokens {
+				// Counts in message_delta are cumulative. Keep the long writes
+				// already reported when the total grows without a new split.
+				if *total < current.CacheCreationInputTokens {
+					current.CacheCreation = nil
+				}
 				current.CacheCreationInputTokens = *total
-				current.CacheCreation = nil
+				current.CacheCreationPartial = current.CacheCreation != nil
 			}
 			if value.Usage.CacheCreation != nil {
 				current.CacheCreation = value.Usage.CacheCreation
+				current.CacheCreationPartial = false
 			}
 			current.OutputTokens = value.Usage.OutputTokens
 			// The thinking span, in whichever of the two spellings the upstream

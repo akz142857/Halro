@@ -406,6 +406,7 @@ function CopyAlias({ alias }: { alias: string }) {
 
 function RouteRow({ route, target, actions }: { route: Route; target: ReactNode; actions: ReactNode }) {
   const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
   const testStatusID = useId();
   const queryClient = useQueryClient();
   const test = useMutation({ mutationFn: () => api.testRoute(route.id), onSettled: () => queryClient.invalidateQueries({ queryKey: ["routes"] }) });
@@ -452,7 +453,8 @@ function RouteRow({ route, target, actions }: { route: Route; target: ReactNode;
       </td>
       <td role="cell">
         <div className="row-actions route-row-actions">
-          <button type="button" className="button secondary" disabled={!route.enabled || test.isPending}
+          <button type="button" className="button secondary" disabled={readOnly || !route.enabled || test.isPending}
+            title={readOnly ? t("navigation.readOnlyAction") : undefined}
             aria-describedby={testStatusID} onClick={() => test.mutate()}>{t("common.test")}</button>
           {actions}
         </div>

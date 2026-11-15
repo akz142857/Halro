@@ -1283,10 +1283,10 @@ func (m *Manager) RecoverPendingLeases(ctx context.Context) error {
 				OccurredAt: event.OccurredAt,
 			}
 			if event.PriceSnapshot != nil && event.PriceSnapshot.CostValueStatus == domain.CostValueKnown {
-				// A resource operation's prepared units use ordinary input.
+				// Embeddings and resource operations use ordinary input.
 				// Ambiguous prompt usage uses the frozen conservative split.
 				tokens := domain.BilledTokens{Input: event.PreparedInputTokens, Output: event.PreparedOutputTokens}
-				if !provider.ResourcePrimitiveUsesOrdinaryInputEstimate(event.ProfileID, event.ProviderPrimitive) {
+				if !provider.PrimitiveUsesOrdinaryInputEstimate(event.ProfileID, event.ProviderPrimitive) {
 					tokens = event.PriceSnapshot.ConservativeTokens(tokens.Input, tokens.Output)
 				}
 				cost, err := event.PriceSnapshot.Calculate(tokens)
