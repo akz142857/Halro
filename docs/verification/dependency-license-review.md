@@ -578,6 +578,12 @@ The 2026-11-16 Node OpenAI contract-test update (#513) moves `openai` from
 lock entry changes without adding packages, and the merged lock keeps the
 Anthropic SDK at 1.7.0. Both SDKs pass the local Node black-box tests.
 
+The 2026-11-16 Python Anthropic contract-test update (#514) moves `anthropic`
+from 2.4.0 to 2.7.0. The installed Apache-2.0 LICENSE, additional MIT license,
+and vendored httpx-aiohttp license and notice are byte-identical. The lock
+keeps `opentelemetry-api` 1.45.2 and changes no transitive versions. The SDK
+remains confined to compatibility tests.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -597,8 +603,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `tests/compatibility/go/go.sum`: `504b5da47dd9e08145d2f8fcf0afc8f6a445d91c`
 - `tests/compatibility/node/package.json`: `9ea13eaa9cbe048115e33eb6eb672e48025db057`
 - `tests/compatibility/node/package-lock.json`: `4e9519004b74a3696acaa9a9f1829e2dc5c31609`
-- `tests/compatibility/python/requirements.in`: `2f1d85bd1d30eaf3338abc05d1d5607bfec61622`
-- `tests/compatibility/python/requirements.txt`: `0c5e176a738702762b4c2b21c47d0d66e54051a7`
+- `tests/compatibility/python/requirements.in`: `38de2d4bdb7610d2bc64dcd6ff8492de9eca0e3c`
+- `tests/compatibility/python/requirements.txt`: `7ea926de375761061c92a4f4055c28661e1c7aa6`
 
 The Python lock hash records the 2026-11-15 OpenTelemetry patch above.
 All ten hashes moved for the 2026-10-23 refreshes recorded above, and
