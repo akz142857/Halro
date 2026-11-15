@@ -56,6 +56,12 @@ describe("projects page", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  it("links administrators to AI configuration from the projects header", async () => {
+    renderPage();
+    await screen.findByRole("button", { name: "创建第一个项目" });
+    expect(screen.getByRole("link", { name: "AI 配置" })).toHaveAttribute("href", "/admin/settings/ai-configuration");
+  });
+
   it("opens AI integration for each selected project without requiring write access", async () => {
     vi.mocked(api.projectsPage).mockResolvedValue({ items: [project({ enabled: false })], next_cursor: "" } as never);
     const config = vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "https://gateway.example", enabled: false });
@@ -65,6 +71,7 @@ describe("projects page", () => {
     client.setQueryData(["session"], { username: "viewer", role: "read_only" });
     render(<QueryClientProvider client={client}><NotificationProvider><ProjectsPage /></NotificationProvider></QueryClientProvider>);
     const entry = await screen.findByRole("button", { name: "AI 接入" });
+    expect(screen.queryByRole("link", { name: "AI 配置" })).not.toBeInTheDocument();
     expect(entry).toBeEnabled();
     entry.focus();
     fireEvent.click(entry);

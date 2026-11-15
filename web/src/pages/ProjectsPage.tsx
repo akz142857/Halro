@@ -153,7 +153,12 @@ export function ProjectsPage() {
     <>
       <PageHeader
         title={t("projects.title")}
-        action={<button className="button primary" disabled={readOnly} onClick={() => setCreating(true)}>{t("projects.create")}</button>}
+        action={
+          <div className="button-group">
+            {!readOnly && <Link className="button secondary" href="/admin/settings/ai-configuration">{t("settings.panes.ai-configuration")}</Link>}
+            <button className="button primary" disabled={readOnly} onClick={() => setCreating(true)}>{t("projects.create")}</button>
+          </div>
+        }
       />
       <OnboardingContextBanner />
       {projects.isPending && <Loading />}
