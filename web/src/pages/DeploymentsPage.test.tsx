@@ -1370,11 +1370,9 @@ describe("deployment card keeps what the row decided", () => {
     expect(within(card).queryByText("以上游为准")).not.toBeInTheDocument();
     // Provider and upstream model are one identity line now.
     expect(within(card).getByText(/OpenAI production/)).toHaveTextContent("gpt-chat");
-    // The bar is edit, the way into the drawer, the state change, and the test
-    // control at its far end. The menu is in the card's head and holds only
-    // what the bar does not.
+    // The pricing shortcut stays next to edit in the action bar.
     expect(Array.from(card.querySelectorAll(".deployment-compact-actions > .button")).map((button) => button.textContent))
-      .toEqual(["编辑", "查看详情", "禁用"]);
+      .toEqual(["编辑", "调整价格", "查看详情", "禁用"]);
     const head = card.querySelector(".resource-card-head") as HTMLElement;
     expect(within(head).getByLabelText(/^更多操作/)).toBeInTheDocument();
     // The bar ends with the control, not with a word about the state: where the
@@ -2041,8 +2039,9 @@ describe("deployment price panel", () => {
     const create = vi.spyOn(api, "createDeploymentPrice").mockResolvedValue(activePriceVersion());
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "调整价格" }));
+    const adjust = await screen.findByRole("button", { name: "调整价格：Deployment dep_1" });
+    await waitFor(() => expect(adjust).toBeEnabled());
+    fireEvent.click(adjust);
     expect(await screen.findByLabelText(/^缓存输入 USD \/ 百万词元/)).toHaveValue("0.1");
     fireEvent.change(screen.getByLabelText(/^缓存输入 USD \/ 百万词元/), { target: { value: "0.5" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
@@ -2172,7 +2171,7 @@ describe("deployment price panel", () => {
     fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
     // Each scheduled row carries a cancel button, so its accessible name names
     // the version rather than being one of several identical "取消".
-    for (const name of ["调整价格", "确认恢复价格", "取消价格版本 v4"]) {
+    for (const name of ["调整价格：Deployment dep_1", "调整价格", "确认恢复价格", "取消价格版本 v4"]) {
       const control = await screen.findByRole("button", { name });
       expect(control).toBeDisabled();
       expect(control).toHaveAttribute("title", "只读账户无法执行此操作。");

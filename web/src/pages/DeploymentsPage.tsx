@@ -273,6 +273,10 @@ function DeploymentRow({
   });
   const priceItems = prices.data?.items ?? [];
   const activePrice = priceItems.find((price) => price.status === "active");
+  const priceAction = t(prices.isSuccess && !activePrice ? "deployments.setPrice" : "deployments.adjustPrice");
+  const priceActionDisabledReason = readOnly ? t("navigation.readOnlyAction")
+    : prices.isPending ? t("common.loadingShort")
+    : prices.isError ? t("deployments.priceUnavailable") : undefined;
   const scheduledPrices = priceItems.filter((price) => price.status === "scheduled");
   // The server refuses any version that is not strictly later than every
   // non-cancelled one, so a scheduled version makes "immediately" unreachable
@@ -490,6 +494,15 @@ function DeploymentRow({
           control to say why, so each carries the reason. */}
       <div className="resource-card-actions row-actions deployment-compact-actions">
         <button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} aria-label={t("deployments.editDeployment", { name: deployment.name })} onClick={onEdit}>{t("common.edit")}</button>
+        <button
+          type="button"
+          className="button secondary"
+          aria-label={`${priceAction}${t("common.labelSeparator")}${deployment.name}`}
+          aria-haspopup="dialog"
+          disabled={readOnly || !prices.isSuccess}
+          title={priceActionDisabledReason}
+          onClick={() => setPricing(true)}
+        >{priceAction}</button>
         {/* A dialog, not a disclosure: the label never changes and the card
             never resizes, so aria-expanded would describe a state the card no
             longer has. */}
@@ -513,7 +526,7 @@ function DeploymentRow({
           <section className="detail-section">
             <div className="detail-section-head">
               <h3>{t("deployments.sectionBilling")}</h3>
-              <button className="button secondary" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setPricing(true)}>{activePrice ? t("deployments.adjustPrice") : t("deployments.setPrice")}</button>
+              <button type="button" className="button secondary" disabled={readOnly || !prices.isSuccess} title={priceActionDisabledReason} onClick={() => setPricing(true)}>{priceAction}</button>
             </div>
             {deployment.pricing_quarantined && <div className="notice warning"><strong>{t("deployments.pricingQuarantined")}</strong><span>{pricingQuarantineReason(deployment, t)}</span><button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setConfirmingRestore(true)}>{t(isClockPricing(deployment) ? "deployments.confirmClockPricing" : "deployments.confirmRestoredPricing")}</button></div>}
             {prices.isError && <ErrorState
