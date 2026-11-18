@@ -55,6 +55,56 @@ func TestProviderResourceWaitsForConfirmationBeforeInFlightReturns(t *testing.T)
 	}
 }
 
+func TestBatchedInferenceClaimsIsolateKeyConflicts(t *testing.T) {
+	store, instance, deployment, project := tombstoneChain(t)
+	store.batches.size = 3
+	store.batches.delay = time.Second
+	before := store.MetadataWriteStats()
+	now := time.Now().UTC()
+	sharedHash := sha256.Sum256([]byte("shared-key"))
+	otherHash := sha256.Sum256([]byte("other-key"))
+	resources := []domain.ProviderResource{
+		keyedResource(project.ID, instance.ID, deployment.ID, instance.ProfileID, "idm_first", sharedHash, now),
+		keyedResource(project.ID, instance.ID, deployment.ID, instance.ProfileID, "idm_racing", sharedHash, now),
+		keyedResource(project.ID, instance.ID, deployment.ID, instance.ProfileID, "idm_unrelated", otherHash, now),
+	}
+	type result struct {
+		resource domain.ProviderResource
+		err      error
+	}
+	results := make(chan result, len(resources))
+	for _, claim := range resources {
+		go func() {
+			stored, err := store.PutProviderResource(context.Background(), claim, 0)
+			results <- result{resource: stored, err: err}
+		}()
+	}
+	var successes, conflicts int
+	for range resources {
+		got := <-results
+		switch {
+		case errors.Is(got.err, ErrAlreadyExists) && got.resource.IdempotencyKeyHash == sharedHash:
+			conflicts++
+		case got.err == nil && got.resource.Revision == 1:
+			successes++
+			indexed, found, err := store.ProviderResourceByIdempotency(context.Background(), project.ID,
+				domain.ResourceInferenceCall, got.resource.IdempotencyKeyHash)
+			if err != nil || !found || indexed.ID != got.resource.ID || indexed.Revision != 1 {
+				t.Errorf("claim %s: indexed=%+v found=%v err=%v", got.resource.ID, indexed, found, err)
+			}
+		default:
+			t.Errorf("claim %s: revision=%d err=%v", got.resource.ID, got.resource.Revision, got.err)
+		}
+	}
+	if successes != 2 || conflicts != 1 {
+		t.Fatalf("successes=%d conflicts=%d, want 2 and 1", successes, conflicts)
+	}
+	after := store.MetadataWriteStats()
+	if calls, transactions := after.BatchCalls-before.BatchCalls, after.BatchTransactions-before.BatchTransactions; calls != 3 || transactions != 1 {
+		t.Fatalf("batch calls=%d transactions=%d, want 3 and 1", calls, transactions)
+	}
+}
+
 // Absence is an answer, not a failure. Folding "this key is free" into the same
 // error value as "the store could not say" is what let a read failure be read
 // as a free key, and the caller cannot tell them apart if the store will not.

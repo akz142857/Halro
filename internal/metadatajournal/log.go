@@ -324,6 +324,12 @@ func (l *Log) AppendWithReceipt(ops []Op) (AppendReceipt, error) {
 	return AppendReceipt{Record: record, ReplicationIndex: replicationIndex}, nil
 }
 
+// HasReplication reports whether this journal was wired to the replication
+// coordinator before it started serving writes.
+func (l *Log) HasReplication() bool {
+	return l.waitConfirmed != nil
+}
+
 // WaitConfirmed waits for the receipt's global index. It is deliberately a
 // separate call so bbolt can commit before a network wait begins.
 func (l *Log) WaitConfirmed(ctx context.Context, receipt AppendReceipt) error {
