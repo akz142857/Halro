@@ -349,7 +349,7 @@ func (a *Adapter) ListInvocationTargets(ctx context.Context, query domain.Target
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, a.classifyHTTPError(response.StatusCode, limitedErrorMessage(response.Body))
+		return nil, a.classifyHTTPResponse(response, limitedErrorMessage(response.Body))
 	}
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {
@@ -466,7 +466,7 @@ func (a *Adapter) Probe(ctx context.Context, providerModel string) error {
 		return nil
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return a.classifyHTTPError(response.StatusCode, limitedErrorMessage(response.Body))
+		return a.classifyHTTPResponse(response, limitedErrorMessage(response.Body))
 	}
 	_, err = io.Copy(io.Discard, io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {
@@ -622,7 +622,7 @@ func (a *Adapter) postJSON(ctx context.Context, providerModel, operation, reques
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		message := limitedErrorMessage(response.Body)
-		return nil, a.classifyHTTPError(response.StatusCode, message)
+		return nil, a.classifyHTTPResponse(response, message)
 	}
 	limited := io.LimitReader(response.Body, maxResponseBytes+1)
 	payload, err := io.ReadAll(limited)
@@ -674,7 +674,7 @@ func (a *Adapter) Embed(ctx context.Context, call provider.EmbeddingCall) (opena
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return openaiapi.EmbeddingResponse{}, a.classifyHTTPError(response.StatusCode, limitedErrorMessage(response.Body))
+		return openaiapi.EmbeddingResponse{}, a.classifyHTTPResponse(response, limitedErrorMessage(response.Body))
 	}
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {
@@ -890,7 +890,7 @@ func (a *Adapter) ChatStream(
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, a.classifyHTTPError(response.StatusCode, limitedErrorMessage(response.Body))
+		return nil, a.classifyHTTPResponse(response, limitedErrorMessage(response.Body))
 	}
 	if contentType := response.Header.Get("Content-Type"); !strings.HasPrefix(strings.ToLower(contentType), "text/event-stream") {
 		return nil, &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "provider did not return an SSE stream"}
@@ -1094,6 +1094,17 @@ func classifyHTTPError(status int, refusal upstreamRefusal) *provider.Error {
 		}
 	}
 	result.Message = fmt.Sprintf("provider error (%d): %s", status, refusalSentence(refusal))
+	return result
+}
+
+func (a *Adapter) classifyHTTPResponse(response *http.Response, refusal upstreamRefusal) *provider.Error {
+	return withRetryAfter(response, a.classifyHTTPError(response.StatusCode, refusal))
+}
+
+func withRetryAfter(response *http.Response, result *provider.Error) *provider.Error {
+	if response.StatusCode == http.StatusTooManyRequests || response.StatusCode == http.StatusServiceUnavailable {
+		result.RetryAfter = provider.ParseRetryAfter(response.Header.Get("Retry-After"), time.Now())
+	}
 	return result
 }
 

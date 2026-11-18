@@ -854,6 +854,31 @@ func (r *Registry) ResolveCandidatesForEvidence(publicModel string, operation Op
 	// the one caller that does not need it.
 	now := time.Now()
 	targets := r.resolveCandidatesLocked(publicModel, operation, minimum, now)
+	return r.rotateCandidatesLocked(publicModel, targets)
+}
+
+// ResolveConfiguredCandidatesFor takes one snapshot of the targets supporting
+// the operation. Generation filters the request's capabilities before asking
+// the eligibility gate, so a suspended but incompatible target cannot explain
+// why the request failed.
+func (r *Registry) ResolveConfiguredCandidatesFor(publicModel string, operation Operation) ([]Target, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	configured := r.targets[publicModel]
+	return filterByOperation(cloneTargets(configured), operation, ""), len(configured) > 0
+}
+
+// OrderEligibleCandidates rotates a filtered round-robin route once.
+func (r *Registry) OrderEligibleCandidates(publicModel string, targets []Target) []Target {
+	if len(targets) < 2 || targets[0].Strategy != "round_robin" {
+		return targets
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.rotateCandidatesLocked(publicModel, targets)
+}
+
+func (r *Registry) rotateCandidatesLocked(publicModel string, targets []Target) []Target {
 	if len(targets) < 2 || targets[0].Strategy != "round_robin" {
 		return targets
 	}

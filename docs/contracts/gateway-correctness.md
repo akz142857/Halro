@@ -18,6 +18,15 @@ This contract is normative for v1.
 - Explicitly classified pre-execution failures and safe provider failures may
   retry or fall back within the configured attempt limits.
 
+For unary generation, when all compatible candidates return a temporary 429
+or are blocked solely by a temporary rate limit, Halro returns HTTP 429. On
+the OpenAI surface the error uses `type=rate_limit_error` and
+`code=provider_rate_limit`. `Retry-After` names the earliest known candidate
+recovery time and is omitted when no usable hint exists. A candidate's upstream
+hint applies to that candidate. A healthy fallback can be attempted while the
+first candidate cools down. Project limit codes identify local admission
+refusals, and `accounting_capacity_exhausted` is a local 503.
+
 ## Admission
 
 Every authenticated request passes at least one bound that no configuration can

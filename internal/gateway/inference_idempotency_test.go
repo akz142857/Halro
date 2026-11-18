@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/akz142857/Halro/internal/auth"
+	openaiwire "github.com/akz142857/Halro/internal/compatibility/openai"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/provider"
@@ -98,6 +100,114 @@ func TestAFailedRequestStillSpendsItsKey(t *testing.T) {
 	var refusal *Error
 	if !errors.As(err, &refusal) || refusal.HTTPStatus != 409 {
 		t.Fatalf("err = %v, want the key to be spent", err)
+	}
+}
+
+func TestDefinitiveRateLimitKeepsTheFingerprintAndAllowsOneRetry(t *testing.T) {
+	now := frozen()
+	f := newDeferredFixtureAt(t, func() time.Time { return now }, nil)
+	ctx := keyed("temporary-refusal")
+	f.adapter.err = &provider.Error{Class: provider.ErrorRateLimit, StatusCode: http.StatusTooManyRequests, Retryable: true, RetryAfter: 7 * time.Second}
+	_, err := f.service.Chat(ctx, f.plaintext, chatRequest())
+	var refusal *Error
+	if !errors.As(err, &refusal) || refusal.HTTPStatus != http.StatusTooManyRequests || refusal.RetryAfter != 7*time.Second {
+		t.Fatalf("initial error = %v, want seven-second 429", err)
+	}
+	initial := f.store.all()
+	if len(initial) != 1 || initial[0].CreationStatus != creationRetryableRefused {
+		t.Fatal("explicit refusals must leave one reusable reservation")
+	}
+	f.adapter.err = nil
+	now = now.Add(3 * time.Second)
+	_, err = f.service.Chat(ctx, f.plaintext, chatRequest())
+	if !errors.As(err, &refusal) || refusal.HTTPStatus != http.StatusTooManyRequests || refusal.RetryAfter != 4*time.Second || f.adapter.calls != 1 {
+		t.Fatalf("retry before recovery = %v, want remaining four seconds and no dispatch", err)
+	}
+	now = now.Add(4 * time.Second)
+	other := chatRequest()
+	other.Messages[0].Content = json.RawMessage(`"different request"`)
+	_, err = f.service.Chat(ctx, f.plaintext, other)
+	if !errors.As(err, &refusal) || refusal.Code != "idempotency_conflict" || f.adapter.calls != 1 {
+		t.Fatalf("different body = %v, want conflict before dispatch", err)
+	}
+	if _, err := f.service.Chat(ctx, f.plaintext, chatRequest()); err != nil {
+		t.Fatalf("same key after recovery: %v", err)
+	}
+	_, err = f.service.Chat(ctx, f.plaintext, chatRequest())
+	if !errors.As(err, &refusal) || refusal.Code != "idempotency_completed" || f.adapter.calls != 2 {
+		t.Fatalf("repeat after success = %v, want completed without dispatch", err)
+	}
+	completed := f.store.all()
+	if len(completed) != 1 || completed[0].ID != initial[0].ID || !completed[0].ExpiresAt.Equal(initial[0].ExpiresAt) {
+		t.Fatal("reclaim changed the durable claim identity or expiry")
+	}
+}
+
+func TestRateLimitOutcomeWriteFailureKeepsTheKeyInFlight(t *testing.T) {
+	now := frozen()
+	f := newDeferredFixtureAt(t, func() time.Time { return now }, nil)
+	ctx := keyed("temporary-refusal-write-failed")
+	f.store.failOutcomeWrite = true
+	f.adapter.err = &provider.Error{Class: provider.ErrorRateLimit, StatusCode: http.StatusTooManyRequests, Retryable: true}
+	_, err := f.service.Chat(ctx, f.plaintext, chatRequest())
+	var refusal *Error
+	if !errors.As(err, &refusal) || refusal.Code != "resource_store_unavailable" {
+		t.Fatalf("failed write = %v, want a 503 storage error", err)
+	}
+	// Same durable state a crash would leave after sending and before recording
+	// the refusal. Another process has no execution evidence to release the key.
+	f.service.instanceID = "inst_restarted"
+	now = now.Add(time.Minute)
+	f.adapter.err = nil
+	_, err = f.service.Chat(ctx, f.plaintext, chatRequest())
+	if !errors.As(err, &refusal) || refusal.Code != "idempotency_in_progress" || f.adapter.calls != 1 {
+		t.Fatalf("retry after restart = %v, want in-progress without a dispatch", err)
+	}
+}
+
+func TestRateLimitedKeyHasOneConcurrentReclaimWinner(t *testing.T) {
+	now := frozen()
+	f := newDeferredFixtureAt(t, func() time.Time { return now }, nil)
+	ctx := keyed("rate-limited-concurrent-retry")
+	f.adapter.err = &provider.Error{Class: provider.ErrorRateLimit, StatusCode: http.StatusTooManyRequests, Retryable: true}
+	_, err := f.service.Chat(ctx, f.plaintext, chatRequest())
+	var refusal *Error
+	if !errors.As(err, &refusal) || refusal.HTTPStatus != http.StatusTooManyRequests {
+		t.Fatalf("initial result = %v, want 429", err)
+	}
+	now = now.Add(time.Minute)
+	principal, targets, err := f.service.resolveRequest(ctx, f.plaintext, "chat", provider.OperationChat, "chat unavailable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := openaiwire.DecodeGenerate(chatRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const concurrent = 8
+	starting := make(chan struct{})
+	results := make(chan error, concurrent)
+	for range concurrent {
+		go func() {
+			<-starting
+			_, _, err := f.service.admitInferenceIdempotency(ctx, principal, targets, "chat", request)
+			results <- err
+		}()
+	}
+	close(starting)
+	winners := 0
+	for range concurrent {
+		err := <-results
+		switch {
+		case err == nil:
+			winners++
+		case errors.As(err, &refusal) && refusal.Code == "idempotency_in_progress":
+		default:
+			t.Errorf("competing claim = %v, want in-progress", err)
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("reclaim winners = %d, want one", winners)
 	}
 }
 

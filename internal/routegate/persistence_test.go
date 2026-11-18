@@ -62,6 +62,33 @@ func gateWithStore(store SuspensionStore) *Gate {
 	return gate
 }
 
+func TestUpstreamRateLimitHintsSurviveRestart(t *testing.T) {
+	for _, hint := range []time.Duration{7 * time.Second, 2 * time.Minute} {
+		t.Run(hint.String(), func(t *testing.T) {
+			store := newRecordingStore()
+			gate := gateWithStore(store)
+			target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 1)
+			gate.Observe(target, Observation{Reason: provider.FailureReasonRateLimited, Status: 429, RetryAfter: hint}, base)
+			restarted := gateWithStore(store)
+			restarted.Restore(store.list())
+			checkAt := base.Add(hint - time.Second)
+			eligible, refused := restarted.FilterWithRefusals([]provider.Target{target}, checkAt)
+			if len(eligible) != 0 || refused[target.ID] != (Refusal{Kind: RefusalRateLimited, RetryAfter: time.Second}) {
+				t.Fatalf("restored refusal before expiry = %#v, admitted=%d", refused, len(eligible))
+			}
+			lease, err := restarted.Admit(target, base.Add(hint))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lease.Abandon()
+			refusal, blocked := restarted.Blocked(target, base.Add(hint))
+			if !blocked || refusal != (Refusal{Kind: RefusalRateLimited}) {
+				t.Fatalf("active half-open probe refusal = %#v, blocked=%t", refusal, blocked)
+			}
+		})
+	}
+}
+
 func invalidCredential(status int) Observation {
 	return Observation{
 		Reason: provider.FailureReasonInvalidCredential,

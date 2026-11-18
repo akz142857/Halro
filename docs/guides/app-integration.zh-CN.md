@@ -261,7 +261,7 @@ Embedding 使用独立别名（背后是声明了 embeddings 能力的独立 Dep
 | `403 model_not_allowed` | 别名不在 Project 的允许列表 | 不重试；核对别名，联系管理员 |
 | `403 budget_exceeded` | 当日预算耗尽（或本次请求的保守估算超过余额） | 不重试；等预算日重置或申请调额 |
 | `409 price_unavailable` | 网关侧价格未配置，拒绝产生未知成本 | 不重试；联系管理员 |
-| `429` | RPM / TPM / 并发 / 上游限流 | 可退避重试；遵守 `Retry-After`（如有），用指数退避 + 抖动 |
+| `429` | RPM / TPM / 并发 / 上游限流（`provider_rate_limit`） | 在调用期限内按 `Retry-After` 重试，缺少提示时使用指数退避与抖动 |
 | `502 provider_error` | 上游 Provider 出错 | 网关已做过有界重试和 fallback；应用侧最多再做少量退避重试 |
 
 重试的总原则：**网关内部已经做了有界重试、fallback、熔断与记账**。应用侧

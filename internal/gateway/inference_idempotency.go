@@ -25,10 +25,13 @@ const inferenceIdempotencyTTL = 24 * time.Hour
 // inferenceIdempotency is one synchronous request's claim on its key, or the
 // zero value for a caller who sent none.
 type inferenceIdempotency struct {
-	service *Service
-	record  domain.ProviderResource
-	held    bool
+	service          *Service
+	record           domain.ProviderResource
+	held             bool
+	retryableRefused bool
 }
+
+const inferenceRetryPending = "retry_pending"
 
 // inferenceClaimKey carries the live claim from admission to the one point that
 // can say the upstream was reached.
@@ -154,6 +157,12 @@ func (s *Service) admitInferenceIdempotency(
 		CreationStatus: creationReserved, ReservedBy: s.instanceID, Status: "pending",
 		CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(inferenceIdempotencyTTL),
 	}
+	if verdict == idempotencyReclaim && existing.ExpiresAt.After(now) {
+		record.CreatedAt, record.ExpiresAt = existing.CreatedAt, existing.ExpiresAt
+		if existing.CreationStatus == creationRetryableRefused || existing.Status == inferenceRetryPending {
+			record.Status = inferenceRetryPending
+		}
+	}
 	stored, err := s.resources.PutProviderResource(ctx, record, expectedRevision)
 	if err != nil {
 		return ctx, nil, s.reservationRefusal(ctx, principal.Project.ID, keyHash, err)
@@ -187,24 +196,17 @@ func (s *Service) reservationRefusal(ctx context.Context, projectID string, keyH
 
 // settle closes the record once the request has an outcome, whatever it was.
 //
-// A request that reached the upstream spends its key either way, and spends it
-// differently. A success is completed: the caller got their answer, and a
-// repeat is told the key is used. A failure is unknown, which is the existing
-// vocabulary for "the upstream may have served this and nobody can say" — the
-// classifier reads it as still in progress, and refusing a retry is the
-// conservative direction when the alternative is billing the caller twice for a
-// call one of them cannot see. Either way the record stays until it expires.
-//
-// A request that never reached the upstream is the other case, and it gives the
-// key back. Nothing was billed and nothing is ambiguous, so the record goes
-// rather than answering the caller's own retry with a conflict.
-func (claim *inferenceIdempotency) settle(ctx context.Context, err error) {
+// A success completes the key. Failures leave it unknown unless every dispatch
+// was explicitly refused and its accounting closed. That refusal preserves the
+// fingerprint while allowing a same-body retry to claim the key by revision.
+func (claim *inferenceIdempotency) settle(ctx context.Context, err error) error {
 	if claim == nil || !claim.held {
-		return
+		return nil
 	}
 	claim.held = false
 	record := claim.record
-	if record.CreationStatus == creationReserved {
+	restoreRefusal := record.CreationStatus == creationReserved && record.Status == inferenceRetryPending
+	if record.CreationStatus == creationReserved && !restoreRefusal {
 		if delErr := claim.service.resources.DeleteProviderResource(ctx, record.ProjectID, record.ID); delErr != nil {
 			// The reservation stays, which refuses this key until it expires
 			// rather than for good. Conservative in the direction that costs a
@@ -212,12 +214,16 @@ func (claim *inferenceIdempotency) settle(ctx context.Context, err error) {
 			claim.service.logger.Error("an unused idempotency reservation could not be released",
 				"resource_id", record.ID, "error", delErr)
 		}
-		return
+		return nil
 	}
 	record.CreationStatus = creationCompleted
 	record.Status = "completed"
 	if err != nil {
 		record.CreationStatus = creationUnknown
+		record.Status = "failed"
+	}
+	if claim.retryableRefused || restoreRefusal {
+		record.CreationStatus = creationRetryableRefused
 		record.Status = "failed"
 	}
 	record.UpdatedAt = claim.service.now()
@@ -227,7 +233,11 @@ func (claim *inferenceIdempotency) settle(ctx context.Context, err error) {
 		// second billed call this exists to prevent.
 		claim.service.logger.Error("an idempotency record could not be closed",
 			"resource_id", record.ID, "error", putErr)
+		if record.CreationStatus == creationRetryableRefused {
+			return gatewayError("resource_store_unavailable", "the retryable refusal could not be recorded", 503, putErr)
+		}
 	}
+	return nil
 }
 
 // inferenceFingerprint identifies the request a key was used for, so the same

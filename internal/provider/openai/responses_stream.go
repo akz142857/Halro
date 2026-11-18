@@ -51,7 +51,7 @@ func (a *Adapter) GenerateSemanticStream(ctx context.Context, call provider.Gene
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, a.classifyHTTPError(response.StatusCode, limitedErrorMessage(response.Body))
+		return nil, a.classifyHTTPResponse(response, limitedErrorMessage(response.Body))
 	}
 	if !strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
 		return nil, acceptedResponseMalformed("Responses upstream did not return SSE", nil)

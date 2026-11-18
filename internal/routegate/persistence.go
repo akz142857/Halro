@@ -21,7 +21,7 @@ import (
 // policy that has one.
 const PersistWindowThreshold = 5 * time.Minute
 
-// SuspensionStore is where the long refusals outlive the process.
+// SuspensionStore is where upstream retry hints and long refusals outlive the process.
 //
 // It is deliberately two calls and no read: the gate writes what it learns and
 // reads the whole set once at open. Anything richer would be a second source of
@@ -64,13 +64,14 @@ func (g *Gate) UsePersistence(store SuspensionStore, onError func(error)) {
 // Two conditions, and the first is the one that keeps availability out. A
 // suspension with no canonical reason came from a 5xx run or a failed probe:
 // both are re-learned within one interval of traffic, and both are keyed to a
-// deployment the restart may not even have any more. What is left is the long
-// refusals — a credential no clock will fix, and a window measured in hours.
+// deployment the restart may not even have any more. An explicit rate-limit
+// hint is kept even below the threshold so a restart honors what the upstream
+// asked for.
 func (s *scopeState) persistable() bool {
 	if s.evidence.Reason == "" || !s.suspended() {
 		return false
 	}
-	return s.indefinite || s.window > PersistWindowThreshold
+	return s.indefinite || (s.evidence.Reason == provider.FailureReasonRateLimited && s.retryHint) || s.window > PersistWindowThreshold
 }
 
 // recordFor renders one state as the row that would restore it.
@@ -262,6 +263,7 @@ func (g *Gate) Restore(suspensions []domain.RouteSuspension) {
 			indefinite: stored.Indefinite,
 			window:     time.Duration(stored.WindowSeconds) * time.Second,
 			persisted:  true,
+			retryHint:  stored.Reason == string(provider.FailureReasonRateLimited),
 			evidence: Evidence{
 				Reason:             provider.FailureReason(stored.Reason),
 				Status:             stored.ProviderStatus,

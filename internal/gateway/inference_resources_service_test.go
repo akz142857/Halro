@@ -66,7 +66,7 @@ func (s *inferenceResourcesMemoryStore) PutProviderResource(_ context.Context, r
 	}
 	// Leaves the record exactly as a crash during the provider call would: the
 	// outcome was never recorded, so the stored state is still in_flight.
-	if s.failOutcomeWrite && resource.CreationStatus == creationUnknown {
+	if s.failOutcomeWrite && (resource.CreationStatus == creationUnknown || resource.CreationStatus == creationRetryableRefused) {
 		s.failOutcomeWrite = false
 		return domain.ProviderResource{}, errors.New("injected outcome write failure")
 	}

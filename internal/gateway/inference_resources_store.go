@@ -41,6 +41,7 @@ type InferenceResourcesResourceStore interface {
 //	in_flight — the provider call has been made and its outcome is not known
 //	unknown   — the call was made and failed in a way that leaves it ambiguous
 //	completed — the upstream resource exists and its ID is recorded
+//	retryable_refused — synchronous inference was explicitly rate-limited before execution
 //
 // reserved and in_flight used to be the same state, which is what made a crash
 // unrecoverable: a reservation left behind by a dead process is indistinguishable
@@ -49,10 +50,11 @@ type InferenceResourcesResourceStore interface {
 // Splitting them makes the safe half recoverable and leaves the unsafe half
 // exactly as closed as it was.
 const (
-	creationReserved  = "reserved"
-	creationInFlight  = "in_flight"
-	creationUnknown   = "unknown"
-	creationCompleted = "completed"
+	creationReserved         = "reserved"
+	creationInFlight         = "in_flight"
+	creationUnknown          = "unknown"
+	creationCompleted        = "completed"
+	creationRetryableRefused = "retryable_refused"
 )
 
 type idempotencyVerdict int
@@ -106,6 +108,8 @@ func (s *Service) classifyIdempotency(
 	switch {
 	case existing.CreationStatus == creationCompleted:
 		return existing, idempotencyCompleted, nil
+	case kind == domain.ResourceInferenceCall && existing.CreationStatus == creationRetryableRefused:
+		return existing, idempotencyReclaim, nil
 	case existing.CreationStatus == creationReserved && existing.ReservedBy != s.instanceID:
 		// The data directory is held exclusively, so a reservation owned by any
 		// other instance belongs to a process that is no longer running. It never
