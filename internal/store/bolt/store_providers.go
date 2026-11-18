@@ -412,7 +412,16 @@ func (s *Store) PutProviderResource(ctx context.Context, resource domain.Provide
 	if err := resource.Validate(); err != nil {
 		return domain.ProviderResource{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	write := s.update
+	if resource.Kind == domain.ResourceInferenceCall && s.journal != nil && !s.journal.HasReplication() {
+		// Independent requests can share a durable commit for their claims.
+		// In a replicated group, keep each dispatch confirmation independent
+		// of the other writes that might otherwise share its transaction.
+		write = s.batch
+	}
+	stored := resource
+	err := write(func(tx *Tx) error {
+		stored = resource
 		// A new resource may only be created against live owners. Updates are
 		// exempt: a batch keeps being polled and settled after its deployment is
 		// tombstoned, and refusing the status write would strand the record.
@@ -464,7 +473,7 @@ func (s *Store) PutProviderResource(ctx context.Context, resource domain.Provide
 				// stale entry is about to be overwritten by this one.
 			}
 		}
-		if err := putVersioned(bucket, resource.ID, expectedRevision, &resource); err != nil {
+		if err := putVersioned(bucket, resource.ID, expectedRevision, &stored); err != nil {
 			return err
 		}
 		if !keyed {
@@ -477,7 +486,7 @@ func (s *Store) PutProviderResource(ctx context.Context, resource domain.Provide
 		// misinterprets; keep the field immutable and it cannot arise.
 		return tx.Bucket(bucketProviderResourceIdem).Put(indexKey, []byte(resource.ID))
 	})
-	return resource, err
+	return stored, err
 }
 
 // providerResourceIdemKey is the index entry for one key's use within one
