@@ -343,7 +343,7 @@ func (a *Adapter) inferenceResourcesDo(ctx context.Context, method, operation, r
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return inferenceResourcesHTTPResult{}, classifyHTTPError(response.StatusCode, limitedErrorMessage(response.Body))
+		return inferenceResourcesHTTPResult{}, withRetryAfter(response, classifyHTTPError(response.StatusCode, limitedErrorMessage(response.Body)))
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxInferenceResourcesResponseBytes+1))
 	if err != nil {

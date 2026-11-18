@@ -23,8 +23,8 @@ what it was asked to do.
   and the request. Neither the key, the request, nor the answer is stored.
 - The record carries the lifecycle and the route it was first sent to, and never
   an object. That is enforced by validation rather than by convention.
-- States are the resource plane's: `reserved`, `in_flight`, `unknown` and
-  `completed`. The key moves to `in_flight` in the instruction before the
+- States are `reserved`, `in_flight`, `unknown`, `completed` and, for unary
+  generation, `retryable_refused`. The key moves to `in_flight` immediately before the
   Provider call and nowhere earlier, so an interruption from that point on is
   remembered as possibly served — and everything that refuses a request without
   the upstream hearing of it stays on the `reserved` side of that line.
@@ -36,13 +36,18 @@ what it was asked to do.
   | a different request fingerprint | `409 idempotency_conflict` |
   | a request still running, or one whose outcome is unknown | `409 idempotency_in_progress` |
   | a request that completed | `409 idempotency_completed` |
+  | unary generation refused by explicit upstream rate limits | the same fingerprint can claim the key by revision after the route is eligible |
   | a reservation from a process that is gone | admitted; it never reached the upstream |
   | a record past its 24 hours | admitted, whatever the first request's outcome was, and whatever the new request is |
 
-- A failed request still spends its key **when the upstream was reached**: a
-  retry after one is the second call the key was sent to prevent, so it settles
-  as `unknown`, the existing vocabulary for an outcome nobody can determine, and
-  is never silently converted into a retryable or refunded result.
+- A unary generation request that ends in `429 provider_rate_limit` is marked
+  `retryable_refused` when every dispatched attempt was explicitly and
+  unambiguously rate-limited and accounting finalized. A retry keeps the same
+  fingerprint and expiration. A failed attempt to record the refusal returns
+  `503 resource_store_unavailable` and leaves the key protected.
+- A failure after dispatch with an uncertain outcome spends its key. Timeouts,
+  ambiguous upstream failures, and interruptions before the outcome is durably
+  recorded remain protected as in-flight or unknown.
 - A request Halro refuses **on its own** — a capability filter, redaction, a
   token limit, a Project budget, a per-attempt reservation, or the failure to
   record the dispatch itself — gets its key back. Nothing was billed and nothing

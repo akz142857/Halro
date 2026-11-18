@@ -1,6 +1,7 @@
 package routegate
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/akz142857/Halro/internal/provider"
@@ -16,6 +17,7 @@ import (
 type RefusalKind string
 
 const (
+	RefusalRateLimited RefusalKind = "rate_limited"
 	// RefusalQuotaExhausted is an upstream that answered and said no more. Time
 	// will not necessarily fix it; somebody topping up an account will.
 	RefusalQuotaExhausted RefusalKind = "quota_exhausted"
@@ -28,8 +30,13 @@ const (
 	RefusalUnavailable RefusalKind = "unavailable"
 )
 
-func refusalKindFor(reason provider.FailureReason) RefusalKind {
-	switch reason {
+func refusalKindFor(evidence Evidence) RefusalKind {
+	switch evidence.Reason {
+	case provider.FailureReasonRateLimited:
+		if evidence.Status == http.StatusTooManyRequests {
+			return RefusalRateLimited
+		}
+		return RefusalUnavailable
 	case provider.FailureReasonSubscriptionQuotaExhausted:
 		return RefusalQuotaExhausted
 	case provider.FailureReasonInvalidCredential, provider.FailureReasonSubscriptionInactive:
@@ -49,9 +56,43 @@ func (k RefusalKind) severity() int {
 		return 3
 	case RefusalQuotaExhausted:
 		return 2
-	default:
+	case RefusalUnavailable:
 		return 1
+	default:
+		return 0
 	}
+}
+
+// Blocked reports the scopes preventing this target from serving right now.
+// It does not claim a half-open slot. A target can recover only after all of
+// its blocking scopes clear, and an occupied probe slot has no known end time.
+func (g *Gate) Blocked(target provider.Target, now time.Time) (Refusal, bool) {
+	defer g.flush()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	blocked := g.blockingScopes(target, now)
+	return g.refusalForScopesLocked(blocked, now), len(blocked) != 0
+}
+
+func (g *Gate) refusalForScopesLocked(blocked []Scope, now time.Time) Refusal {
+	var refusal Refusal
+	unknownEnd := false
+	for _, scope := range blocked {
+		state := g.scopes[scope]
+		kind := refusalKindFor(state.evidence)
+		if refusal.Kind == "" || kind.severity() > refusal.Kind.severity() {
+			refusal.Kind = kind
+		}
+		if state.indefinite || !state.suspendedUntil.After(now) {
+			unknownEnd = true
+		} else {
+			refusal.RetryAfter = max(refusal.RetryAfter, state.suspendedUntil.Sub(now))
+		}
+	}
+	if unknownEnd {
+		refusal.RetryAfter = 0
+	}
+	return refusal
 }
 
 // Refusal explains an alias with nothing left to try.
@@ -81,7 +122,10 @@ func (g *Gate) Explain(targets []provider.Target, now time.Time) (Refusal, bool)
 			if state == nil || !state.suspended() || staleLocked(scope, state, target) {
 				continue
 			}
-			kind := refusalKindFor(state.evidence.Reason)
+			kind := refusalKindFor(state.evidence)
+			if kind == RefusalRateLimited {
+				kind = RefusalUnavailable
+			}
 			wait := time.Duration(0)
 			if !state.indefinite && state.suspendedUntil.After(now) {
 				wait = state.suspendedUntil.Sub(now)

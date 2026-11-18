@@ -76,6 +76,8 @@
       "a request with no Idempotency-Key behaves exactly as before and writes nothing durable; the key is what buys the record",
       "a request the gateway refuses on its own — a capability filter, a token limit, a Project budget — never reached the upstream and gives its key back, so a retry is answered by the limit it broke rather than by a conflict about a call nobody made",
       "a key is remembered for 24 hours, whatever state its request ended in, after which the same key is free again — including for a different request",
+      "for non-streaming Chat Completions, the same key and request can be retried after 429 provider_rate_limit if all dispatched attempts explicitly refused execution and accounting finished",
+      "when all compatible targets temporarily rate-limit the request or are blocked by temporary limits, the error is 429 provider_rate_limit and Retry-After carries the earliest available recovery hint",
       "a streaming repeat is refused before the stream opens, as an ordinary HTTP error rather than an event inside a stream the caller has been told is starting"
     ],
     "provider_profiles": [

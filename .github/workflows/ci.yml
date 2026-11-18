@@ -52,7 +52,10 @@ jobs:
       - run: npm test
         working-directory: web
       # Separated from the registry's availability; see the script's header.
-      - run: ./scripts/npm-audit-gate.sh web moderate
+      # Verify the withdrawn dev-only advisory if npm's feed still reports it.
+      - run: ./scripts/npm-audit-gate.sh web moderate --verify-withdrawn-picomatch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - run: npm run typecheck
         working-directory: web
       - run: npm run build

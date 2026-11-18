@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -876,21 +875,7 @@ func safeProviderCode(value string) string {
 }
 
 func retryAfter(header http.Header, now time.Time) time.Duration {
-	const maximum = 24 * time.Hour
-	value := strings.TrimSpace(header.Get("Retry-After"))
-	if value == "" {
-		return 0
-	}
-	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
-		if seconds >= int64(maximum/time.Second) {
-			return maximum
-		}
-		return time.Duration(seconds) * time.Second
-	}
-	if deadline, err := http.ParseTime(value); err == nil && deadline.After(now) {
-		return min(deadline.Sub(now), maximum)
-	}
-	return 0
+	return provider.ParseRetryAfter(header.Get("Retry-After"), now)
 }
 
 func bedrockResponseID(upstream, fallback string) string {

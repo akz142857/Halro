@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
@@ -859,5 +860,30 @@ func TestBadRequestRefusalKindComesFromTheUpstreamCode(t *testing.T) {
 		if classified.Refusal != test.want {
 			t.Fatalf("status %d body %s mapped to %q, want %q", test.status, test.body, classified.Refusal, test.want)
 		}
+	}
+}
+
+func TestUnaryOverloadCarriesRetryAfter(t *testing.T) {
+	endpoint := &url.URL{Scheme: "https", Host: "api.openai.com"}
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusServiceUnavailable,
+			Header:     http.Header{"Retry-After": []string{"11"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"code":"server_is_overloaded"}}`)),
+			Request:    request,
+		}, nil
+	})}
+	adapter, err := New(endpoint, []byte("fixture-key"), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapter.Chat(context.Background(), provider.ChatCall{
+		ProviderModel: "gpt-test",
+		Request:       openaiapi.ChatCompletionRequest{Model: "public", Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hello")}}},
+	})
+	var upstream *provider.Error
+	if !errors.As(err, &upstream) || upstream.StatusCode != http.StatusServiceUnavailable ||
+		upstream.Class != provider.ErrorProvider5xx || upstream.Ambiguous || upstream.RetryAfter != 11*time.Second {
+		t.Fatalf("classified error = %#v", upstream)
 	}
 }

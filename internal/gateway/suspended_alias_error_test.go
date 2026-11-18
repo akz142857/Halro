@@ -2,7 +2,9 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -102,6 +104,62 @@ func TestTheRefusalNamesTheProblemThatWillNotFixItself(t *testing.T) {
 	}
 	if classified.RetryAfter != 0 {
 		t.Fatalf("a dead credential was given a retry hint of %v", classified.RetryAfter)
+	}
+}
+
+func TestLiveRateLimitCombinesOnlyCompatibleGateRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		backup       routegate.Observation
+		jsonRequired bool
+		status       int
+		code         string
+		delay        time.Duration
+	}{
+		{"another rate limit", routegate.Observation{Reason: provider.FailureReasonRateLimited, Status: 429, RetryAfter: 3 * time.Second}, false, 429, "provider_rate_limit", 3 * time.Second},
+		{"outage", routegate.Observation{Status: 503}, false, 503, "all_candidates_suspended", 5 * time.Minute},
+		{"incompatible outage", routegate.Observation{Status: 503}, true, 429, "provider_rate_limit", 7 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := frozen()
+			f := newDeferredFixtureAt(t, func() time.Time { return now }, nil)
+			primary := f.registry.ResolveAll("chat")[0]
+			primary.Capabilities.JSONObject = true
+			backup := primary
+			backup.ID, backup.DeploymentID, backup.CredentialID = "target_2", "dep_target_2", "cred_2"
+			backup.Priority = 1
+			backup.Capabilities.JSONObject = false
+			backupAdapter := &fakeAdapter{response: f.adapter.response}
+			backup.Adapter = backupAdapter
+			registry := provider.NewRegistry()
+			for _, target := range []provider.Target{primary, backup} {
+				if err := registry.Register(target); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.registry.Replace(registry)
+			for range 10 {
+				// Rate-limit cases use a single explicit observation. Availability
+				// needs multiple consecutive failures to trip its threshold.
+				f.gate.Observe(backup, tc.backup, now)
+				if tc.backup.Status == http.StatusTooManyRequests {
+					break
+				}
+			}
+			f.adapter.err = &provider.Error{Class: provider.ErrorRateLimit, StatusCode: 429, Retryable: true, RetryAfter: 7 * time.Second}
+			request := chatRequest()
+			if tc.jsonRequired {
+				request.ResponseFormat = json.RawMessage(`{"type":"json_object"}`)
+			}
+			_, err := f.service.Chat(context.Background(), f.plaintext, request)
+			var refusal *Error
+			if !errors.As(err, &refusal) || refusal.HTTPStatus != tc.status || refusal.Code != tc.code || refusal.RetryAfter != tc.delay {
+				t.Fatalf("result = %#v, want %d %s and %s", refusal, tc.status, tc.code, tc.delay)
+			}
+			if f.adapter.calls != 1 || backupAdapter.calls != 0 {
+				t.Fatalf("upstream attempts = (%d, %d), want (1, 0)", f.adapter.calls, backupAdapter.calls)
+			}
+		})
 	}
 }
 

@@ -66,6 +66,7 @@ type scopeState struct {
 	window         time.Duration
 	probing        int
 	evidence       Evidence
+	retryHint      bool
 	// persisted says a row for this scope is in the store, so a deletion has
 	// something to remove and a probe-driven clear does not open a transaction
 	// for a row that was never written.
@@ -209,6 +210,10 @@ func (g *Gate) observeLocked(
 	// What the store already believes, so an observation that changes nothing
 	// about when this scope comes back does not rewrite its row.
 	heldUntil, heldWindow, heldIndefinite := state.suspendedUntil, state.window, state.indefinite
+	sameReason := state.evidence.Reason == observation.Reason
+	if !sameReason {
+		state.retryHint = false
+	}
 	state.policy = policy
 	state.failures++
 	if state.failures < policy.Threshold && !wasSuspended {
@@ -247,6 +252,18 @@ func (g *Gate) observeLocked(
 		state.window = policy.MaxWindow
 	}
 	state.suspendedUntil = now.Add(state.window)
+	if observation.Reason == provider.FailureReasonRateLimited && policy.HonourRetryAfter {
+		if observation.RetryAfter > 0 {
+			state.retryHint = true
+			upstreamUntil := now.Add(min(observation.RetryAfter, provider.MaxRetryAfter))
+			if upstreamUntil.After(state.suspendedUntil) {
+				state.suspendedUntil = upstreamUntil
+			}
+		}
+		if sameReason && state.retryHint && heldUntil.After(state.suspendedUntil) {
+			state.suspendedUntil = heldUntil
+		}
+	}
 	// Written on more than the first suspension: a failed probe doubles the
 	// window, and a row still naming the old one would restore a suspension
 	// that ends earlier than the gate decided it should.
@@ -334,19 +351,37 @@ func (g *Gate) blockingScopes(target provider.Target, now time.Time) []Scope {
 // exactly when the upstream is least likely to answer. The caller is better
 // served by a fast refusal that says why, and the window ends in a probe anyway.
 func (g *Gate) Filter(targets []provider.Target, now time.Time) []provider.Target {
+	admitted, _ := g.filter(targets, now, false)
+	return admitted
+}
+
+// FilterWithRefusals reads eligible targets and their excluded peers under
+// the same lock so exhaustion can account for every compatible candidate.
+func (g *Gate) FilterWithRefusals(targets []provider.Target, now time.Time) ([]provider.Target, map[string]Refusal) {
+	return g.filter(targets, now, true)
+}
+
+func (g *Gate) filter(targets []provider.Target, now time.Time, captureRefusals bool) ([]provider.Target, map[string]Refusal) {
 	if len(targets) == 0 {
-		return targets
+		return targets, nil
 	}
 	defer g.flush()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	admitted := make([]provider.Target, 0, len(targets))
+	var refusals map[string]Refusal
 	for _, target := range targets {
-		if len(g.blockingScopes(target, now)) == 0 {
+		blocked := g.blockingScopes(target, now)
+		if len(blocked) == 0 {
 			admitted = append(admitted, target)
+		} else if captureRefusals {
+			if refusals == nil {
+				refusals = make(map[string]Refusal)
+			}
+			refusals[target.ID] = g.refusalForScopesLocked(blocked, now)
 		}
 	}
-	return admitted
+	return admitted, refusals
 }
 
 // Lease is one attempt's claim on the scopes it is testing.

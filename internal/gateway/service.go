@@ -323,26 +323,34 @@ func (s *Service) assertPolicySnapshotsCoverProject(principal auth.AuthResult) e
 	return nil
 }
 
+func (s *Service) authorizeRequest(ctx context.Context, plaintextKey, model string) (auth.AuthResult, error) {
+	principal, err := s.auth.Authenticate(plaintextKey, s.now())
+	if err != nil {
+		return auth.AuthResult{}, gatewayError("invalid_api_key", "invalid API key", 401, err)
+	}
+	if !domain.HasGatewayScope(principal.Key.Scopes, domain.GatewayScopeInference) {
+		return auth.AuthResult{}, gatewayError("gateway_key_scope_denied", "gateway key does not allow inference", 403, nil)
+	}
+	if !slices.Contains(principal.Project.AllowedModels, model) {
+		return auth.AuthResult{}, gatewayError("model_not_allowed", "model is not allowed for this project", 403, nil)
+	}
+	if err := authorizeSource(ctx, principal.Project); err != nil {
+		return auth.AuthResult{}, err
+	}
+	if err := s.assertPolicySnapshotsCoverProject(principal); err != nil {
+		return auth.AuthResult{}, err
+	}
+	return principal, nil
+}
+
 func (s *Service) resolveRequest(
 	ctx context.Context,
 	plaintextKey, model string,
 	operation provider.Operation,
 	unsupportedMessage string,
 ) (auth.AuthResult, []provider.Target, error) {
-	principal, err := s.auth.Authenticate(plaintextKey, s.now())
+	principal, err := s.authorizeRequest(ctx, plaintextKey, model)
 	if err != nil {
-		return auth.AuthResult{}, nil, gatewayError("invalid_api_key", "invalid API key", 401, err)
-	}
-	if !domain.HasGatewayScope(principal.Key.Scopes, domain.GatewayScopeInference) {
-		return auth.AuthResult{}, nil, gatewayError("gateway_key_scope_denied", "gateway key does not allow inference", 403, nil)
-	}
-	if !slices.Contains(principal.Project.AllowedModels, model) {
-		return auth.AuthResult{}, nil, gatewayError("model_not_allowed", "model is not allowed for this project", 403, nil)
-	}
-	if err := authorizeSource(ctx, principal.Project); err != nil {
-		return auth.AuthResult{}, nil, err
-	}
-	if err := s.assertPolicySnapshotsCoverProject(principal); err != nil {
 		return auth.AuthResult{}, nil, err
 	}
 	targets := s.registry.ResolveCandidatesFor(model, operation)
@@ -1322,24 +1330,18 @@ func (s *Service) generate(
 	canonical semantic.GenerateRequest,
 	render func(semantic.GenerateResult) error,
 ) (semantic.GenerateResult, error) {
-	principal, targets, err := s.resolveRequest(
-		ctx, plaintextKey, publicModel, provider.OperationChat,
-		"model route does not support chat completions",
-	)
+	principal, err := s.authorizeRequest(ctx, plaintextKey, publicModel)
 	if err != nil {
 		return semantic.GenerateResult{}, err
 	}
-	ctx, claim, err := s.admitInferenceIdempotency(ctx, principal, targets, publicModel, canonical)
-	if err != nil {
-		return semantic.GenerateResult{}, err
+	targets, exists := s.registry.ResolveConfiguredCandidatesFor(publicModel, provider.OperationChat)
+	if !exists {
+		return semantic.GenerateResult{}, gatewayError("model_not_found", "model route was not found", 404, nil)
 	}
-	result, err := s.executeGenerate(ctx, principal, targets, publicModel, canonical, render, admitFullRequest, nil)
-	// Settled on the way out whatever happened: a failure still reached the
-	// upstream, and a retry after one is the second call the key was sent to
-	// prevent. The cleanup context is the request's own — a caller who
-	// disconnects must not leave the key held until it expires.
-	claim.settle(context.WithoutCancel(ctx), err)
-	return result, err
+	if len(targets) == 0 {
+		return semantic.GenerateResult{}, gatewayError("unsupported_feature", "model route does not support chat completions", 400, nil)
+	}
+	return s.executeGenerate(ctx, principal, targets, publicModel, canonical, render, admitFullRequest, nil)
 }
 
 // executeGenerate runs a resolved request: capability filtering, redaction,
@@ -1362,8 +1364,9 @@ func (s *Service) executeGenerate(
 	render func(semantic.GenerateResult) error,
 	admission admissionMode,
 	requestIDOut *string,
-) (semantic.GenerateResult, error) {
+) (_ semantic.GenerateResult, resultErr error) {
 	candidates := targets
+	fingerprintRequest := canonical
 	var err error
 	targets = filterSemanticCapabilities(targets, canonical.Requirements)
 	targets = filterGenerateProfileCompatibility(targets, canonical)
@@ -1398,6 +1401,30 @@ func (s *Service) executeGenerate(
 	if len(targets) == 0 {
 		return semantic.GenerateResult{}, gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
 	}
+	configuredCount := len(targets)
+	var failures generationFailures
+	var claim *inferenceIdempotency
+	if admission == admitFullRequest {
+		now := s.now()
+		var blocked map[string]routegate.Refusal
+		targets, blocked = s.routes.FilterWithRefusals(targets, now)
+		for targetID, refusal := range blocked {
+			failures.record(targetID, refusal, now)
+		}
+		if len(targets) == 0 {
+			return semantic.GenerateResult{}, failures.suspendedError(configuredCount, now)
+		}
+		targets = s.registry.OrderEligibleCandidates(publicModel, targets)
+		ctx, claim, err = s.admitInferenceIdempotency(ctx, principal, targets, publicModel, fingerprintRequest)
+		if err != nil {
+			return semantic.GenerateResult{}, err
+		}
+		defer func() {
+			if err := claim.settle(context.WithoutCancel(ctx), resultErr); err != nil {
+				resultErr = err
+			}
+		}()
+	}
 	run, err := s.beginRequestRun(ctx, principal, publicModel, targets, totalTokens, inputTokens, outputTokens, canonical, admission)
 	if err != nil {
 		return semantic.GenerateResult{}, err
@@ -1410,8 +1437,9 @@ func (s *Service) executeGenerate(
 	if requestIDOut != nil {
 		*requestIDOut = requestID
 	}
-	var lastErr error
+	var lastErr, lastOtherErr error
 	attemptCount := 0
+	allDispatchesRateLimited := true
 	for targetIndex, target := range targets {
 		for targetTry := 0; targetTry < s.maxAttemptsPerTarget && attemptCount < s.maxAttempts; targetTry++ {
 			if ctx.Err() != nil {
@@ -1419,7 +1447,16 @@ func (s *Service) executeGenerate(
 				break
 			}
 			if attemptCount > 0 {
-				if err := s.waitRetry(ctx, attemptCount-1, lastErr); err != nil {
+				var previous error
+				if targetTry > 0 {
+					var upstream *provider.Error
+					_, rateLimited := definitiveRateLimit(lastErr, target)
+					if rateLimited || (errors.As(lastErr, &upstream) && upstream.RetryAfter > s.retryMaxDelay) {
+						break
+					}
+					previous = lastErr
+				}
+				if err := s.waitRetry(ctx, attemptCount-1, previous); err != nil {
 					lastErr = err
 					break
 				}
@@ -1437,6 +1474,14 @@ func (s *Service) executeGenerate(
 					return semantic.GenerateResult{}, s.exhaustedAttemptsError(err)
 				}
 				lastErr = err
+				if errors.Is(err, routegate.ErrSuspended) {
+					now := s.now()
+					if refusal, blocked := s.routes.Blocked(target, now); blocked {
+						failures.record(target.ID, refusal, now)
+					}
+				} else {
+					lastOtherErr = err
+				}
 				break
 			}
 			attemptCount++
@@ -1516,6 +1561,19 @@ func (s *Service) executeGenerate(
 				return semanticResponse, nil
 			}
 			lastErr = providerErr
+			upstream, rateLimited := definitiveRateLimit(providerErr, target)
+			allDispatchesRateLimited = allDispatchesRateLimited && rateLimited
+			if rateLimited {
+				now := s.now()
+				refusal := routegate.Refusal{Kind: routegate.RefusalRateLimited, RetryAfter: upstream.RetryAfter}
+				if blocked, ok := s.routes.Blocked(target, now); ok && (upstream.RetryAfter > 0 || blocked.Kind != routegate.RefusalRateLimited) {
+					refusal = blocked
+				}
+				failures.record(target.ID, refusal, now)
+			} else {
+				lastOtherErr = providerErr
+				failures.record(target.ID, routegate.Refusal{}, time.Time{})
+			}
 			if !walkOn(providerErr, attempt) {
 				if err := run.finalize("provider_error"); err != nil {
 					return semantic.GenerateResult{}, gatewayError(
@@ -1534,7 +1592,33 @@ func (s *Service) executeGenerate(
 			"accounting_unavailable", "request accounting could not be finalized", 503, err,
 		)
 	}
-	return semantic.GenerateResult{}, s.exhaustedAttemptsError(lastErr)
+	if ctx.Err() != nil {
+		return semantic.GenerateResult{}, ctx.Err()
+	}
+	if retryAfter, allRateLimited := failures.allRateLimited(configuredCount, s.now()); allRateLimited {
+		if claim != nil && attemptCount > 0 && allDispatchesRateLimited {
+			claim.retryableRefused = true
+		}
+		return semantic.GenerateResult{}, upstreamRateLimitError(retryAfter)
+	}
+	// A tail 429 or a newly suspended target cannot hide a failure we already
+	// observed on another candidate.
+	var upstream *provider.Error
+	if errors.Is(lastErr, routegate.ErrSuspended) || (errors.As(lastErr, &upstream) && upstream.Class == provider.ErrorRateLimit) {
+		if lastOtherErr != nil {
+			return semantic.GenerateResult{}, s.exhaustedAttemptsError(lastOtherErr)
+		}
+		if refusal, ok := failures.otherSuspension(s.now()); ok {
+			return semantic.GenerateResult{}, suspendedAliasError(refusal)
+		}
+	}
+	failure := s.exhaustedAttemptsError(lastErr)
+	var mapped *Error
+	if claim != nil && attemptCount > 0 && allDispatchesRateLimited &&
+		errors.As(failure, &mapped) && mapped.Code == "provider_rate_limit" {
+		claim.retryableRefused = true
+	}
+	return semantic.GenerateResult{}, failure
 }
 
 // Responses implements the stateless Responses facade. It decodes its own wire
