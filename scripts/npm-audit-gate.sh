@@ -27,19 +27,25 @@ set -u
 # a red main teaches people to stop reading main.
 
 usage() {
-	echo "usage: $0 <directory> [audit-level] [--require-endpoint]" >&2
+	echo "usage: $0 <directory> [audit-level] [--require-endpoint|--verify-withdrawn-picomatch]" >&2
 	exit 2
 }
 
 require_endpoint=0
+verify_withdrawn_picomatch=0
 args=""
 for arg in "$@"; do
 	case "$arg" in
 		--require-endpoint) require_endpoint=1 ;;
+		--verify-withdrawn-picomatch) verify_withdrawn_picomatch=1 ;;
 		-*) echo "unknown flag: $arg" >&2; usage ;;
 		*) args="${args:+$args }$arg" ;;
 	esac
 done
+
+if [ "$require_endpoint" -eq 1 ] && [ "$verify_withdrawn_picomatch" -eq 1 ]; then
+	usage
+fi
 
 # shellcheck disable=SC2086
 set -- $args
@@ -92,6 +98,12 @@ while :; do
 			exit 0
 			;;
 		vulnerable)
+			if [ "$verify_withdrawn_picomatch" -eq 1 ]; then
+				script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+				if printf '%s' "$report" | node "$script_dir/npm-audit-withdrawn-picomatch.mjs" "$directory/package-lock.json"; then
+					exit 0
+				fi
+			fi
 			echo "npm audit ($directory): vulnerabilities at $level or above [$detail]" >&2
 			(cd "$directory" && npm audit --audit-level="$level") || true
 			exit 1
