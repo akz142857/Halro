@@ -6,6 +6,31 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-19
+
+### Changed
+
+- Batch durable idempotency writes for independent inference requests on
+  standalone Halro, reducing write contention under concurrency. Replicated
+  deployments still wait for per-request dispatch confirmation.
+
+### Fixed
+
+- When temporary upstream rate limits exhaust a synchronous generation route,
+  return `429 provider_rate_limit` with the earliest known `Retry-After`.
+  Keep an explicitly rate-limited target in cooldown across restarts and let
+  eligible fallback targets serve requests without waiting out its cooldown.
+- Allow a non-streaming Chat Completions request to retry with the same
+  `Idempotency-Key` and request body after a definitive rate-limit refusal
+  once accounting and the refusal record are committed. Keep uncertain
+  outcomes protected against repeat upstream execution.
+
+### Upgrading
+
+- Upgrading from v0.15.0 uses the existing data directory, configuration and
+  metadata schema 43. Back up the data directory and keep the Master Key
+  separately. Restore the pre-upgrade backup with v0.15.0 to roll back.
+
 ## [0.15.0] - 2026-11-16
 
 ### Added
@@ -3031,6 +3056,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.16.0]: https://github.com/akz142857/Halro/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/akz142857/Halro/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/akz142857/Halro/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/akz142857/Halro/compare/v0.12.2...v0.13.0
