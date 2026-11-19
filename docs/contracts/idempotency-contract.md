@@ -34,7 +34,8 @@ what it was asked to do.
   | The key has | Answer |
   |---|---|
   | a different request fingerprint | `409 idempotency_conflict` |
-  | a request still running, or one whose outcome is unknown | `409 idempotency_in_progress` |
+  | a request this process is still running | `409 idempotency_in_progress` |
+  | a request that may have reached the upstream and whose outcome is unknown: recorded `unknown`, or `in_flight` under a process that is gone | `409 idempotency_outcome_unknown` |
   | a request that completed | `409 idempotency_completed` |
   | unary generation refused by explicit upstream rate limits | the same fingerprint can claim the key by revision after the route is eligible |
   | a reservation from a process that is gone | admitted; it never reached the upstream |
@@ -49,6 +50,15 @@ what it was asked to do.
 - A failure after dispatch with an uncertain outcome spends its key. Timeouts,
   ambiguous upstream failures, and interruptions before the outcome is durably
   recorded remain protected as in-flight or unknown.
+- The two refusals for a held key are kept apart because they call for opposite
+  responses. `idempotency_in_progress` names a request this process is running:
+  a later repeat ends in success, `idempotency_completed`, or one of the other
+  answers. `idempotency_outcome_unknown` names an outcome that is lost and will
+  read the same until the key expires, so waiting buys nothing. Whether to give
+  up or to retry under a new key — accepting that the upstream may already have
+  done the work — is the caller's decision; Halro never makes it for them.
+  Because the data directory has one owner, an `in_flight` record from another
+  instance ID is one no running process will finish.
 - A request Halro refuses **on its own** — a capability filter, redaction, a
   token limit, a Project budget, a per-attempt reservation, or the failure to
   record the dispatch itself — gets its key back. Nothing was billed and nothing

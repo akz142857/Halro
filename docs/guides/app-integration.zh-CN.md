@@ -261,6 +261,10 @@ Embedding 使用独立别名（背后是声明了 embeddings 能力的独立 Dep
 | `403 model_not_allowed` | 别名不在 Project 的允许列表 | 不重试；核对别名，联系管理员 |
 | `403 budget_exceeded` | 当日预算耗尽（或本次请求的保守估算超过余额） | 不重试；等预算日重置或申请调额 |
 | `409 price_unavailable` | 网关侧价格未配置，拒绝产生未知成本 | 不重试；联系管理员 |
+| `409 idempotency_conflict` | 同一 `Idempotency-Key` 用于不同请求体 | 不重试；应用为不同请求生成不同的键 |
+| `409 idempotency_completed` | 该键的请求已完成，答复只交付一次且不保存 | 不重试同一个键；答复若已丢失，由应用决定是否换新键重新请求 |
+| `409 idempotency_in_progress` | 该键的请求仍在网关中执行 | 稍后用同一个键重试，结果会变为完成或其他明确答复 |
+| `409 idempotency_outcome_unknown` | 该键的请求可能已到达上游，结果无法确定（上游失败结果不明，或执行中网关重启） | 同键重试不会改变答复；由应用决定放弃，或接受可能重复执行与计费后换新键重试 |
 | `429` | RPM / TPM / 并发 / 上游限流（`provider_rate_limit`） | 在调用期限内按 `Retry-After` 重试，缺少提示时使用指数退避与抖动 |
 | `502 provider_error` | 上游 Provider 出错 | 网关已做过有界重试和 fallback；应用侧最多再做少量退避重试 |
 

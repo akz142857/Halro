@@ -64,8 +64,13 @@ const (
 	idempotencyFresh idempotencyVerdict = iota
 	// idempotencyCompleted: the resource exists; return it.
 	idempotencyCompleted
-	// idempotencyInProgress: another request holds it, or its outcome is unknown.
+	// idempotencyInProgress: a live request in this process holds it.
 	idempotencyInProgress
+	// idempotencyOutcomeUnknown: the request reached, or may have reached, the
+	// provider and nobody can say how it ended — it was recorded unknown, or it
+	// was in flight in a process that is gone. Unlike in progress, waiting will
+	// not change the answer, and the caller is told so it can decide.
+	idempotencyOutcomeUnknown
 	// idempotencyReclaim: a reservation from a process that is gone, made before
 	// the provider was ever called. Safe to take over and retry.
 	idempotencyReclaim
@@ -125,6 +130,12 @@ func (s *Service) classifyExisting(
 		// other instance belongs to a process that is no longer running. It never
 		// reached the provider, so nothing upstream can be duplicated by retrying.
 		return idempotencyReclaim, nil
+	case existing.CreationStatus == creationUnknown,
+		existing.CreationStatus == creationInFlight && existing.ReservedBy != s.instanceID:
+		// The same exclusivity makes an in-flight record from another instance
+		// one nobody is still running: the process that dispatched it is gone
+		// and took the outcome with it.
+		return idempotencyOutcomeUnknown, nil
 	default:
 		return idempotencyInProgress, nil
 	}
@@ -377,7 +388,9 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 	case idempotencyCompleted:
 		return s.GetFile(ctx, key, existing.ID)
 	case idempotencyInProgress:
-		return provider.FileObject{}, gatewayError("idempotency_in_progress", "resource creation is already in progress or has unknown outcome", 409, nil)
+		return provider.FileObject{}, gatewayError("idempotency_in_progress", "resource creation is already in progress", 409, nil)
+	case idempotencyOutcomeUnknown:
+		return provider.FileObject{}, outcomeUnknownError()
 	}
 	externalID := existing.ID
 	expectedRevision := existing.Revision
@@ -862,7 +875,9 @@ func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, c
 	case idempotencyCompleted:
 		return s.GetBatch(ctx, key, existing.ID)
 	case idempotencyInProgress:
-		return provider.BatchObject{}, gatewayError("idempotency_in_progress", "batch creation is already in progress or unknown", 409, nil)
+		return provider.BatchObject{}, gatewayError("idempotency_in_progress", "batch creation is already in progress", 409, nil)
+	case idempotencyOutcomeUnknown:
+		return provider.BatchObject{}, outcomeUnknownError()
 	}
 	externalID := existing.ID
 	expectedRevision := existing.Revision
@@ -1255,7 +1270,9 @@ func (s *Service) StartAsyncInvoke(ctx context.Context, key, idempotencyKey stri
 	case idempotencyCompleted:
 		return s.GetAsyncInvoke(ctx, key, existing.ID)
 	case idempotencyInProgress:
-		return provider.AsyncInvokeObject{}, gatewayError("idempotency_in_progress", "async invocation is already in progress or unknown", 409, nil)
+		return provider.AsyncInvokeObject{}, gatewayError("idempotency_in_progress", "async invocation is already in progress", 409, nil)
+	case idempotencyOutcomeUnknown:
+		return provider.AsyncInvokeObject{}, outcomeUnknownError()
 	}
 	externalID := existing.ID
 	expectedRevision := existing.Revision

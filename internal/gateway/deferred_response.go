@@ -419,7 +419,7 @@ func (s *Service) SubmitDeferredResponse(
 		if err != nil {
 			return openaiapi.Response{}, err
 		}
-		if verdict == idempotencyCompleted || verdict == idempotencyInProgress {
+		if verdict == idempotencyCompleted || verdict == idempotencyInProgress || verdict == idempotencyOutcomeUnknown {
 			return s.renderDeferred(existing)
 		}
 	}
