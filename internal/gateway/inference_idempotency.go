@@ -221,11 +221,27 @@ func repeatedKeyError(verdict idempotencyVerdict) error {
 	case idempotencyInProgress:
 		return gatewayError(
 			"idempotency_in_progress",
-			"a request with this idempotency key is still running or its outcome is unknown",
+			"a request with this idempotency key is still running",
 			409, nil,
 		)
+	case idempotencyOutcomeUnknown:
+		return outcomeUnknownError()
 	}
 	return nil
+}
+
+// outcomeUnknownError is the answer for a key whose request may have been
+// served and whose outcome is lost. It is told apart from in progress because
+// the two call for opposite responses: a running request is worth waiting for,
+// and this one will read the same for the rest of the key's lifetime. Whether
+// to give up or to retry under a new key — accepting that the upstream may
+// already have done the work — is the caller's decision, not the gateway's.
+func outcomeUnknownError() *Error {
+	return gatewayError(
+		"idempotency_outcome_unknown",
+		"a request with this idempotency key may have reached the provider and its outcome is unknown; retrying the key will not change this",
+		409, nil,
+	)
 }
 
 // reservationRefusal says which of the two very different things went wrong

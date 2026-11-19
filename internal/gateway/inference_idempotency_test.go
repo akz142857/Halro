@@ -163,8 +163,8 @@ func TestRateLimitOutcomeWriteFailureKeepsTheKeyInFlight(t *testing.T) {
 	now = now.Add(time.Minute)
 	f.adapter.err = nil
 	_, err = f.service.Chat(ctx, f.plaintext, chatRequest())
-	if !errors.As(err, &refusal) || refusal.Code != "idempotency_in_progress" || f.adapter.calls != 1 {
-		t.Fatalf("retry after restart = %v, want in-progress without a dispatch", err)
+	if !errors.As(err, &refusal) || refusal.Code != "idempotency_outcome_unknown" || f.adapter.calls != 1 {
+		t.Fatalf("retry after restart = %v, want outcome unknown without a dispatch", err)
 	}
 }
 
@@ -571,5 +571,43 @@ func TestACompletedKeyIsAnsweredAsOneWhileItsRouteIsSuspended(t *testing.T) {
 	_, err = f.service.Chat(keyed("fresh-while-suspended"), f.plaintext, chatRequest())
 	if !errors.As(err, &refusal) || refusal.Code != "provider_rate_limit" || f.adapter.calls != 2 {
 		t.Fatalf("fresh key on a suspended route = %v, want 429 provider_rate_limit", err)
+	}
+}
+
+// The two refusals call for opposite responses, so they must read differently:
+// a request this process is still running is worth waiting for, and one whose
+// outcome was lost reads the same for the rest of the key's lifetime.
+func TestARunningKeyAndALostOutcomeAreToldApart(t *testing.T) {
+	f := newDeferredFixture(t)
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	f.adapter.started, f.adapter.release = started, release
+	ctx := keyed("running-then-lost")
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.service.Chat(ctx, f.plaintext, chatRequest())
+		done <- err
+	}()
+	<-started
+	f.adapter.started = nil
+	_, err := f.service.Chat(ctx, f.plaintext, chatRequest())
+	var refusal *Error
+	if !errors.As(err, &refusal) || refusal.Code != "idempotency_in_progress" {
+		t.Fatalf("repeat while running = %v, want idempotency_in_progress", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	lost := keyed("ambiguous-failure")
+	f.adapter.err = &provider.Error{Class: provider.ErrorProvider5xx, Ambiguous: true, StatusCode: 500, Message: "upstream failed"}
+	if _, err := f.service.Chat(lost, f.plaintext, chatRequest()); err == nil {
+		t.Fatal("the failure did not reach the caller")
+	}
+	f.adapter.err = nil
+	_, err = f.service.Chat(lost, f.plaintext, chatRequest())
+	if !errors.As(err, &refusal) || refusal.HTTPStatus != 409 || refusal.Code != "idempotency_outcome_unknown" {
+		t.Fatalf("repeat after an ambiguous failure = %v, want 409 idempotency_outcome_unknown", err)
 	}
 }

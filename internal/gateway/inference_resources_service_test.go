@@ -387,7 +387,7 @@ func TestInferenceResourcesUnknownFileCreationBlocksRetry(t *testing.T) {
 	if _, err := f.service.CreateFile(context.Background(), f.plaintext, "files", "same-key", call); err == nil {
 		t.Fatal("unknown creation was blindly retried")
 	} else {
-		assertGatewayCode(t, err, "idempotency_in_progress")
+		assertGatewayCode(t, err, "idempotency_outcome_unknown")
 	}
 	if adapter.fileCalls != 1 {
 		t.Fatalf("provider calls=%d, want 1", adapter.fileCalls)
@@ -710,7 +710,7 @@ func TestInferenceResourcesInFlightCrashIsNotReclaimed(t *testing.T) {
 	if _, err := f.service.CreateFile(context.Background(), f.plaintext, "files", "ambiguous-key", call); err == nil {
 		t.Fatal("a restart retried a call that may already have reached the provider")
 	} else {
-		assertGatewayCode(t, err, "idempotency_in_progress")
+		assertGatewayCode(t, err, "idempotency_outcome_unknown")
 	}
 	if adapter.fileCalls != 1 {
 		t.Fatalf("provider calls=%d, want 1", adapter.fileCalls)
