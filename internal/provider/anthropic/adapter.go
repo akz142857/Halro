@@ -575,7 +575,7 @@ func (adapter *Adapter) MessagesNative(ctx context.Context, call provider.Native
 	if _, err := anthropicapi.DecodeMessage(body); err != nil {
 		return provider.NativeMessageResult{}, malformed("validate Anthropic response", err)
 	}
-	return provider.NativeMessageResult{Payload: body, ProviderRequestID: upstreamRequestID(response.Header), RetryAfter: provider.RetryAfterFrom(response.Header, time.Now())}, nil
+	return provider.NativeMessageResult{Payload: body, ProviderRequestID: upstreamRequestID(response.Header)}, nil
 }
 
 func (adapter *Adapter) MessagesNativeStream(ctx context.Context, call provider.NativeMessageCall, emit func(anthropicapi.RawStreamEvent) error) (*anthropicapi.Usage, error) {
@@ -657,7 +657,7 @@ func (adapter *Adapter) CountTokensNative(ctx context.Context, call provider.Nat
 	if _, err := anthropicapi.DecodeTokenCount(body); err != nil {
 		return provider.NativeMessageResult{}, malformed("validate Anthropic count_tokens response", err)
 	}
-	return provider.NativeMessageResult{Payload: body, ProviderRequestID: upstreamRequestID(response.Header), RetryAfter: provider.RetryAfterFrom(response.Header, time.Now())}, nil
+	return provider.NativeMessageResult{Payload: body, ProviderRequestID: upstreamRequestID(response.Header)}, nil
 }
 
 func (adapter *Adapter) request(ctx context.Context, call provider.NativeMessageCall, payload []byte, stream bool) (*http.Request, error) {
@@ -838,7 +838,7 @@ func (a *Adapter) decodeHTTPError(response *http.Response) error {
 		code != "" {
 		refusal = provider.RefusalInvalid
 	}
-	result := &provider.Error{Class: class, StatusCode: response.StatusCode, Retryable: retryable, Ambiguous: ambiguous, Message: message, ProviderRequestID: upstreamRequestID(response.Header), ProviderCode: code, Refusal: refusal, RetryAfter: provider.RetryAfterFrom(response.Header, time.Now())}
+	result := &provider.Error{Class: class, StatusCode: response.StatusCode, Retryable: retryable, Ambiguous: ambiguous, Message: message, ProviderRequestID: upstreamRequestID(response.Header), ProviderCode: code, Refusal: refusal, RetryAfter: provider.RetryAfter(response.StatusCode, response.Header, time.Now())}
 	if a.profileID == domain.ProfileKimiCodeAnthropicMessages && response.StatusCode == http.StatusPaymentRequired {
 		result.Class = provider.ErrorUnknown
 		result.FailureReason = provider.FailureReasonEntitlementVerificationUnavailable

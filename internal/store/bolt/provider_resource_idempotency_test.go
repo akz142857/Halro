@@ -248,3 +248,29 @@ func TestSchemaFortyBuildsTheIndexFromExistingRecords(t *testing.T) {
 		t.Fatalf("an inherited key was not indexed: found=%+v ok=%v err=%v", found, ok, err)
 	}
 }
+
+// Outside a batch a lost race rolls back: committing the empty transaction
+// instead would still write and sync a meta page for every losing duplicate.
+func TestUnbatchedKeyConflictWritesNothing(t *testing.T) {
+	store, instance, deployment, project := tombstoneChain(t)
+	if err := store.SetMetadataJournalAfterDurable(func(metadatajournal.DurableBatch) (uint64, error) {
+		return 1, nil
+	}, func(context.Context, uint64) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	keyHash := sha256.Sum256([]byte("replicated-key"))
+	if _, err := store.PutProviderResource(context.Background(),
+		keyedResource(project.ID, instance.ID, deployment.ID, instance.ProfileID, "idm_winner", keyHash, now), 0); err != nil {
+		t.Fatal(err)
+	}
+	before := store.MetadataWriteStats()
+	_, err := store.PutProviderResource(context.Background(),
+		keyedResource(project.ID, instance.ID, deployment.ID, instance.ProfileID, "idm_loser", keyHash, now), 0)
+	if !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("losing duplicate = %v, want ErrAlreadyExists", err)
+	}
+	if writes := store.MetadataWriteStats().PageWrites - before.PageWrites; writes != 0 {
+		t.Fatalf("a lost race wrote %d pages", writes)
+	}
+}

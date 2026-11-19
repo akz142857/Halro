@@ -69,6 +69,10 @@ func (g *Gate) UsePersistence(store SuspensionStore, onError func(error)) {
 // terms as a window: only when it outlasts the threshold. A shorter one would
 // have expired by the time the instance came back up, and writing it would put
 // a bbolt commit on the request path for every hinted 429.
+//
+// Once written, the row follows the suspension until it clears. The test is
+// taken from the latest observation, and a short hint arriving late in a long
+// suspension would otherwise delete the row while minutes of it remain.
 func (s *scopeState) persistable() bool {
 	if s.evidence.Reason == "" || !s.suspended() {
 		return false
@@ -77,7 +81,7 @@ func (s *scopeState) persistable() bool {
 		return true
 	}
 	return s.evidence.Reason == provider.FailureReasonRateLimited && s.retryHint &&
-		s.suspendedUntil.Sub(s.evidence.ObservedAt) > PersistWindowThreshold
+		(s.persisted || s.suspendedUntil.Sub(s.evidence.ObservedAt) > PersistWindowThreshold)
 }
 
 // recordFor renders one state as the row that would restore it.

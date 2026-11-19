@@ -630,3 +630,23 @@ func TestAdmitRefusalCarriesItsExplanation(t *testing.T) {
 		t.Fatalf("refusal = %#v, want rate limited with fifteen seconds left", suspended.Refusal)
 	}
 }
+
+// A short hint late in a long suspension extends it; it must not delete the
+// row that lets a restart honour the rest.
+func TestALateShortHintKeepsALongSuspensionsRow(t *testing.T) {
+	store := newRecordingStore()
+	gate := gateWithStore(store)
+	target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 1)
+	gate.Observe(target, Observation{Reason: provider.FailureReasonRateLimited, Status: 429, RetryAfter: 10 * time.Minute}, base)
+	late := base.Add(6 * time.Minute)
+	gate.Observe(target, Observation{Reason: provider.FailureReasonRateLimited, Status: 429, RetryAfter: 4*time.Minute + 30*time.Second}, late)
+	rows := store.list()
+	if len(rows) == 0 {
+		t.Fatal("the late short hint deleted the long suspension's row")
+	}
+	restarted := gateWithStore(store)
+	restarted.Restore(rows)
+	if _, err := restarted.Admit(target, base.Add(7*time.Minute)); !errors.Is(err, ErrSuspended) {
+		t.Fatalf("restart at t0+7m admitted a suspension the upstream asked to last 10m: %v", err)
+	}
+}

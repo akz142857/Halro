@@ -181,12 +181,19 @@ func (s *Service) inferenceRepeatRefusal(
 	if !sent || s.resources == nil || idempotency.ValidateKey(key) != nil {
 		return nil
 	}
+	// The lookup comes before the fingerprint. A fast refusal — a suspended
+	// route answering a 429 storm — mostly carries keys with no live record, and
+	// those must not pay a marshal of the whole request to learn nothing.
+	keyHash := sha256.Sum256([]byte(key))
+	existing, found, err := s.resources.ProviderResourceByIdempotency(ctx, principal.Project.ID, domain.ResourceInferenceCall, keyHash)
+	if err != nil || !found || !existing.ExpiresAt.After(s.now()) {
+		return nil
+	}
 	fingerprint, err := inferenceFingerprint(publicModel, payload)
 	if err != nil {
 		return nil
 	}
-	keyHash := sha256.Sum256([]byte(key))
-	_, verdict, err := s.classifyIdempotency(ctx, principal.Project.ID, domain.ResourceInferenceCall, keyHash, fingerprint)
+	verdict, err := s.classifyExisting(domain.ResourceInferenceCall, existing, fingerprint)
 	var conflict *Error
 	switch {
 	case errors.As(err, &conflict) && conflict.Code == "idempotency_conflict":
@@ -236,6 +243,15 @@ func (s *Service) reservationRefusal(ctx context.Context, projectID string, keyH
 		return gatewayError("idempotency_in_progress", "this idempotency key was just taken by another request", 409, cause)
 	}
 	return gatewayError("resource_store_unavailable", "the idempotency key could not be recorded", 503, cause)
+}
+
+// settleInto settles the claim on the way out of a request and lets a refusal
+// that could not be recorded replace the request's own result: the caller must
+// hear that the key is still protected rather than that it may retry.
+func (claim *inferenceIdempotency) settleInto(ctx context.Context, result *error) {
+	if err := claim.settle(ctx, *result); err != nil {
+		*result = err
+	}
 }
 
 // settle closes the record once the request has an outcome, whatever it was.

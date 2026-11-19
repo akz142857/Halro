@@ -806,7 +806,7 @@ func classifyHTTP(response *http.Response) *provider.Error {
 	result := &provider.Error{
 		StatusCode: status, Message: fmt.Sprintf("Bedrock error (%d)", status),
 		ProviderRequestID: providerRequestID(response.Header), ProviderCode: code,
-		RetryAfter: provider.RetryAfterFrom(response.Header, time.Now()),
+		RetryAfter: provider.RetryAfter(status, response.Header, time.Now()),
 	}
 	switch strings.ToLower(code) {
 	case "modeltimeoutexception":
@@ -892,7 +892,9 @@ func streamException(eventType string, header http.Header, payload []byte) *prov
 	case "validationexception":
 		return &provider.Error{Class: provider.ErrorBadRequest, Message: "Bedrock rejected the stream request", ProviderRequestID: requestID, ProviderCode: code, Refusal: provider.RefusalInvalid}
 	case "throttlingexception":
-		return &provider.Error{Class: provider.ErrorRateLimit, Retryable: true, Message: "Bedrock stream is temporarily unavailable", ProviderRequestID: requestID, ProviderCode: code, RetryAfter: provider.RetryAfterFrom(header, time.Now())}
+		// The stream answered 200 and then throttled inside it; the exception
+		// is the 429 it would have been, so its hint is read as one.
+		return &provider.Error{Class: provider.ErrorRateLimit, Retryable: true, Message: "Bedrock stream is temporarily unavailable", ProviderRequestID: requestID, ProviderCode: code, RetryAfter: provider.RetryAfter(http.StatusTooManyRequests, header, time.Now())}
 	case "modeltimeoutexception":
 		return &provider.Error{Class: provider.ErrorTimeout, Ambiguous: true, Message: "Bedrock model stream timed out after acceptance", ProviderRequestID: requestID, ProviderCode: code}
 	case "modelstreamerrorexception":

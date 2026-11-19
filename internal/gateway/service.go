@@ -1435,11 +1435,7 @@ func (s *Service) executeGenerate(
 		if err != nil {
 			return semantic.GenerateResult{}, err
 		}
-		defer func() {
-			if err := claim.settle(context.WithoutCancel(ctx), resultErr); err != nil {
-				resultErr = err
-			}
-		}()
+		defer claim.settleInto(context.WithoutCancel(ctx), &resultErr)
 	}
 	run, err := s.beginRequestRun(ctx, principal, publicModel, targets, totalTokens, inputTokens, outputTokens, canonical, admission)
 	if err != nil {
@@ -1582,7 +1578,7 @@ func (s *Service) executeGenerate(
 			allDispatchesRateLimited = allDispatchesRateLimited && rateLimited
 			if rateLimited {
 				now := s.now()
-				refusal := routegate.Refusal{Kind: routegate.RefusalRateLimited, RetryAfter: upstream.RetryAfter}
+				refusal := routegate.Refusal{Kind: routegate.RefusalRateLimited, RetryAfter: min(upstream.RetryAfter, routegate.MaxUpstreamRetryAfter)}
 				if blocked, ok := s.routes.Blocked(target, now); ok && (upstream.RetryAfter > 0 || blocked.Kind != routegate.RefusalRateLimited) {
 					refusal = blocked
 				}
@@ -2552,11 +2548,7 @@ func (s *Service) generateStream(
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := claim.settle(context.WithoutCancel(ctx), streamErr); err != nil {
-			streamErr = err
-		}
-	}()
+	defer claim.settleInto(context.WithoutCancel(ctx), &streamErr)
 	candidates := targets
 	targets = filterSemanticCapabilities(targets, canonical.Requirements)
 	targets = filterGenerateProfileCompatibility(targets, canonical)
@@ -2776,11 +2768,7 @@ func (s *Service) Embeddings(
 	if err != nil {
 		return openaiapi.EmbeddingResponse{}, err
 	}
-	defer func() {
-		if err := claim.settle(context.WithoutCancel(ctx), embeddingErr); err != nil {
-			embeddingErr = err
-		}
-	}()
+	defer claim.settleInto(context.WithoutCancel(ctx), &embeddingErr)
 	request, err = s.redactor.ProcessInboundEmbedding(
 		principal.Project.RedactionPolicyID, request,
 	)
@@ -3769,7 +3757,9 @@ func mapProviderError(err error) error {
 	// classification above, but never exposes that error through Unwrap: HTTP is
 	// not the only consumer of Service, and an embedder logging `%+v` deserves
 	// the same credential boundary as gatewayapi.
-	mapped.RetryAfter = classified.RetryAfter
+	// Bounded as the route gate bounds it: a caller told to wait a day by one
+	// bad header is the same outage the gate's cap exists to prevent.
+	mapped.RetryAfter = min(classified.RetryAfter, routegate.MaxUpstreamRetryAfter)
 	// The upstream's own identifier does not travel to the caller: it is the
 	// provider's vocabulary, and an application reading `anthropic_error` off a
 	// public model alias learns who is behind it. The parameter joined to it is

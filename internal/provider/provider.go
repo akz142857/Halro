@@ -417,7 +417,6 @@ type NativeMessageCall struct {
 type NativeMessageResult struct {
 	Payload           []byte
 	ProviderRequestID string
-	RetryAfter        time.Duration
 }
 
 type NativeMessagesAdapter interface {

@@ -195,3 +195,21 @@ func TestAnUnknownEndDoesNotHideAKnownRetryAfter(t *testing.T) {
 		t.Fatalf("refusal = %#v, want quota with the known ten minutes", refusal)
 	}
 }
+
+// The caller is told no longer a wait than the gate itself honours: one bad
+// header must not send a client away for a day while the route recovers in
+// fifteen minutes.
+func TestAnUpstreamHintToTheCallerIsBounded(t *testing.T) {
+	mapped := mapProviderError(&provider.Error{Class: provider.ErrorRateLimit, StatusCode: http.StatusTooManyRequests, RetryAfter: provider.MaxRetryAfter})
+	var classified *Error
+	if !errors.As(mapped, &classified) || classified.RetryAfter != routegate.MaxUpstreamRetryAfter {
+		t.Fatalf("mapped = %#v, want Retry-After %v", mapped, routegate.MaxUpstreamRetryAfter)
+	}
+	now := frozen()
+	f := newDeferredFixtureAt(t, func() time.Time { return now }, nil)
+	f.adapter.err = &provider.Error{Class: provider.ErrorRateLimit, StatusCode: http.StatusTooManyRequests, Retryable: true, RetryAfter: provider.MaxRetryAfter}
+	_, err := f.service.Chat(context.Background(), f.plaintext, chatRequest())
+	if !errors.As(err, &classified) || classified.HTTPStatus != http.StatusTooManyRequests || classified.RetryAfter > routegate.MaxUpstreamRetryAfter {
+		t.Fatalf("chat = %v (Retry-After %v), want a 429 bounded by %v", err, classified.RetryAfter, routegate.MaxUpstreamRetryAfter)
+	}
+}

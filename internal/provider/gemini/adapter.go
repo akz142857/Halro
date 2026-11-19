@@ -691,9 +691,7 @@ func transportError(message string, err error) *provider.Error {
 
 func httpError(status int, header http.Header, body io.Reader) *provider.Error {
 	result := &provider.Error{StatusCode: status, Message: fmt.Sprintf("Gemini error (%d)", status), ProviderCode: refusalCode(body)}
-	if status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable {
-		result.RetryAfter = provider.RetryAfterFrom(header, time.Now())
-	}
+	result.RetryAfter = provider.RetryAfter(status, header, time.Now())
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		result.Class = provider.ErrorAuthentication

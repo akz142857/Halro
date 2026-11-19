@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Halro/internal/anthropicapi"
 	"github.com/akz142857/Halro/internal/domain"
@@ -398,6 +399,31 @@ func TestCurrentVersionIsGatedBeforeUpstreamIO(t *testing.T) {
 		_, err := adapter.requestTo(context.Background(), provider.NativeMessageCall{ProviderModel: test.model, Version: anthropicapi.CurrentVersion}, payload, false, "")
 		if (err == nil) != test.accepted {
 			t.Fatalf("%s/%s: %v", test.provider, test.model, err)
+		}
+	}
+}
+
+// Anthropic's hint goes through the shared rule: "0" is a one-second hint, and
+// a Retry-After on an answer that is not "come back later" is no hint at all.
+func TestAnthropicRetryAfterFollowsTheSharedRule(t *testing.T) {
+	for _, test := range []struct {
+		status int
+		value  string
+		want   time.Duration
+	}{
+		{http.StatusTooManyRequests, "0", time.Second},
+		{529, "4", 4 * time.Second},
+		{http.StatusInternalServerError, "30", 0},
+	} {
+		adapter := newTestAdapter(t, func(writer http.ResponseWriter, _ *http.Request) {
+			writer.Header().Set("retry-after", test.value)
+			writer.WriteHeader(test.status)
+			_, _ = writer.Write([]byte(`{"type":"error","error":{"type":"api_error","message":"no"}}`))
+		})
+		_, err := adapter.MessagesNative(context.Background(), provider.NativeMessageCall{RequestID: "req", ProviderModel: "claude", Version: anthropicapi.SupportedVersion, Payload: []byte(`{"model":"public","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`)})
+		var classified *provider.Error
+		if !errors.As(err, &classified) || classified.RetryAfter != test.want {
+			t.Errorf("status %d Retry-After %q = %#v, want %v", test.status, test.value, err, test.want)
 		}
 	}
 }

@@ -413,21 +413,31 @@ func (s *Store) PutProviderResource(ctx context.Context, resource domain.Provide
 		return domain.ProviderResource{}, err
 	}
 	write := s.update
-	if resource.Kind == domain.ResourceInferenceCall && s.journal != nil && !s.journal.HasReplication() {
+	batched := resource.Kind == domain.ResourceInferenceCall && s.journal != nil && !s.journal.HasReplication()
+	if batched {
 		// Independent requests can share a durable commit for their claims.
 		// In a replicated group, keep each dispatch confirmation independent
 		// of the other writes that might otherwise share its transaction.
 		write = s.batch
 	}
 	stored := resource
-	// A lost race on the key or the revision is an expected outcome, not a
-	// failure, so it is carried out of the callback rather than returned from
-	// it. Returned, it would abort a shared batch and re-run every sibling claim
-	// once per loser (ADR 0012's first precondition) — on exactly the
-	// concurrent-duplicate path the batch exists to speed up. Both checks run
-	// before anything is written, so a callback that reports one leaves the
-	// transaction untouched.
+	// In a batch, a lost race on the key or the revision is an expected
+	// outcome, not a failure, so it is carried out of the callback rather than
+	// returned from it. Returned, it would abort the shared transaction and
+	// re-run every sibling claim once per loser (ADR 0012's first precondition)
+	// — on exactly the concurrent-duplicate path the batch exists to speed up.
+	// Both checks run before anything is written, so the callback leaves the
+	// transaction untouched. Outside a batch the error is returned as before:
+	// rolling back costs nothing, where committing an empty transaction would
+	// still sync a meta page.
 	var conflict error
+	lostRace := func(err error) error {
+		if !batched {
+			return err
+		}
+		conflict = err
+		return nil
+	}
 	err := write(func(tx *Tx) error {
 		stored, conflict = resource, nil
 		// A new resource may only be created against live owners. Updates are
@@ -475,8 +485,7 @@ func (s *Store) PutProviderResource(ctx context.Context, resource domain.Provide
 			// keys, and no longer so now that a synchronous inference call can.
 			if holder := tx.Bucket(bucketProviderResourceIdem).Get(indexKey); holder != nil {
 				if bucket.Get(holder) != nil {
-					conflict = ErrAlreadyExists
-					return nil
+					return lostRace(ErrAlreadyExists)
 				}
 				// The record the index names is gone, so the key is free. The
 				// stale entry is about to be overwritten by this one.
@@ -484,8 +493,7 @@ func (s *Store) PutProviderResource(ctx context.Context, resource domain.Provide
 		}
 		if err := putVersioned(bucket, resource.ID, expectedRevision, &stored); err != nil {
 			if errors.Is(err, ErrAlreadyExists) || errors.Is(err, ErrRevisionConflict) {
-				conflict = err
-				return nil
+				return lostRace(err)
 			}
 			return err
 		}

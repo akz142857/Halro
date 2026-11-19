@@ -331,8 +331,12 @@ func staleLocked(scope Scope, state *scopeState, target provider.Target) bool {
 
 // blockingScopes lists the scopes that would refuse this target.
 func (g *Gate) blockingScopes(target provider.Target, now time.Time) []Scope {
+	return g.blockingAmongLocked(scopesOf(target), target, now)
+}
+
+func (g *Gate) blockingAmongLocked(scopes []Scope, target provider.Target, now time.Time) []Scope {
 	var blocked []Scope
-	for _, scope := range scopesOf(target) {
+	for _, scope := range scopes {
 		state := g.scopes[scope]
 		if state == nil || !state.suspended() {
 			continue
@@ -412,7 +416,8 @@ func (g *Gate) Admit(target provider.Target, now time.Time) (*Lease, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	var claimed []Scope
-	for _, scope := range scopesOf(target) {
+	scopes := scopesOf(target)
+	for index, scope := range scopes {
 		state := g.scopes[scope]
 		if state == nil || !state.suspended() {
 			continue
@@ -429,7 +434,9 @@ func (g *Gate) Admit(target provider.Target, now time.Time) (*Lease, error) {
 					held.probing--
 				}
 			}
-			return nil, &SuspendedError{Refusal: g.refusalForScopesLocked(g.blockingScopes(target, now), now)}
+			// Every scope before this one was probeable, so only this one and
+			// those after it can be blocking. No second walk over the target.
+			return nil, &SuspendedError{Refusal: g.refusalForScopesLocked(g.blockingAmongLocked(scopes[index:], target, now), now)}
 		}
 		state.probing++
 		claimed = append(claimed, scope)
