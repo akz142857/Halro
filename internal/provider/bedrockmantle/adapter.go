@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -436,7 +435,7 @@ func decodeHTTPError(response *http.Response, ambiguous bool) error {
 	}
 	code := refusalCode(envelope)
 	refusal := provider.RefusalFromOpenAIBody(response.StatusCode, code)
-	return &provider.Error{Class: class, StatusCode: response.StatusCode, Retryable: retryable, Ambiguous: ambiguous && response.StatusCode >= 500, Message: message, ProviderCode: code, Refusal: refusal, ProviderRequestID: providerRequestID(response.Header), RetryAfter: retryAfter(response.Header)}
+	return &provider.Error{Class: class, StatusCode: response.StatusCode, Retryable: retryable, Ambiguous: ambiguous && response.StatusCode >= 500, Message: message, ProviderCode: code, Refusal: refusal, ProviderRequestID: providerRequestID(response.Header), RetryAfter: provider.RetryAfter(response.StatusCode, response.Header, time.Now())}
 }
 
 // refusalCode is the machine-readable half of an OpenAI-shaped refusal, which is
@@ -470,15 +469,6 @@ func providerRequestID(header http.Header) string {
 		}
 	}
 	return ""
-}
-
-func retryAfter(header http.Header) time.Duration {
-	value := strings.TrimSpace(header.Get("retry-after"))
-	seconds, err := strconv.ParseInt(value, 10, 64)
-	if err == nil && seconds >= 0 {
-		return time.Duration(seconds) * time.Second
-	}
-	return 0
 }
 
 func readLimited(reader io.Reader, limit int64) ([]byte, error) {

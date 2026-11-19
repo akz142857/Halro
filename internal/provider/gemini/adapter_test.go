@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
@@ -122,7 +123,7 @@ func TestUnknownGeminiFinishReasonIsPreserved(t *testing.T) {
 
 func TestGeminiAcceptedHTTPFailuresAreAmbiguous(t *testing.T) {
 	for _, status := range []int{http.StatusRequestTimeout, http.StatusInternalServerError} {
-		err := httpError(status, strings.NewReader("provider detail"))
+		err := httpError(status, nil, strings.NewReader("provider detail"))
 		if !err.Ambiguous || err.Retryable {
 			t.Fatalf("status %d classification=%#v", status, err)
 		}
@@ -347,6 +348,21 @@ func TestNewGeminiContractsRejectRemovedControls(t *testing.T) {
 			if _, err := translateChatForModel(request, "gemini-2.5-pro"); err != nil {
 				t.Fatalf("legacy model changed: %v", err)
 			}
+		}
+	}
+}
+
+// Gemini's hint goes through the same parser as every other adapter's, and only
+// on the statuses that mean "come back later".
+func TestGeminiCarriesRetryAfterOnTemporaryRefusals(t *testing.T) {
+	header := http.Header{"Retry-After": []string{"7"}}
+	for status, want := range map[int]time.Duration{
+		http.StatusTooManyRequests:    7 * time.Second,
+		http.StatusServiceUnavailable: 7 * time.Second,
+		http.StatusBadRequest:         0,
+	} {
+		if got := httpError(status, header, strings.NewReader("{}")).RetryAfter; got != want {
+			t.Errorf("status %d RetryAfter=%v, want %v", status, got, want)
 		}
 	}
 }

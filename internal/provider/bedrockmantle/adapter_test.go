@@ -606,3 +606,18 @@ func TestResponsesAdapterMapsTheRefusalKindFromTheCode(t *testing.T) {
 		}
 	}
 }
+
+// Mantle reads the hint through the shared parser: an HTTP date is a hint, and
+// a number past a day saturates rather than overflowing.
+func TestMantleRetryAfterUsesTheSharedParser(t *testing.T) {
+	for value, check := range map[string]func(time.Duration) bool{
+		time.Now().Add(time.Minute).UTC().Format(http.TimeFormat): func(d time.Duration) bool { return d > 50*time.Second && d <= time.Minute },
+		"9223372036854775807": func(d time.Duration) bool { return d == provider.MaxRetryAfter },
+	} {
+		response := &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": []string{value}}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"slow down"}}`))}
+		var classified *provider.Error
+		if !errors.As(decodeHTTPError(response, false), &classified) || !check(classified.RetryAfter) {
+			t.Errorf("Retry-After %q = %#v", value, classified)
+		}
+	}
+}

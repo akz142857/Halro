@@ -64,14 +64,24 @@ func (g *Gate) UsePersistence(store SuspensionStore, onError func(error)) {
 // Two conditions, and the first is the one that keeps availability out. A
 // suspension with no canonical reason came from a 5xx run or a failed probe:
 // both are re-learned within one interval of traffic, and both are keyed to a
-// deployment the restart may not even have any more. An explicit rate-limit
-// hint is kept even below the threshold so a restart honors what the upstream
-// asked for.
+// deployment the restart may not even have any more. An upstream rate-limit
+// hint can carry a suspension past its window, and earns a row on the same
+// terms as a window: only when it outlasts the threshold. A shorter one would
+// have expired by the time the instance came back up, and writing it would put
+// a bbolt commit on the request path for every hinted 429.
+//
+// Once written, the row follows the suspension until it clears. The test is
+// taken from the latest observation, and a short hint arriving late in a long
+// suspension would otherwise delete the row while minutes of it remain.
 func (s *scopeState) persistable() bool {
 	if s.evidence.Reason == "" || !s.suspended() {
 		return false
 	}
-	return s.indefinite || (s.evidence.Reason == provider.FailureReasonRateLimited && s.retryHint) || s.window > PersistWindowThreshold
+	if s.indefinite || s.window > PersistWindowThreshold {
+		return true
+	}
+	return s.evidence.Reason == provider.FailureReasonRateLimited && s.retryHint &&
+		(s.persisted || s.suspendedUntil.Sub(s.evidence.ObservedAt) > PersistWindowThreshold)
 }
 
 // recordFor renders one state as the row that would restore it.

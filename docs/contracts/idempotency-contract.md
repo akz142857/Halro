@@ -43,7 +43,8 @@ what it was asked to do.
 - A unary generation request that ends in `429 provider_rate_limit` is marked
   `retryable_refused` when every dispatched attempt was explicitly and
   unambiguously rate-limited and accounting finalized. A retry keeps the same
-  fingerprint and expiration. A failed attempt to record the refusal returns
+  fingerprint and record, and its 24 hours restart from the retry, so the key
+  cannot expire under the call it is protecting. A failed attempt to record the refusal returns
   `503 resource_store_unavailable` and leaves the key protected.
 - A failure after dispatch with an uncertain outcome spends its key. Timeouts,
   ambiguous upstream failures, and interruptions before the outcome is durably

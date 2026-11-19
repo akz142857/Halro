@@ -184,10 +184,17 @@ func TestBedrockExecutionErrorsUseHeaderCodeAndRemainAmbiguous(t *testing.T) {
 	}
 }
 
+// Through the adapter's own classifier, so a Bedrock path that stopped passing
+// the header would fail here rather than pass on the shared parser's tests.
 func TestRetryAfterSaturatesWithoutDurationOverflow(t *testing.T) {
-	header := http.Header{"Retry-After": []string{"9223372036854775807"}}
-	if delay := retryAfter(header, time.Now()); delay != 24*time.Hour {
+	response := jsonResponse(http.StatusTooManyRequests, `{"__type":"ThrottlingException"}`)
+	response.Header.Set("Retry-After", "9223372036854775807")
+	if delay := classifyHTTP(response).RetryAfter; delay != provider.MaxRetryAfter {
 		t.Fatalf("delay=%v", delay)
+	}
+	stream := streamException("throttlingException", http.Header{"Retry-After": []string{"7"}}, nil)
+	if stream.RetryAfter != 7*time.Second {
+		t.Fatalf("stream throttle delay=%v", stream.RetryAfter)
 	}
 }
 

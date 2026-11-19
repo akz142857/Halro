@@ -14,6 +14,17 @@ import (
 // the next candidate.
 var ErrSuspended = errors.New("route target is suspended")
 
+// SuspendedError is Admit's refusal, and it matches ErrSuspended. It carries the
+// explanation read under the same lock that refused, so a caller cannot see the
+// scope clear in between and be left with a refusal it cannot account for.
+type SuspendedError struct {
+	Refusal Refusal
+}
+
+func (e *SuspendedError) Error() string { return ErrSuspended.Error() }
+
+func (e *SuspendedError) Is(target error) bool { return target == ErrSuspended }
+
 // Config is the availability half of the table. The reason-specific half is not
 // configurable (see DefaultPolicies): a per-reason window an operator is invited
 // to tune before anyone has measured the distribution is asking the wrong
@@ -255,7 +266,7 @@ func (g *Gate) observeLocked(
 	if observation.Reason == provider.FailureReasonRateLimited && policy.HonourRetryAfter {
 		if observation.RetryAfter > 0 {
 			state.retryHint = true
-			upstreamUntil := now.Add(min(observation.RetryAfter, provider.MaxRetryAfter))
+			upstreamUntil := now.Add(min(observation.RetryAfter, max(policy.MaxRetryAfter, state.window)))
 			if upstreamUntil.After(state.suspendedUntil) {
 				state.suspendedUntil = upstreamUntil
 			}
@@ -320,8 +331,12 @@ func staleLocked(scope Scope, state *scopeState, target provider.Target) bool {
 
 // blockingScopes lists the scopes that would refuse this target.
 func (g *Gate) blockingScopes(target provider.Target, now time.Time) []Scope {
+	return g.blockingAmongLocked(scopesOf(target), target, now)
+}
+
+func (g *Gate) blockingAmongLocked(scopes []Scope, target provider.Target, now time.Time) []Scope {
 	var blocked []Scope
-	for _, scope := range scopesOf(target) {
+	for _, scope := range scopes {
 		state := g.scopes[scope]
 		if state == nil || !state.suspended() {
 			continue
@@ -401,7 +416,8 @@ func (g *Gate) Admit(target provider.Target, now time.Time) (*Lease, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	var claimed []Scope
-	for _, scope := range scopesOf(target) {
+	scopes := scopesOf(target)
+	for index, scope := range scopes {
 		state := g.scopes[scope]
 		if state == nil || !state.suspended() {
 			continue
@@ -418,7 +434,9 @@ func (g *Gate) Admit(target provider.Target, now time.Time) (*Lease, error) {
 					held.probing--
 				}
 			}
-			return nil, ErrSuspended
+			// Every scope before this one was probeable, so only this one and
+			// those after it can be blocking. No second walk over the target.
+			return nil, &SuspendedError{Refusal: g.refusalForScopesLocked(g.blockingAmongLocked(scopes[index:], target, now), now)}
 		}
 		state.probing++
 		claimed = append(claimed, scope)

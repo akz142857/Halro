@@ -89,6 +89,16 @@ func (s *Service) classifyIdempotency(
 	if !found {
 		return domain.ProviderResource{}, idempotencyFresh, nil
 	}
+	verdict, err := s.classifyExisting(kind, existing, fingerprint)
+	return existing, verdict, err
+}
+
+// classifyExisting is classifyIdempotency for a record already read.
+func (s *Service) classifyExisting(
+	kind domain.ProviderResourceKind,
+	existing domain.ProviderResource,
+	fingerprint [32]byte,
+) (idempotencyVerdict, error) {
 	if kind == domain.ResourceInferenceCall && !existing.ExpiresAt.After(s.now()) {
 		// The key's lifetime has run out, so it is free again — including for a
 		// different request, which is why this is decided before the
@@ -99,24 +109,24 @@ func (s *Service) classifyIdempotency(
 		// Only this kind: every other one names something that may still exist
 		// upstream after its record expires, and handing its key to a retry
 		// would create a second one.
-		return existing, idempotencyReclaim, nil
+		return idempotencyReclaim, nil
 	}
 	if existing.RequestFingerprint != fingerprint {
-		return existing, idempotencyInProgress,
+		return idempotencyInProgress,
 			gatewayError("idempotency_conflict", "idempotency key was reused with a different request", 409, nil)
 	}
 	switch {
 	case existing.CreationStatus == creationCompleted:
-		return existing, idempotencyCompleted, nil
+		return idempotencyCompleted, nil
 	case kind == domain.ResourceInferenceCall && existing.CreationStatus == creationRetryableRefused:
-		return existing, idempotencyReclaim, nil
+		return idempotencyReclaim, nil
 	case existing.CreationStatus == creationReserved && existing.ReservedBy != s.instanceID:
 		// The data directory is held exclusively, so a reservation owned by any
 		// other instance belongs to a process that is no longer running. It never
 		// reached the provider, so nothing upstream can be duplicated by retrying.
-		return existing, idempotencyReclaim, nil
+		return idempotencyReclaim, nil
 	default:
-		return existing, idempotencyInProgress, nil
+		return idempotencyInProgress, nil
 	}
 }
 

@@ -170,3 +170,46 @@ func routegateObservation(reason provider.FailureReason, status int) routegate.O
 	}
 	return routegate.Observation{Reason: reason, Status: status, Class: class}
 }
+
+// A 429 on a target's retry does not turn the 5xx it answered first into a
+// rate limit: the caller would back off from a provider that is failing.
+func TestARetriedRateLimitDoesNotHideAnEarlierFailure(t *testing.T) {
+	now := frozen()
+	var failures generationFailures
+	failures.record("target_a", routegate.Refusal{}, time.Time{})
+	failures.record("target_a", routegate.Refusal{Kind: routegate.RefusalRateLimited, RetryAfter: 7 * time.Second}, now)
+	if _, ok := failures.allRateLimited(1, now); ok {
+		t.Fatal("a 5xx followed by a 429 was reported as a rate limit")
+	}
+}
+
+// A target whose end is unknown says nothing about when; it must not erase the
+// Retry-After another target of the same kind supplied.
+func TestAnUnknownEndDoesNotHideAKnownRetryAfter(t *testing.T) {
+	now := frozen()
+	var failures generationFailures
+	failures.record("target_a", routegate.Refusal{Kind: routegate.RefusalQuotaExhausted, RetryAfter: 10 * time.Minute}, now)
+	failures.record("target_b", routegate.Refusal{Kind: routegate.RefusalQuotaExhausted}, now)
+	refusal, ok := failures.otherSuspension(now)
+	if !ok || refusal != (routegate.Refusal{Kind: routegate.RefusalQuotaExhausted, RetryAfter: 10 * time.Minute}) {
+		t.Fatalf("refusal = %#v, want quota with the known ten minutes", refusal)
+	}
+}
+
+// The caller is told no longer a wait than the gate itself honours: one bad
+// header must not send a client away for a day while the route recovers in
+// fifteen minutes.
+func TestAnUpstreamHintToTheCallerIsBounded(t *testing.T) {
+	mapped := mapProviderError(&provider.Error{Class: provider.ErrorRateLimit, StatusCode: http.StatusTooManyRequests, RetryAfter: provider.MaxRetryAfter})
+	var classified *Error
+	if !errors.As(mapped, &classified) || classified.RetryAfter != routegate.MaxUpstreamRetryAfter {
+		t.Fatalf("mapped = %#v, want Retry-After %v", mapped, routegate.MaxUpstreamRetryAfter)
+	}
+	now := frozen()
+	f := newDeferredFixtureAt(t, func() time.Time { return now }, nil)
+	f.adapter.err = &provider.Error{Class: provider.ErrorRateLimit, StatusCode: http.StatusTooManyRequests, Retryable: true, RetryAfter: provider.MaxRetryAfter}
+	_, err := f.service.Chat(context.Background(), f.plaintext, chatRequest())
+	if !errors.As(err, &classified) || classified.HTTPStatus != http.StatusTooManyRequests || classified.RetryAfter > routegate.MaxUpstreamRetryAfter {
+		t.Fatalf("chat = %v (Retry-After %v), want a 429 bounded by %v", err, classified.RetryAfter, routegate.MaxUpstreamRetryAfter)
+	}
+}

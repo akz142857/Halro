@@ -1503,6 +1503,9 @@ type LedgerChainCheckpoint struct {
 type MetadataWriteStats struct {
 	BatchCalls        uint64
 	BatchTransactions uint64
+	// BatchRetries counts passes a callback error rolled back, each of which
+	// re-runs every surviving sibling in a fresh transaction.
+	BatchRetries      uint64
 	PageWrites        int64
 	PageWriteDuration time.Duration
 	FreePages         int
@@ -1513,6 +1516,7 @@ func (s *Store) MetadataWriteStats() MetadataWriteStats {
 	stats := MetadataWriteStats{
 		BatchCalls:        s.batchCalls.Load(),
 		BatchTransactions: s.batchTransactions.Load(),
+		BatchRetries:      s.batchRetries.Load(),
 	}
 	if s.db != nil {
 		dbStats := s.db.Stats()
@@ -1552,6 +1556,7 @@ type Store struct {
 
 	batchCalls        atomic.Uint64
 	batchTransactions atomic.Uint64
+	batchRetries      atomic.Uint64
 	// pricingStates holds deploymentID -> *deploymentPricingState. Entries are
 	// created on first use and never removed: one small struct per deployment
 	// that has been priced, which is bounded by the deployment count.

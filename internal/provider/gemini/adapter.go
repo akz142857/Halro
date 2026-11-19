@@ -161,7 +161,7 @@ func (a *Adapter) ListInvocationTargets(ctx context.Context, query domain.Target
 		func() {
 			defer response.Body.Close()
 			if response.StatusCode < 200 || response.StatusCode >= 300 {
-				err = httpError(response.StatusCode, response.Body)
+				err = httpError(response.StatusCode, response.Header, response.Body)
 				return
 			}
 			var catalog struct {
@@ -220,7 +220,7 @@ func (a *Adapter) DescribeInvocationTarget(ctx context.Context, target domain.In
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return domain.InvocationTargetDescriptor{}, httpError(response.StatusCode, response.Body)
+		return domain.InvocationTargetDescriptor{}, httpError(response.StatusCode, response.Header, response.Body)
 	}
 	var item struct {
 		Name, DisplayName          string
@@ -287,7 +287,7 @@ func (a *Adapter) Probe(ctx context.Context, model string) error {
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return httpError(response.StatusCode, response.Body)
+		return httpError(response.StatusCode, response.Header, response.Body)
 	}
 	_, err = io.Copy(io.Discard, io.LimitReader(response.Body, maxResponseBytes+1))
 	return err
@@ -340,7 +340,7 @@ func (a *Adapter) ChatStream(ctx context.Context, call provider.ChatCall, emit f
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, httpError(response.StatusCode, response.Body)
+		return nil, httpError(response.StatusCode, response.Header, response.Body)
 	}
 	if !strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
 		return nil, malformed("Gemini did not return an SSE stream", nil)
@@ -560,7 +560,7 @@ func (a *Adapter) postJSON(ctx context.Context, model, operation, requestID stri
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return httpError(response.StatusCode, response.Body)
+		return httpError(response.StatusCode, response.Header, response.Body)
 	}
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {
@@ -689,8 +689,9 @@ func transportError(message string, err error) *provider.Error {
 	return provider.NewTransportError(message, err)
 }
 
-func httpError(status int, body io.Reader) *provider.Error {
+func httpError(status int, header http.Header, body io.Reader) *provider.Error {
 	result := &provider.Error{StatusCode: status, Message: fmt.Sprintf("Gemini error (%d)", status), ProviderCode: refusalCode(body)}
+	result.RetryAfter = provider.RetryAfter(status, header, time.Now())
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		result.Class = provider.ErrorAuthentication
