@@ -146,6 +146,7 @@ Markdown 编进二进制，由 `internal/app/admin_master_key_runbook.go` 提供
 
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
+| [Opsique 智能体并发开发方案](todo/opsique-agent-concurrency-plan.zh-CN.md) | 上游限流与同键恢复、AWS 备用路由、60 并发验收、后台 Flex 隔离与计费 | 批次 A、B 的 Halro 实现已合并，B 通过本机容量和单条真实备用请求验收，生产配置待核对，批次 C 待实施 |
 | [告警投递适配方案](todo/alert-delivery-design.md) | 告警契约、平台格式、签名、企业网络与投递结果分类 | 提案待评审；`internal/alert` 今天只有 dispatcher |
 | [DLP（脱敏与数据防泄漏）升级方案](todo/dlp-upgrade-plan.zh-CN.md) | 敏感数据标识符、检测配置文件、DLP 策略、Project 绑定与编译快照 | 提案待评审；四层拆分尚未进 `internal/domain` |
 | [路由准入设计](todo/route-eligibility-design.zh-CN.md) | 把熔断器、探针健康与额度/订阅挂起合成一个准入门；作用域由失败自己声明，`FailureReason` 成为路由输入 | 提案待评审；`internal/routegate` 不存在，额度用尽今天不触发回退 |
