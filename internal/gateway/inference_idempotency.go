@@ -156,7 +156,7 @@ func (s *Service) admitInferenceIdempotency(
 	}
 	stored, err := s.resources.PutProviderResource(ctx, record, expectedRevision)
 	if err != nil {
-		return ctx, nil, s.reservationRefusal(ctx, principal.Project.ID, keyHash, err)
+		return ctx, nil, s.reservationRefusal(ctx, principal.Project.ID, keyHash, fingerprint, err)
 	}
 	// Reserved, not in flight: nothing has been dispatched yet, and the
 	// difference is what lets a request this gateway refuses on its own — a
@@ -247,16 +247,19 @@ func outcomeUnknownError() *Error {
 // reservationRefusal says which of the two very different things went wrong
 // when the reservation could not be written.
 //
-// A lost race and an unavailable store both surface as one error from the
-// store, and answering both as "just taken by another request" tells an
-// operator staring at a 409 storm that their callers are colliding when the
-// truth may be that bbolt cannot write. The observed state decides it: if the
-// key is held now, it was a race; if nothing holds it, the write failed for its
-// own reasons and the caller may retry.
-func (s *Service) reservationRefusal(ctx context.Context, projectID string, keyHash [32]byte, cause error) error {
-	_, found, lookupErr := s.resources.ProviderResourceByIdempotency(ctx, projectID, domain.ResourceInferenceCall, keyHash)
-	if lookupErr == nil && found {
-		return gatewayError("idempotency_in_progress", "this idempotency key was just taken by another request", 409, cause)
+// A failed reclaim can leave the original record intact. Its presence alone
+// does not prove another request took the key. Classify the latest state just
+// as admission does so a competing claim gets the appropriate repeat error.
+func (s *Service) reservationRefusal(ctx context.Context, projectID string, keyHash, fingerprint [32]byte, cause error) error {
+	_, verdict, lookupErr := s.classifyIdempotency(ctx, projectID, domain.ResourceInferenceCall, keyHash, fingerprint)
+	var conflict *Error
+	if errors.As(lookupErr, &conflict) && conflict.Code == "idempotency_conflict" {
+		return lookupErr
+	}
+	if lookupErr == nil {
+		if repeat := repeatedKeyError(verdict); repeat != nil {
+			return repeat
+		}
 	}
 	return gatewayError("resource_store_unavailable", "the idempotency key could not be recorded", 503, cause)
 }

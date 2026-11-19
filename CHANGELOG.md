@@ -6,6 +6,34 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-19
+
+### Changed
+
+- Return `409 idempotency_outcome_unknown` when a previous keyed inference or
+  resource creation may have reached the Provider and its outcome was lost.
+  `409 idempotency_in_progress` identifies work still running. Clients that
+  branch on these codes should treat the new code as an uncertain outcome.
+- Interpret upstream `Retry-After` consistently across OpenAI, Anthropic,
+  Bedrock, Bedrock Mantle and Gemini. Ordinary rate-limit hints can delay a
+  probe by up to 15 minutes, including when restoring an older suspension.
+  New hint-based suspensions are saved only when they exceed five minutes.
+
+### Fixed
+
+- Restart the 24-hour protection window when a definitive rate-limit refusal
+  is reclaimed. If storage cannot record the reclaim, return
+  `503 resource_store_unavailable` and leave the key eligible for retry.
+- Preserve an earlier Provider failure when a later attempt returns 429.
+  Skip revision conflicts inside standalone inference-claim batches without
+  rolling back independent sibling writes.
+
+### Upgrading
+
+- From v0.16.0, reuse the existing data directory, configuration and metadata
+  schema 43. Create and verify a pre-upgrade backup and use it with v0.16.0
+  if rollback is required.
+
 ## [0.16.0] - 2026-11-19
 
 ### Changed
@@ -3056,6 +3084,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.17.0]: https://github.com/akz142857/Halro/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/akz142857/Halro/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/akz142857/Halro/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/akz142857/Halro/compare/v0.13.0...v0.14.0

@@ -135,6 +135,34 @@ func TestUpstreamRateLimitHintIsBounded(t *testing.T) {
 	}
 }
 
+func TestRestoreBoundsLegacyRateLimitDeadline(t *testing.T) {
+	store := newRecordingStore()
+	target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 1)
+	row := domain.RouteSuspension{
+		ScopeKind: string(ScopeCredentialModel), ScopeKey: credentialModelKey(target.CredentialID, target.ProviderModel),
+		Reason: string(provider.FailureReasonRateLimited), ProviderStatus: 429,
+		ObservedAt: base, Until: base.Add(24 * time.Hour), WindowSeconds: 60, CredentialRevision: 1,
+	}
+	if err := store.PutRouteSuspension(context.Background(), row); err != nil {
+		t.Fatal(err)
+	}
+
+	gate := gateWithStore(store)
+	gate.Restore(store.list())
+	end := base.Add(MaxUpstreamRetryAfter)
+	if refusal, blocked := gate.Blocked(target, end.Add(-time.Second)); !blocked || refusal.RetryAfter != time.Second {
+		t.Fatalf("restored refusal = %+v, blocked=%t", refusal, blocked)
+	}
+	lease, err := gate.Admit(target, end)
+	if err != nil {
+		t.Fatalf("legacy deadline still blocks after the cap: %v", err)
+	}
+	lease.Abandon()
+	if rows := store.list(); len(rows) != 1 || !rows[0].Until.Equal(end) {
+		t.Fatalf("stored suspensions = %+v, want deadline %v", rows, end)
+	}
+}
+
 func invalidCredential(status int) Observation {
 	return Observation{
 		Reason: provider.FailureReasonInvalidCredential,

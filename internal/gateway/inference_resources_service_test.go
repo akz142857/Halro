@@ -54,7 +54,7 @@ func (s *inferenceResourcesMemoryStore) PutProviderResource(_ context.Context, r
 	}
 	// Refuses the reservation itself, so the caller's refusal has to be told
 	// apart from a key another request genuinely holds.
-	if s.failReservationWrite && !exists && resource.CreationStatus == creationReserved {
+	if s.failReservationWrite && resource.CreationStatus == creationReserved {
 		s.failReservationWrite = false
 		return domain.ProviderResource{}, errors.New("injected reservation write failure")
 	}
