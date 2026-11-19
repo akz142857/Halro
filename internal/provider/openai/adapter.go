@@ -1103,7 +1103,7 @@ func (a *Adapter) classifyHTTPResponse(response *http.Response, refusal upstream
 
 func withRetryAfter(response *http.Response, result *provider.Error) *provider.Error {
 	if response.StatusCode == http.StatusTooManyRequests || response.StatusCode == http.StatusServiceUnavailable {
-		result.RetryAfter = provider.ParseRetryAfter(response.Header.Get("Retry-After"), time.Now())
+		result.RetryAfter = provider.RetryAfterFrom(response.Header, time.Now())
 	}
 	return result
 }

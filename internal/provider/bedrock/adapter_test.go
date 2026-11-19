@@ -186,7 +186,7 @@ func TestBedrockExecutionErrorsUseHeaderCodeAndRemainAmbiguous(t *testing.T) {
 
 func TestRetryAfterSaturatesWithoutDurationOverflow(t *testing.T) {
 	header := http.Header{"Retry-After": []string{"9223372036854775807"}}
-	if delay := retryAfter(header, time.Now()); delay != 24*time.Hour {
+	if delay := provider.RetryAfterFrom(header, time.Now()); delay != 24*time.Hour {
 		t.Fatalf("delay=%v", delay)
 	}
 }

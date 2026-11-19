@@ -9,6 +9,13 @@ import (
 
 const MaxRetryAfter = 24 * time.Hour
 
+// RetryAfterFrom reads an upstream response's Retry-After header. Every adapter
+// goes through it, so one upstream hint means the same thing whichever wire
+// carried it: seconds or an HTTP date, at least a second, at most a day.
+func RetryAfterFrom(header http.Header, now time.Time) time.Duration {
+	return ParseRetryAfter(header.Get("Retry-After"), now)
+}
+
 // ParseRetryAfter returns zero when the upstream gave no usable hint.
 func ParseRetryAfter(value string, now time.Time) time.Duration {
 	value = strings.TrimSpace(value)
