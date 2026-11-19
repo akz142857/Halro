@@ -420,8 +420,16 @@ func (s *Store) PutProviderResource(ctx context.Context, resource domain.Provide
 		write = s.batch
 	}
 	stored := resource
+	// A lost race on the key or the revision is an expected outcome, not a
+	// failure, so it is carried out of the callback rather than returned from
+	// it. Returned, it would abort a shared batch and re-run every sibling claim
+	// once per loser (ADR 0012's first precondition) — on exactly the
+	// concurrent-duplicate path the batch exists to speed up. Both checks run
+	// before anything is written, so a callback that reports one leaves the
+	// transaction untouched.
+	var conflict error
 	err := write(func(tx *Tx) error {
-		stored = resource
+		stored, conflict = resource, nil
 		// A new resource may only be created against live owners. Updates are
 		// exempt: a batch keeps being polled and settled after its deployment is
 		// tombstoned, and refusing the status write would strand the record.
@@ -467,13 +475,18 @@ func (s *Store) PutProviderResource(ctx context.Context, resource domain.Provide
 			// keys, and no longer so now that a synchronous inference call can.
 			if holder := tx.Bucket(bucketProviderResourceIdem).Get(indexKey); holder != nil {
 				if bucket.Get(holder) != nil {
-					return ErrAlreadyExists
+					conflict = ErrAlreadyExists
+					return nil
 				}
 				// The record the index names is gone, so the key is free. The
 				// stale entry is about to be overwritten by this one.
 			}
 		}
 		if err := putVersioned(bucket, resource.ID, expectedRevision, &stored); err != nil {
+			if errors.Is(err, ErrAlreadyExists) || errors.Is(err, ErrRevisionConflict) {
+				conflict = err
+				return nil
+			}
 			return err
 		}
 		if !keyed {
@@ -486,6 +499,9 @@ func (s *Store) PutProviderResource(ctx context.Context, resource domain.Provide
 		// misinterprets; keep the field immutable and it cannot arise.
 		return tx.Bucket(bucketProviderResourceIdem).Put(indexKey, []byte(resource.ID))
 	})
+	if err == nil && conflict != nil {
+		return resource, conflict
+	}
 	return stored, err
 }
 

@@ -14,6 +14,17 @@ import (
 // the next candidate.
 var ErrSuspended = errors.New("route target is suspended")
 
+// SuspendedError is Admit's refusal, and it matches ErrSuspended. It carries the
+// explanation read under the same lock that refused, so a caller cannot see the
+// scope clear in between and be left with a refusal it cannot account for.
+type SuspendedError struct {
+	Refusal Refusal
+}
+
+func (e *SuspendedError) Error() string { return ErrSuspended.Error() }
+
+func (e *SuspendedError) Is(target error) bool { return target == ErrSuspended }
+
 // Config is the availability half of the table. The reason-specific half is not
 // configurable (see DefaultPolicies): a per-reason window an operator is invited
 // to tune before anyone has measured the distribution is asking the wrong
@@ -255,7 +266,7 @@ func (g *Gate) observeLocked(
 	if observation.Reason == provider.FailureReasonRateLimited && policy.HonourRetryAfter {
 		if observation.RetryAfter > 0 {
 			state.retryHint = true
-			upstreamUntil := now.Add(min(observation.RetryAfter, provider.MaxRetryAfter))
+			upstreamUntil := now.Add(min(observation.RetryAfter, max(policy.MaxRetryAfter, state.window)))
 			if upstreamUntil.After(state.suspendedUntil) {
 				state.suspendedUntil = upstreamUntil
 			}
@@ -418,7 +429,7 @@ func (g *Gate) Admit(target provider.Target, now time.Time) (*Lease, error) {
 					held.probing--
 				}
 			}
-			return nil, ErrSuspended
+			return nil, &SuspendedError{Refusal: g.refusalForScopesLocked(g.blockingScopes(target, now), now)}
 		}
 		state.probing++
 		claimed = append(claimed, scope)

@@ -170,3 +170,28 @@ func routegateObservation(reason provider.FailureReason, status int) routegate.O
 	}
 	return routegate.Observation{Reason: reason, Status: status, Class: class}
 }
+
+// A 429 on a target's retry does not turn the 5xx it answered first into a
+// rate limit: the caller would back off from a provider that is failing.
+func TestARetriedRateLimitDoesNotHideAnEarlierFailure(t *testing.T) {
+	now := frozen()
+	var failures generationFailures
+	failures.record("target_a", routegate.Refusal{}, time.Time{})
+	failures.record("target_a", routegate.Refusal{Kind: routegate.RefusalRateLimited, RetryAfter: 7 * time.Second}, now)
+	if _, ok := failures.allRateLimited(1, now); ok {
+		t.Fatal("a 5xx followed by a 429 was reported as a rate limit")
+	}
+}
+
+// A target whose end is unknown says nothing about when; it must not erase the
+// Retry-After another target of the same kind supplied.
+func TestAnUnknownEndDoesNotHideAKnownRetryAfter(t *testing.T) {
+	now := frozen()
+	var failures generationFailures
+	failures.record("target_a", routegate.Refusal{Kind: routegate.RefusalQuotaExhausted, RetryAfter: 10 * time.Minute}, now)
+	failures.record("target_b", routegate.Refusal{Kind: routegate.RefusalQuotaExhausted}, now)
+	refusal, ok := failures.otherSuspension(now)
+	if !ok || refusal != (routegate.Refusal{Kind: routegate.RefusalQuotaExhausted, RetryAfter: 10 * time.Minute}) {
+		t.Fatalf("refusal = %#v, want quota with the known ten minutes", refusal)
+	}
+}

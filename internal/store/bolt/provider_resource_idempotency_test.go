@@ -103,6 +103,11 @@ func TestBatchedInferenceClaimsIsolateKeyConflicts(t *testing.T) {
 	if calls, transactions := after.BatchCalls-before.BatchCalls, after.BatchTransactions-before.BatchTransactions; calls != 3 || transactions != 1 {
 		t.Fatalf("batch calls=%d transactions=%d, want 3 and 1", calls, transactions)
 	}
+	// The lost race is an expected outcome, so it must not roll the shared
+	// transaction back and re-run its siblings (ADR 0012's first precondition).
+	if retries := after.BatchRetries - before.BatchRetries; retries != 0 {
+		t.Fatalf("a same-key conflict rolled the batch back %d times", retries)
+	}
 }
 
 // Absence is an answer, not a failure. Folding "this key is free" into the same

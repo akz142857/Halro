@@ -2,6 +2,7 @@ package routegate
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -63,7 +64,7 @@ func gateWithStore(store SuspensionStore) *Gate {
 }
 
 func TestUpstreamRateLimitHintsSurviveRestart(t *testing.T) {
-	for _, hint := range []time.Duration{7 * time.Second, 2 * time.Minute} {
+	for _, hint := range []time.Duration{10 * time.Minute, 15 * time.Minute} {
 		t.Run(hint.String(), func(t *testing.T) {
 			store := newRecordingStore()
 			gate := gateWithStore(store)
@@ -86,6 +87,51 @@ func TestUpstreamRateLimitHintsSurviveRestart(t *testing.T) {
 				t.Fatalf("active half-open probe refusal = %#v, blocked=%t", refusal, blocked)
 			}
 		})
+	}
+}
+
+// A hint a restart would outlast earns no row: writing one would put a bbolt
+// commit on the request path for every hinted 429.
+func TestShortUpstreamRateLimitHintsAreNotWritten(t *testing.T) {
+	for _, hint := range []time.Duration{7 * time.Second, 2 * time.Minute, PersistWindowThreshold} {
+		t.Run(hint.String(), func(t *testing.T) {
+			store := newRecordingStore()
+			gate := gateWithStore(store)
+			target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 1)
+			for i := range 3 {
+				at := base.Add(time.Duration(i) * time.Millisecond)
+				gate.Observe(target, Observation{Reason: provider.FailureReasonRateLimited, Status: 429, RetryAfter: hint}, at)
+			}
+			if puts, _ := store.counts(); puts != 0 {
+				t.Fatalf("a %v hint wrote %d rows", hint, puts)
+			}
+			if _, err := gate.Admit(target, base.Add(hint-time.Second)); !errors.Is(err, ErrSuspended) {
+				t.Fatalf("the %v hint was not honoured in memory: %v", hint, err)
+			}
+		})
+	}
+}
+
+// The upstream's number is bounded too. One 429 naming a day must not take the
+// credential out for one, in memory or across a restart.
+func TestUpstreamRateLimitHintIsBounded(t *testing.T) {
+	store := newRecordingStore()
+	gate := gateWithStore(store)
+	target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 1)
+	gate.Observe(target, Observation{Reason: provider.FailureReasonRateLimited, Status: 429, RetryAfter: provider.MaxRetryAfter}, base)
+	ceiling := DefaultPolicies()[provider.FailureReasonRateLimited].MaxRetryAfter
+	if _, err := gate.Admit(target, base.Add(ceiling-time.Second)); !errors.Is(err, ErrSuspended) {
+		t.Fatalf("admitted before the bounded hint ended: %v", err)
+	}
+	lease, err := gate.Admit(target, base.Add(ceiling))
+	if err != nil {
+		t.Fatalf("a day-long hint was not bounded to %v: %v", ceiling, err)
+	}
+	lease.Abandon()
+	for _, row := range store.list() {
+		if !row.Until.Equal(base.Add(ceiling).UTC()) {
+			t.Fatalf("persisted until %v, want %v", row.Until, base.Add(ceiling).UTC())
+		}
 	}
 }
 
@@ -132,7 +178,7 @@ func TestAnIndefiniteCredentialSuspensionSurvivesARestart(t *testing.T) {
 	if len(snapshot) != 1 || !snapshot[0].Indefinite {
 		t.Fatalf("snapshot = %+v, want one indefinite suspension", snapshot)
 	}
-	if _, err := restarted.Admit(target, base.Add(24*time.Hour)); err != ErrSuspended {
+	if _, err := restarted.Admit(target, base.Add(24*time.Hour)); !errors.Is(err, ErrSuspended) {
 		t.Fatalf("Admit err = %v, want ErrSuspended: no clock ends this one", err)
 	}
 }
@@ -198,7 +244,7 @@ func TestRefusalsAgainstASuspendedScopeDoNotWriteAgain(t *testing.T) {
 		if admitted := gate.Filter([]provider.Target{target}, now); len(admitted) != 0 {
 			t.Fatal("a suspended target was admitted")
 		}
-		if _, err := gate.Admit(target, now); err != ErrSuspended {
+		if _, err := gate.Admit(target, now); !errors.Is(err, ErrSuspended) {
 			t.Fatalf("Admit err = %v, want ErrSuspended", err)
 		}
 	}
@@ -566,5 +612,21 @@ func TestAFlushTakesTheQueueOnlyWithTheStoreLockHeld(t *testing.T) {
 	<-succeeded
 	if rows := store.list(); len(rows) != 0 {
 		t.Fatalf("stored rows = %+v, want none: the success ended the suspension", rows)
+	}
+}
+
+// Admit's refusal carries its own explanation, read under the lock that
+// refused. A caller asking again could find the scope cleared in between.
+func TestAdmitRefusalCarriesItsExplanation(t *testing.T) {
+	gate := New(Config{})
+	target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 1)
+	gate.Observe(target, Observation{Reason: provider.FailureReasonRateLimited, Status: 429, RetryAfter: 20 * time.Second}, base)
+	_, err := gate.Admit(target, base.Add(5*time.Second))
+	var suspended *SuspendedError
+	if !errors.As(err, &suspended) || !errors.Is(err, ErrSuspended) {
+		t.Fatalf("err = %v, want a SuspendedError matching ErrSuspended", err)
+	}
+	if suspended.Refusal != (Refusal{Kind: RefusalRateLimited, RetryAfter: 15 * time.Second}) {
+		t.Fatalf("refusal = %#v, want rate limited with fifteen seconds left", suspended.Refusal)
 	}
 }

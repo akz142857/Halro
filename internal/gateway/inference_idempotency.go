@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/akz142857/Halro/internal/auth"
@@ -121,22 +122,8 @@ func (s *Service) admitInferenceIdempotency(
 	if err != nil {
 		return ctx, nil, err
 	}
-	switch verdict {
-	case idempotencyCompleted:
-		// The answer went to the first caller and was not kept. Saying that is
-		// the honest refusal; inventing a replay would need a store this
-		// deliberately does not have.
-		return ctx, nil, gatewayError(
-			"idempotency_completed",
-			"this idempotency key has already been used; its answer was delivered once and is not stored",
-			409, nil,
-		)
-	case idempotencyInProgress:
-		return ctx, nil, gatewayError(
-			"idempotency_in_progress",
-			"a request with this idempotency key is still running or its outcome is unknown",
-			409, nil,
-		)
+	if repeat := repeatedKeyError(verdict); repeat != nil {
+		return ctx, nil, repeat
 	}
 	recordID := existing.ID
 	expectedRevision := existing.Revision
@@ -157,8 +144,12 @@ func (s *Service) admitInferenceIdempotency(
 		CreationStatus: creationReserved, ReservedBy: s.instanceID, Status: "pending",
 		CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(inferenceIdempotencyTTL),
 	}
+	// A reclaim keeps the record's identity but never its old expiry: the key
+	// has to outlive the request it is about to protect. Inheriting a deadline
+	// seconds away would free the key while the reclaimed call is still
+	// running, and the caller's timeout retry would then execute a second time.
 	if verdict == idempotencyReclaim && existing.ExpiresAt.After(now) {
-		record.CreatedAt, record.ExpiresAt = existing.CreatedAt, existing.ExpiresAt
+		record.CreatedAt = existing.CreatedAt
 		if existing.CreationStatus == creationRetryableRefused || existing.Status == inferenceRetryPending {
 			record.Status = inferenceRetryPending
 		}
@@ -175,6 +166,59 @@ func (s *Service) admitInferenceIdempotency(
 	// held reads as reclaimable.
 	claim := &inferenceIdempotency{service: s, record: stored, held: true}
 	return withInferenceClaim(ctx, claim), claim, nil
+}
+
+// inferenceRepeatRefusal answers a keyed request that is being refused before
+// its key was reserved, when the key already says more than the refusal does.
+//
+// It reserves nothing and refuses nothing on its own account: a fresh key, a
+// reclaimable one, an invalid one, or a store that cannot answer all leave the
+// original refusal standing, which never reached the upstream either way.
+func (s *Service) inferenceRepeatRefusal(
+	ctx context.Context, principal auth.AuthResult, publicModel string, payload any,
+) error {
+	key, sent := requestmeta.IdempotencyKey(ctx)
+	if !sent || s.resources == nil || idempotency.ValidateKey(key) != nil {
+		return nil
+	}
+	fingerprint, err := inferenceFingerprint(publicModel, payload)
+	if err != nil {
+		return nil
+	}
+	keyHash := sha256.Sum256([]byte(key))
+	_, verdict, err := s.classifyIdempotency(ctx, principal.Project.ID, domain.ResourceInferenceCall, keyHash, fingerprint)
+	var conflict *Error
+	switch {
+	case errors.As(err, &conflict) && conflict.Code == "idempotency_conflict":
+		return err
+	case err != nil:
+		return nil
+	default:
+		return repeatedKeyError(verdict)
+	}
+}
+
+// repeatedKeyError is the answer to a key whose earlier use decides this
+// request, or nil when it does not.
+func repeatedKeyError(verdict idempotencyVerdict) error {
+	switch verdict {
+	case idempotencyCompleted:
+		// The answer went to the first caller and was not kept. Saying that is
+		// the honest refusal; inventing a replay would need a store this
+		// deliberately does not have.
+		return gatewayError(
+			"idempotency_completed",
+			"this idempotency key has already been used; its answer was delivered once and is not stored",
+			409, nil,
+		)
+	case idempotencyInProgress:
+		return gatewayError(
+			"idempotency_in_progress",
+			"a request with this idempotency key is still running or its outcome is unknown",
+			409, nil,
+		)
+	}
+	return nil
 }
 
 // reservationRefusal says which of the two very different things went wrong

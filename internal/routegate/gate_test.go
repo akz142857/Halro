@@ -56,7 +56,7 @@ func TestOneCredentialRefusalRemovesEveryDeploymentBehindIt(t *testing.T) {
 	if got := ids(gate.Filter(all, base)); !equal(got, []string{"route_3"}) {
 		t.Fatalf("filtered = %v, want only the target on the other credential", got)
 	}
-	if _, err := gate.Admit(second, base); err != ErrSuspended {
+	if _, err := gate.Admit(second, base); !errors.Is(err, ErrSuspended) {
 		t.Fatalf("a deployment that never failed was admitted on a dead credential: %v", err)
 	}
 }
@@ -115,7 +115,7 @@ func TestEverySuspendedCandidateLeavesNothing(t *testing.T) {
 			if got := gate.Filter([]provider.Target{target}, base); len(got) != 0 {
 				t.Fatalf("a suspended candidate was offered anyway: %v", ids(got))
 			}
-			if _, err := gate.Admit(target, base); err != ErrSuspended {
+			if _, err := gate.Admit(target, base); !errors.Is(err, ErrSuspended) {
 				t.Fatalf("admit = %v, want ErrSuspended", err)
 			}
 		})
@@ -202,7 +202,7 @@ func TestThresholdsDifferBetweenNoiseAndAStatedRefusal(t *testing.T) {
 		}
 	}
 	gate.Observe(target, Observation{Status: 500}, base)
-	if _, err := gate.Admit(target, base); err != ErrSuspended {
+	if _, err := gate.Admit(target, base); !errors.Is(err, ErrSuspended) {
 		t.Fatalf("not suspended at the threshold: %v", err)
 	}
 
@@ -211,7 +211,7 @@ func TestThresholdsDifferBetweenNoiseAndAStatedRefusal(t *testing.T) {
 	stated.Observe(gate2Target, Observation{
 		Reason: provider.FailureReasonSubscriptionQuotaExhausted, Status: 402,
 	}, base)
-	if _, err := stated.Admit(gate2Target, base); err != ErrSuspended {
+	if _, err := stated.Admit(gate2Target, base); !errors.Is(err, ErrSuspended) {
 		t.Fatalf("a stated refusal did not suspend on its first observation: %v", err)
 	}
 }
@@ -225,7 +225,7 @@ func TestWindowsHonourRetryAfterAndThenDouble(t *testing.T) {
 		Reason: provider.FailureReasonRateLimited, Status: 429, RetryAfter: 20 * time.Second,
 	}, base)
 
-	if _, err := gate.Admit(target, base.Add(19*time.Second)); err != ErrSuspended {
+	if _, err := gate.Admit(target, base.Add(19*time.Second)); !errors.Is(err, ErrSuspended) {
 		t.Fatal("the upstream asked for 20s and was admitted at 19s")
 	}
 	lease, err := gate.Admit(target, base.Add(20*time.Second))
@@ -233,13 +233,13 @@ func TestWindowsHonourRetryAfterAndThenDouble(t *testing.T) {
 		t.Fatalf("no probe at the end of the window: %v", err)
 	}
 	// Only one probe: the rest wait.
-	if _, err := gate.Admit(target, base.Add(20*time.Second)); err != ErrSuspended {
+	if _, err := gate.Admit(target, base.Add(20*time.Second)); !errors.Is(err, ErrSuspended) {
 		t.Fatal("a second probe was admitted into the half-open window")
 	}
 	lease.Done(&Observation{Reason: provider.FailureReasonRateLimited, Status: 429}, base.Add(20*time.Second))
 
 	// 20s doubled, so still suspended at 39s past the second failure.
-	if _, err := gate.Admit(target, base.Add(59*time.Second)); err != ErrSuspended {
+	if _, err := gate.Admit(target, base.Add(59*time.Second)); !errors.Is(err, ErrSuspended) {
 		t.Fatal("the window did not double after the probe failed")
 	}
 	if _, err := gate.Admit(target, base.Add(61*time.Second)); err != nil {
@@ -372,7 +372,7 @@ func TestAPassingProbeDoesNotClearACredentialSuspension(t *testing.T) {
 
 	gate.ObserveProbe("dep_1", DeploymentProbe{Healthy: true, ObservedAt: base}, base)
 
-	if _, err := gate.Admit(target, base); err != ErrSuspended {
+	if _, err := gate.Admit(target, base); !errors.Is(err, ErrSuspended) {
 		t.Fatalf("a model-list probe cleared a quota suspension: %v", err)
 	}
 }

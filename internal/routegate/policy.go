@@ -66,6 +66,11 @@ type Policy struct {
 	// HonourRetryAfter takes the upstream's own number as the first window when
 	// it gave one. It is the only case where the window is not Halro's guess.
 	HonourRetryAfter bool
+	// MaxRetryAfter is how far an upstream's own hint may carry a rate-limit
+	// suspension past MaxWindow. MaxWindow bounds Halro's guess; this bounds
+	// the upstream's, so one 429 naming a day cannot take a credential out for
+	// one. Zero keeps the hint inside MaxWindow.
+	MaxRetryAfter time.Duration
 }
 
 // The design this implements had one more field here: whether to let a request
@@ -98,6 +103,7 @@ func DefaultPolicies() map[provider.FailureReason]Policy {
 			Scope: ScopeCredentialModel, Threshold: 1,
 			Window: time.Second, MaxWindow: time.Minute,
 			Recovery: RecoverAfterWindow, HonourRetryAfter: true,
+			MaxRetryAfter: 15 * time.Minute,
 		},
 		provider.FailureReasonSubscriptionQuotaExhausted: {
 			Scope: ScopeCredentialModel, Threshold: 1,

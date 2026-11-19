@@ -264,6 +264,7 @@ func (s *Store) commitBatch(queued []*batchCall) {
 			}
 			return
 		}
+		s.batchRetries.Add(1)
 		queued[failedIndex].done <- err
 		queued = append(queued[:failedIndex], queued[failedIndex+1:]...)
 	}

@@ -138,8 +138,11 @@ func TestDefinitiveRateLimitKeepsTheFingerprintAndAllowsOneRetry(t *testing.T) {
 		t.Fatalf("repeat after success = %v, want completed without dispatch", err)
 	}
 	completed := f.store.all()
-	if len(completed) != 1 || completed[0].ID != initial[0].ID || !completed[0].ExpiresAt.Equal(initial[0].ExpiresAt) {
-		t.Fatal("reclaim changed the durable claim identity or expiry")
+	if len(completed) != 1 || completed[0].ID != initial[0].ID || !completed[0].CreatedAt.Equal(initial[0].CreatedAt) {
+		t.Fatal("reclaim changed the durable claim identity")
+	}
+	if want := now.Add(inferenceIdempotencyTTL); !completed[0].ExpiresAt.Equal(want) {
+		t.Fatalf("reclaimed expiry = %v, want a full lifetime from the retry (%v)", completed[0].ExpiresAt, want)
 	}
 }
 
@@ -517,5 +520,56 @@ func TestAReservationOutageIsNotReportedAsARace(t *testing.T) {
 	}
 	if f.adapter.calls != 0 {
 		t.Fatalf("an unrecorded key reached the upstream: %d calls", f.adapter.calls)
+	}
+}
+
+// A reclaimed key must outlive the call it is about to protect. Inheriting the
+// first use's expiry would free the key seconds after the retry succeeded, and
+// the caller's timeout retry would then run upstream a second time.
+func TestAReclaimNearExpiryKeepsTheKeyForTheWholeCall(t *testing.T) {
+	now := frozen()
+	f := newDeferredFixtureAt(t, func() time.Time { return now }, nil)
+	ctx := keyed("reclaim-near-expiry")
+	f.adapter.err = &provider.Error{Class: provider.ErrorRateLimit, StatusCode: http.StatusTooManyRequests, Retryable: true, RetryAfter: time.Second}
+	if _, err := f.service.Chat(ctx, f.plaintext, chatRequest()); err == nil {
+		t.Fatal("the rate limit did not reach the caller")
+	}
+	f.adapter.err = nil
+	now = now.Add(inferenceIdempotencyTTL - 5*time.Second)
+	if _, err := f.service.Chat(ctx, f.plaintext, chatRequest()); err != nil {
+		t.Fatalf("retry before expiry: %v", err)
+	}
+	now = now.Add(10 * time.Second)
+	_, err := f.service.Chat(ctx, f.plaintext, chatRequest())
+	var refusal *Error
+	if !errors.As(err, &refusal) || refusal.Code != "idempotency_completed" || f.adapter.calls != 2 {
+		t.Fatalf("repeat just past the first use's expiry = %v (calls=%d), want completed without a dispatch", err, f.adapter.calls)
+	}
+}
+
+// A completed key is answered as one even when the request would otherwise be
+// refused before its key is reserved. A 429 would invite a backoff loop on a key
+// that is never going to run again.
+func TestACompletedKeyIsAnsweredAsOneWhileItsRouteIsSuspended(t *testing.T) {
+	now := frozen()
+	f := newDeferredFixtureAt(t, func() time.Time { return now }, nil)
+	done := keyed("completed-then-suspended")
+	if _, err := f.service.Chat(done, f.plaintext, chatRequest()); err != nil {
+		t.Fatal(err)
+	}
+	f.adapter.err = &provider.Error{Class: provider.ErrorRateLimit, StatusCode: http.StatusTooManyRequests, Retryable: true, RetryAfter: 30 * time.Second}
+	if _, err := f.service.Chat(keyed("suspends-the-route"), f.plaintext, chatRequest()); err == nil {
+		t.Fatal("the rate limit did not reach the caller")
+	}
+	f.adapter.err = nil
+	_, err := f.service.Chat(done, f.plaintext, chatRequest())
+	var refusal *Error
+	if !errors.As(err, &refusal) || refusal.Code != "idempotency_completed" || f.adapter.calls != 2 {
+		t.Fatalf("completed key on a suspended route = %v, want 409 idempotency_completed", err)
+	}
+	// A key with no history still hears about the suspension.
+	_, err = f.service.Chat(keyed("fresh-while-suspended"), f.plaintext, chatRequest())
+	if !errors.As(err, &refusal) || refusal.Code != "provider_rate_limit" || f.adapter.calls != 2 {
+		t.Fatalf("fresh key on a suspended route = %v, want 429 provider_rate_limit", err)
 	}
 }

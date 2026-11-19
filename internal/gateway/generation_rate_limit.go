@@ -16,9 +16,15 @@ type generationFailure struct {
 
 type generationFailures map[string]generationFailure
 
+// record keeps one entry per target. A rate limit never replaces something
+// else the same target already said: a 5xx followed by a 429 on its retry is a
+// provider failure, and reporting it as a rate limit would hide it.
 func (failures *generationFailures) record(targetID string, refusal routegate.Refusal, now time.Time) {
 	if *failures == nil {
 		*failures = make(generationFailures)
+	}
+	if held, ok := (*failures)[targetID]; ok && held.kind != routegate.RefusalRateLimited && refusal.Kind == routegate.RefusalRateLimited {
+		return
 	}
 	failure := generationFailure{kind: refusal.Kind}
 	if refusal.RetryAfter > 0 {
@@ -54,12 +60,13 @@ func (failures generationFailures) otherSuspension(now time.Time) (routegate.Ref
 	for _, kind := range []routegate.RefusalKind{
 		routegate.RefusalCredentialUnusable, routegate.RefusalQuotaExhausted, routegate.RefusalUnavailable,
 	} {
+		// An unknown end (zero) says nothing about when, so it cannot hide a
+		// known one; it only matters when no target of this kind has one.
 		var found bool
 		var earliest time.Duration
 		for _, failure := range failures {
 			if failure.kind == kind {
-				delay := failure.retryAfter(now)
-				if !found || delay < earliest {
+				if delay := failure.retryAfter(now); delay > 0 && (earliest == 0 || delay < earliest) {
 					earliest = delay
 				}
 				found = true
