@@ -523,6 +523,27 @@ func TestAReservationOutageIsNotReportedAsARace(t *testing.T) {
 	}
 }
 
+func TestAReclaimWriteFailureKeepsTheKeyRetryable(t *testing.T) {
+	now := frozen()
+	f := newDeferredFixtureAt(t, func() time.Time { return now }, nil)
+	ctx := keyed("reclaim-store-unavailable")
+	f.adapter.err = &provider.Error{Class: provider.ErrorRateLimit, StatusCode: http.StatusTooManyRequests, Retryable: true}
+	_, err := f.service.Chat(ctx, f.plaintext, chatRequest())
+	assertGatewayCode(t, err, "provider_rate_limit")
+
+	now = now.Add(time.Minute)
+	f.adapter.err = nil
+	f.store.failReservationWrite = true
+	_, err = f.service.Chat(ctx, f.plaintext, chatRequest())
+	assertGatewayCode(t, err, "resource_store_unavailable")
+	if f.adapter.calls != 1 {
+		t.Fatalf("provider calls after storage failure = %d, want 1", f.adapter.calls)
+	}
+	if _, err := f.service.Chat(ctx, f.plaintext, chatRequest()); err != nil {
+		t.Fatalf("retry after storage recovers: %v", err)
+	}
+}
+
 // A reclaimed key must outlive the call it is about to protect. Inheriting the
 // first use's expiry would free the key seconds after the retry succeeded, and
 // the caller's timeout retry would then run upstream a second time.

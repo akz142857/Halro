@@ -284,6 +284,15 @@ func (g *Gate) Restore(suspensions []domain.RouteSuspension) {
 		}
 		if !stored.Indefinite {
 			state.suspendedUntil = stored.Until
+			if state.retryHint && policy.MaxRetryAfter > 0 {
+				// Apply the current ceiling to deadlines written by older
+				// releases, measured from their original observation.
+				ceiling := stored.ObservedAt.Add(max(policy.MaxRetryAfter, state.window))
+				if state.suspendedUntil.After(ceiling) {
+					state.suspendedUntil = ceiling
+					g.notePersistLocked(scope, state)
+				}
+			}
 		}
 		g.scopes[scope] = state
 	}

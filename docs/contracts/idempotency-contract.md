@@ -44,8 +44,8 @@ what it was asked to do.
 - A unary generation request that ends in `429 provider_rate_limit` is marked
   `retryable_refused` when every dispatched attempt was explicitly and
   unambiguously rate-limited and accounting finalized. A retry keeps the same
-  fingerprint and record, and its 24 hours restart from the retry, so the key
-  cannot expire under the call it is protecting. A failed attempt to record the refusal returns
+  fingerprint and record, and successful reclaim restarts the 24-hour
+  protection window. A failed attempt to record the refusal returns
   `503 resource_store_unavailable` and leaves the key protected.
 - A failure after dispatch with an uncertain outcome spends its key. Timeouts,
   ambiguous upstream failures, and interruptions before the outcome is durably
@@ -65,11 +65,10 @@ what it was asked to do.
   is ambiguous, so the reservation is released and the caller's own retry is
   answered by the limit it broke rather than by a conflict about a call that was
   never made.
-- If the reservation cannot be written, the answer says which of the two things
-  happened: `409 idempotency_in_progress` when the key is genuinely held by
-  another request, and `503 resource_store_unavailable` when the store could not
-  record it. A store that cannot answer whether a key has been used is
-  `503`, never read as a free key.
+- If a reservation write fails, Halro rereads the key to classify a competing
+  claim. When the key is still available or reclaimable, it returns
+  `503 resource_store_unavailable`. An unreadable key also returns `503`
+  and remains protected.
 - A streaming repeat is refused **before the stream opens**, as an ordinary HTTP
   error rather than an event inside a stream the caller has been told is
   starting. Halro does not retain SSE bodies and promises no replay of one.
