@@ -646,6 +646,12 @@ also move in the isolated compatibility module's checksum file.
 The module paths, LICENSE files, and applicable NOTICE files are unchanged.
 These SDKs are confined to compatibility tests.
 
+The 2026-11-25 Node OpenAI SDK compatibility update (#527)
+upgrades `openai` from 7.54.0 to 7.57.0. The npm artifact matches the
+lockfile integrity and retains byte-identical Apache-2.0 and vendored license
+files. The combined lock keeps Anthropic 1.9.0 with no transitive version changes.
+These SDKs are confined to compatibility tests.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -663,8 +669,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `web/package-lock.json`: `85aeb9d673fd173a36bd159ff1bcbdc481496461`
 - `tests/compatibility/go/go.mod`: `dcd748f8c9de07f96d3684a44c46171deb03ab70`
 - `tests/compatibility/go/go.sum`: `9a8d56b6c70b6587958234bfb531d3320ff52b34`
-- `tests/compatibility/node/package.json`: `b51bfe5795d48ee30b1f481d92891e1576f274e5`
-- `tests/compatibility/node/package-lock.json`: `6a735804b7a55336e66a1f50cf61c66970eb88ae`
+- `tests/compatibility/node/package.json`: `c22d59a568206a08fb5899d0f797843a361130e1`
+- `tests/compatibility/node/package-lock.json`: `5cee90813782deb68f5183dd98790aa91c447f6b`
 - `tests/compatibility/python/requirements.in`: `83faff2527d7acc243f2228fd1bcb3426f8ce8d1`
 - `tests/compatibility/python/requirements.txt`: `6cb02e8a11186c547815065caa42589f671f8a2e`
 
