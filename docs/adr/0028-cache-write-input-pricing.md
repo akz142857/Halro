@@ -35,6 +35,19 @@ supply the write total. Bedrock Mantle's Messages and Responses adapters share t
 corresponding lifetime decoders. AWS documents a [Converse TTL breakdown](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html).
 Halro's withheld Converse profile retains its existing total-only mapping.
 
+The cost of a metered attempt is estimated when cache writes use an inherited
+input rate or when the lifetime split is missing and could affect the charge.
+Provider-reported tokens retain their usage source. The amount still follows
+the pinned rate and the available token breakdown.
+
+New prices record which write rates were supplied by the operator. An older
+price without that evidence can have an inherited rate in any tier whose write
+rate equals its ordinary input rate. For those rates, actual cache writes are
+classified conservatively. A new price version can explicitly set an equal
+rate. The same classification applies to snapshots that used maximum rates
+because the schedule timezone could not be loaded. Existing settled events
+retain their original amounts and cost classification.
+
 Before the provider reports usage, budget and Token Guard bound the request using
 the highest input-side rate. The bound allows for separate rounding of each
 occupied tier. An estimated settlement uses the same highest rate and records

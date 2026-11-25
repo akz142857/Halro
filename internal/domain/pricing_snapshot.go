@@ -222,6 +222,11 @@ func (s PriceSnapshot) Validate() error {
 
 // Calculate prices one attempt against this frozen snapshot.
 func (s PriceSnapshot) Calculate(tokens BilledTokens) (PriceCostBreakdown, error) {
+	return s.CalculateAttempt(tokens, false)
+}
+
+// CalculateAttempt applies the pinned rates and the attempt's fixed-fee rule.
+func (s PriceSnapshot) CalculateAttempt(tokens BilledTokens, fixedFeeExempt bool) (PriceCostBreakdown, error) {
 	if err := s.Validate(); err != nil {
 		return PriceCostBreakdown{}, err
 	}
@@ -244,7 +249,11 @@ func (s PriceSnapshot) Calculate(tokens BilledTokens) (PriceCostBreakdown, error
 	// The snapshot's terms are already the rung that was pinned at
 	// reservation, whether or not the version behind it bills by time of day.
 	// Pricing reads them; it never re-reads a clock.
-	return s.Tier().Calculate(tokens)
+	tier := s.Tier()
+	if fixedFeeExempt {
+		tier.FixedRequestMicrosUSD = 0
+	}
+	return tier.Calculate(tokens)
 }
 
 // ReservationCost applies the conservative cost bound to the frozen tier.

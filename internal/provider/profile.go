@@ -282,6 +282,14 @@ func (b *LegacyAdapterBridge) FetchBatchResults(ctx context.Context, requestID, 
 	return a.FetchBatchResults(ctx, requestID, batchID, resultsURL)
 }
 
+func (b *LegacyAdapterBridge) FetchBatchResultsWithUsage(ctx context.Context, requestID, batchID, resultsURL string) ([]byte, map[string]semantic.Usage, error) {
+	if a, ok := b.Adapter.(BatchResultsUsageAdapter); ok {
+		return a.FetchBatchResultsWithUsage(ctx, requestID, batchID, resultsURL)
+	}
+	content, err := b.FetchBatchResults(ctx, requestID, batchID, resultsURL)
+	return content, nil, err
+}
+
 func (b *LegacyAdapterBridge) CreateBatch(ctx context.Context, call BatchCreateCall) (BatchObject, error) {
 	a, ok := b.Adapter.(ResourceBatchesAdapter)
 	if !ok {

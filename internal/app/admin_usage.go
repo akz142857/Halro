@@ -327,7 +327,7 @@ func budgetPressure(projects []domain.Project, state interface {
 			continue
 		}
 		balance := state.Balance(project.ID, period.ID, period.TimezoneVersion)
-		current := balance.CommittedMicrosUSD + balance.ReservedMicrosUSD
+		current := governanceSaturatingAdd(balance.CommittedMicrosUSD, balance.ReservedMicrosUSD)
 		utilization := float64(current) / float64(project.DailyBudgetMicrosUSD)
 		if utilization >= .8 {
 			result.AtRisk++

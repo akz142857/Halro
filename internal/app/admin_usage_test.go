@@ -1,9 +1,13 @@
 package app
 
 import (
+	"math"
 	"testing"
 
+	"github.com/akz142857/Halro/internal/budget"
+	"github.com/akz142857/Halro/internal/domain"
 	gatewaycore "github.com/akz142857/Halro/internal/gateway"
+	"github.com/akz142857/Halro/internal/ledger"
 )
 
 func TestDashboardGovernanceSummaries(t *testing.T) {
@@ -22,5 +26,20 @@ func TestDashboardGovernanceSummaries(t *testing.T) {
 	}, 2)
 	if len(items) != 2 || items[0].ID != "highest" || items[1].ID != "middle" {
 		t.Fatalf("pressure=%#v", items)
+	}
+}
+
+type pressureBalance ledger.Balance
+
+func (b pressureBalance) Balance(string, string, uint64) ledger.Balance {
+	return ledger.Balance(b)
+}
+
+func TestBudgetPressureDoesNotWrapAnOverBudgetBalance(t *testing.T) {
+	projects := []domain.Project{{ID: "project", Enabled: true, DailyBudgetMicrosUSD: math.MaxInt64}}
+	balance := pressureBalance{CommittedMicrosUSD: math.MaxInt64, ReservedMicrosUSD: 1}
+	result := budgetPressure(projects, balance, budget.Period{})
+	if len(result.Items) != 1 || result.Items[0].Current != math.MaxInt64 || result.AtRisk != 1 {
+		t.Fatalf("budget pressure = %+v", result)
 	}
 }

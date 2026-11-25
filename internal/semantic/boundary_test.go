@@ -57,14 +57,16 @@ func TestExportedCanonicalSchemaMatchesReviewedSnapshot(t *testing.T) {
 		"OutputFormat":     {"Kind=kind", "Name=name", "Description=description", "Schema=schema", "Strict=strict"},
 		"GenerateRequest":  {"Operation=operation", "Source=source", "Mode=mode", "RequestedModel=requested_model", "Messages=messages", "Tools=tools", "ToolChoice=tool_choice", "ParallelTools=parallel_tools", "OutputFormat=output_format", "Temperature=temperature", "TopP=top_p", "VisibleOutputTokenLimit=visible_output_token_limit", "CompletionTokenLimit=completion_token_limit", "Candidates=candidates", "Stop=stop", "Seed=seed", "ReasoningSummary=reasoning_summary", "ReasoningEffort=reasoning_effort", "EndUserRef=end_user_ref", "Stream=stream", "IncludeUsage=include_usage", "Requirements=requirements"},
 		"EmbeddingRequest": {"Operation=operation", "Source=source", "Mode=mode", "RequestedModel=requested_model", "Input=input", "Encoding=encoding", "Dimensions=dimensions", "EndUserRef=end_user_ref", "Requirements=requirements"},
-		"Usage":            {"InputTokens=input_tokens", "CachedInputTokens=cached_input_tokens", "CacheWriteInputTokens=cache_write_input_tokens", "CacheWriteLongInputTokens=cache_write_long_input_tokens", "CacheWriteTTLPair=cache_write_ttl_pair", "OutputTokens=output_tokens", "ReasoningTokens=reasoning_tokens", "AudioTokens=audio_tokens", "TotalTokens=total_tokens", "Source=source"},
-		"GenerateChoice":   {"Index=index", "Message=message", "Termination=termination", "NativeTermination=native_termination"},
-		"GenerateResult":   {"ID=id", "Created=created", "Model=model", "Choices=choices", "Usage=usage", "ProviderRequestID=provider_request_id", "ProviderID=provider_id", "DeploymentID=deployment_id", "Translation=translation", "MappingRevision=mapping_revision"},
-		"Embedding":        {"Index=index", "Value=value"},
-		"EmbeddingResult":  {"Model=model", "Data=data", "Usage=usage", "ProviderRequestID=provider_request_id", "ProviderID=provider_id", "DeploymentID=deployment_id", "Translation=translation", "MappingRevision=mapping_revision"},
-		"Event":            {"Kind=kind", "ID=id", "Created=created", "Model=model", "Outputs=outputs", "Usage=usage", "Translation=translation", "MappingRevision=mapping_revision"},
-		"OutputDelta":      {"Index=index", "Role=role", "Content=content", "Termination=termination", "NativeTermination=native_termination"},
-		"ContentDelta":     {"Kind=kind", "Text=text", "EncryptedContent=encrypted_content", "ToolIndex=tool_index", "CallID=call_id", "Name=name", "ArgumentsFragment=arguments_fragment"},
+		// OutputIncomplete carries partial usage evidence between adapters and
+		// settlement. It has no representation on external provider wires.
+		"Usage":           {"OutputIncomplete=-", "InputTokens=input_tokens", "CachedInputTokens=cached_input_tokens", "CacheWriteInputTokens=cache_write_input_tokens", "CacheWriteLongInputTokens=cache_write_long_input_tokens", "CacheWriteTTLPair=cache_write_ttl_pair", "OutputTokens=output_tokens", "ReasoningTokens=reasoning_tokens", "AudioTokens=audio_tokens", "TotalTokens=total_tokens", "Source=source"},
+		"GenerateChoice":  {"Index=index", "Message=message", "Termination=termination", "NativeTermination=native_termination"},
+		"GenerateResult":  {"ID=id", "Created=created", "Model=model", "Choices=choices", "Usage=usage", "ProviderRequestID=provider_request_id", "ProviderID=provider_id", "DeploymentID=deployment_id", "Translation=translation", "MappingRevision=mapping_revision"},
+		"Embedding":       {"Index=index", "Value=value"},
+		"EmbeddingResult": {"Model=model", "Data=data", "Usage=usage", "ProviderRequestID=provider_request_id", "ProviderID=provider_id", "DeploymentID=deployment_id", "Translation=translation", "MappingRevision=mapping_revision"},
+		"Event":           {"Kind=kind", "ID=id", "Created=created", "Model=model", "Outputs=outputs", "Usage=usage", "Translation=translation", "MappingRevision=mapping_revision"},
+		"OutputDelta":     {"Index=index", "Role=role", "Content=content", "Termination=termination", "NativeTermination=native_termination"},
+		"ContentDelta":    {"Kind=kind", "Text=text", "EncryptedContent=encrypted_content", "ToolIndex=tool_index", "CallID=call_id", "Name=name", "ArgumentsFragment=arguments_fragment"},
 	}
 	got := exportedStructFields(t)
 	if !reflect.DeepEqual(got, want) {

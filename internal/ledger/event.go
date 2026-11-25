@@ -27,6 +27,7 @@ const (
 	LeaseModeFree            LeaseMode        = "free"
 	LeaseModeUnknownAllowed  LeaseMode        = "unknown_allowed"
 	TokenUsageSourceProvider TokenUsageSource = "provider_reported"
+	TokenUsageSourceMixed    TokenUsageSource = "gateway_estimated_output"
 	TokenUsageSourceEstimate TokenUsageSource = "gateway_estimated"
 	TokenUsageSourceNone     TokenUsageSource = "none"
 )
@@ -50,6 +51,7 @@ func (k EventKind) Valid() bool {
 }
 
 type Event struct {
+	domain.CacheWriteRateEvidence
 	EventID                     string                             `json:"event_id"`
 	Kind                        EventKind                          `json:"kind"`
 	RequestID                   string                             `json:"request_id"`
@@ -92,10 +94,15 @@ type Event struct {
 	InputCostMicrosUSD          int64                              `json:"input_cost_micros_usd,omitempty"`
 	OutputCostMicrosUSD         int64                              `json:"output_cost_micros_usd,omitempty"`
 	FixedCostMicrosUSD          int64                              `json:"fixed_cost_micros_usd,omitempty"`
+	ProviderResourceID          string                             `json:"provider_resource_id,omitempty"`
+	CompleteResourceRequest     bool                               `json:"complete_resource_request,omitempty"`
+	VideoSeconds                int64                              `json:"video_seconds,omitempty"`
+	FixedFeeExempt              bool                               `json:"fixed_fee_exempt,omitempty"`
 	RecoveryKey                 string                             `json:"recovery_key,omitempty"`
 	UnknownPolicyEvidence       *domain.UnknownPricePolicyEvidence `json:"unknown_policy_evidence,omitempty"`
 	TokenGuardPricingViewDigest string                             `json:"token_guard_pricing_view_digest,omitempty"`
 	ProviderInputTokens         int64                              `json:"provider_input_tokens,omitempty"`
+	EstimatedOutputTokens       int64                              `json:"estimated_output_tokens,omitempty"`
 	ProviderOutputTokens        int64                              `json:"provider_output_tokens,omitempty"`
 	// Cache tiers partition ProviderInputTokens; reasoning partitions
 	// ProviderOutputTokens. They are recorded rather than folded into the totals
@@ -284,7 +291,16 @@ func (e Event) Validate() error {
 			problems = append(problems, errors.New("known-price lease cannot contain unknown-price policy evidence"))
 		}
 	}
+	if e.CompleteResourceRequest && (e.Kind != EventAttemptSettled || e.ProviderResourceID == "") {
+		problems = append(problems, errors.New("resource request completion requires a linked settlement"))
+	}
+	if e.VideoSeconds < 0 || (e.VideoSeconds != 0 && (!e.CompleteResourceRequest || e.ProfileID != domain.ProfileBedrockAsyncNovaReel)) {
+		problems = append(problems, errors.New("video seconds require an async video settlement"))
+	}
 	if e.Kind == EventAttemptSettled {
+		if e.FixedFeeExempt && e.FixedCostMicrosUSD != 0 {
+			problems = append(problems, errors.New("fixed-fee-exempt settlement includes a fixed charge"))
+		}
 		if e.LeaseMode == LeaseModeUnknownAllowed {
 			if e.CommittedMicrosUSD != nil {
 				problems = append(problems, errors.New("unknown settlement cost must be null"))
@@ -292,9 +308,13 @@ func (e Event) Validate() error {
 		} else if e.CommittedMicrosUSD == nil {
 			problems = append(problems, errors.New("known settlement cost is required"))
 		}
+		if e.EstimatedOutputTokens < 0 || e.EstimatedOutputTokens > e.ProviderOutputTokens ||
+			(e.EstimatedOutputTokens > 0) != (e.TokenUsageSource == TokenUsageSourceMixed) {
+			problems = append(problems, errors.New("estimated output must be a subset of recorded output with mixed usage source"))
+		}
 		if e.TokenUsageSource != "" {
 			switch e.TokenUsageSource {
-			case TokenUsageSourceProvider:
+			case TokenUsageSourceProvider, TokenUsageSourceMixed:
 				if e.TokenEstimated {
 					problems = append(problems, errors.New("provider-reported usage cannot be estimated"))
 				}
@@ -789,6 +809,12 @@ func (s *State) Apply(record Record) error {
 		if event.WorkUnitID != reservation.Lease.WorkUnitID || event.RunID != reservation.Lease.RunID {
 			return fmt.Errorf("attempt %q settlement changed run attribution", event.AttemptID)
 		}
+		if event.ProviderResourceID != reservation.Lease.ProviderResourceID {
+			return fmt.Errorf("attempt %q settlement changed provider resource", event.AttemptID)
+		}
+		if event.FixedFeeExempt != reservation.Lease.FixedFeeExempt {
+			return fmt.Errorf("attempt %q settlement changed fixed-fee eligibility", event.AttemptID)
+		}
 		if event.RouteID != reservation.Lease.RouteID ||
 			event.DeploymentID != reservation.Lease.DeploymentID ||
 			event.ProviderID != reservation.Lease.ProviderID ||
@@ -866,7 +892,8 @@ func (s *State) Apply(record Record) error {
 			cost.add(event)
 			s.workUnitCosts[event.WorkUnitID] = cost
 		}
-	case EventRequestFinalized:
+	}
+	if event.Kind == EventRequestFinalized || event.CompleteResourceRequest {
 		if attribution, ok := s.requestRuns[event.RequestID]; ok {
 			delete(s.activeByWorkUnit[attribution.WorkUnitID], event.RequestID)
 			if len(s.activeByWorkUnit[attribution.WorkUnitID]) == 0 {
@@ -1052,6 +1079,16 @@ func (s *State) PendingReservations() int {
 	return len(s.reservations)
 }
 
+func (s *State) PendingLeaseRecord(attemptID string) (Record, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.reservations[attemptID]; !ok {
+		return Record{}, false
+	}
+	record, ok := s.leaseRecords[attemptID]
+	return record, ok
+}
+
 func (s *State) PendingLeases() []PendingLease {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1063,19 +1100,20 @@ func (s *State) PendingLeases() []PendingLease {
 	return items
 }
 
-func (s *State) PendingLeaseStats(now time.Time) (int, time.Duration) {
+// PendingLeaseStats separates long-running provider jobs from request leases
+// that are expected to settle within the gateway's request timeout.
+func (s *State) PendingLeaseStats(now time.Time) (requests, resources int, oldestRequest time.Duration) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var oldest time.Time
 	for _, reservation := range s.reservations {
-		if oldest.IsZero() || reservation.Lease.OccurredAt.Before(oldest) {
-			oldest = reservation.Lease.OccurredAt
+		if reservation.Lease.ProviderResourceID != "" {
+			resources++
+			continue
 		}
+		requests++
+		oldestRequest = max(oldestRequest, now.Sub(reservation.Lease.OccurredAt))
 	}
-	if oldest.IsZero() || now.Before(oldest) {
-		return len(s.reservations), 0
-	}
-	return len(s.reservations), now.Sub(oldest)
+	return requests, resources, oldestRequest
 }
 
 // AccountingLease is the lease of an attempt still in flight, or of one settled

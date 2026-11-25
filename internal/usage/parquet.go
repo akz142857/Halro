@@ -44,7 +44,7 @@ import (
 // reasoning spans that partition the input and output totals. Rows written under
 // schema 3 decode with those columns zero, which reads correctly as "no tier
 // reported" rather than as a tier of size zero.
-const parquetSchemaVersion = 9
+const parquetSchemaVersion = 10
 
 // parquetSchemaMinReadable is the oldest manifest this build still opens. Every
 // version from here to parquetSchemaVersion is accepted and upgraded in place;
@@ -100,6 +100,8 @@ type parquetAttempt struct {
 	FixedCostMicrosUSD                int64  `parquet:"fixed_cost_micros_usd" json:"fixed_cost_micros_usd"`
 	TokenUsageSource                  string `parquet:"token_usage_source,dict" json:"token_usage_source"`
 	CostEstimated                     bool   `parquet:"cost_estimated" json:"cost_estimated"`
+	VideoSeconds                      int64  `parquet:"video_seconds" json:"video_seconds"`
+	EstimatedOutputTokens             int64  `parquet:"estimated_output_tokens" json:"estimated_output_tokens"`
 	TokensEstimated                   bool   `parquet:"tokens_estimated" json:"tokens_estimated"`
 	StartedAtMicros                   int64  `parquet:"started_at_utc,timestamp(microsecond)" json:"started_at_utc"`
 	CompletedAtMicros                 int64  `parquet:"completed_at_utc,timestamp(microsecond)" json:"completed_at_utc"`
@@ -699,6 +701,10 @@ func (e *Exporter) safeManifestPath(relative string) (string, error) {
 // columns the row's own schema could express take part in the comparison.
 func narrowToSchema(row parquetAttempt, version int32) parquetAttempt {
 	row.SchemaVersion = version
+	if version < 10 {
+		row.EstimatedOutputTokens = 0
+		row.VideoSeconds = 0
+	}
 	if version < 9 {
 		row.ProviderCacheWriteLongInputTokens = 0
 	}
@@ -817,7 +823,7 @@ func toParquetAttempt(attempt AttemptEvent) parquetAttempt {
 		}(),
 		PriceSnapshotJSON: snapshotJSON, InputCostMicrosUSD: inputCost, OutputCostMicrosUSD: outputCost, FixedCostMicrosUSD: fixedCost,
 		TokenUsageSource: string(attempt.TokenUsageSource), CostEstimated: attempt.CostEstimated,
-		TokensEstimated:   attempt.TokensEstimated,
+		TokensEstimated: attempt.TokensEstimated, EstimatedOutputTokens: attempt.EstimatedOutputTokens, VideoSeconds: attempt.VideoSeconds,
 		StartedAtMicros:   attempt.StartedAt.UTC().UnixMicro(),
 		CompletedAtMicros: attempt.CompletedAt.UTC().UnixMicro(),
 		Status:            attempt.Status, ErrorClass: attempt.ErrorClass,

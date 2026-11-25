@@ -99,7 +99,7 @@ func TestStreamNormalizesGeminiSSEAndUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(events) != 3 || events[0].Outputs[0].Role != semantic.RoleAssistant || events[1].Usage != nil ||
-		events[2].Outputs[0].NativeTermination != "length" || usage == nil || usage.TotalTokens != 5 {
+		events[2].Outputs[0].NativeTermination != "length" || usage == nil || usage.TotalTokens != 5 || !usage.OutputIncomplete {
 		t.Fatalf("events=%#v usage=%#v", events, usage)
 	}
 }

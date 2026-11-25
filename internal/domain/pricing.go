@@ -58,6 +58,14 @@ const (
 
 type PriceLifecycleStatus string
 
+// CacheWriteRateEvidence records whether each write rate was supplied for the
+// whole price version, including its schedule. Older versions carry no flags:
+// a rate equal to ordinary input may have been backfilled at that rate.
+type CacheWriteRateEvidence struct {
+	ShortExplicit bool `json:"cache_write_rate_explicit,omitempty"`
+	LongExplicit  bool `json:"cache_write_long_rate_explicit,omitempty"`
+}
+
 const (
 	PriceLifecycleScheduled  PriceLifecycleStatus = "scheduled"
 	PriceLifecycleActive     PriceLifecycleStatus = "active"
@@ -204,8 +212,9 @@ type DeploymentPriceVersion struct {
 	// the cache-read term is: a missing rate would read as "writes are free".
 	CacheWriteMicrosPerMillion     int64 `json:"cache_write_micros_per_million"`
 	CacheWriteLongMicrosPerMillion int64 `json:"cache_write_long_micros_per_million"`
-	OutputMicrosPerMillion         int64 `json:"output_micros_per_million"`
-	FixedRequestMicrosUSD          int64 `json:"fixed_request_micros_usd"`
+	CacheWriteRateEvidence
+	OutputMicrosPerMillion int64 `json:"output_micros_per_million"`
+	FixedRequestMicrosUSD  int64 `json:"fixed_request_micros_usd"`
 	// Schedule makes the billing terms above the rates that apply outside every
 	// window it declares, instead of the rates that apply all day. It is nil on
 	// a price that bills one rate around the clock, which is what every price

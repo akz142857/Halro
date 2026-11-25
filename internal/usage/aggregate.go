@@ -56,17 +56,19 @@ var LatencyBucketsMillis = [latencyBucketCount]uint64{
 }
 
 type AttemptEvent struct {
-	EventID       string `json:"event_id"`
-	RequestID     string `json:"request_id"`
-	AttemptID     string `json:"attempt_id"`
-	Sequence      uint64 `json:"sequence"`
-	AttemptNumber int    `json:"attempt"`
-	ProjectID     string `json:"project_id"`
-	WorkUnitID    string `json:"work_unit_id,omitempty"`
-	RunID         string `json:"run_id,omitempty"`
-	KeyID         string `json:"key_id,omitempty"`
-	RouteID       string `json:"route_id,omitempty"`
-	DeploymentID  string `json:"deployment_id,omitempty"`
+	VideoSeconds          int64  `json:"video_seconds,omitempty"`
+	EstimatedOutputTokens int64  `json:"estimated_output_tokens,omitempty"`
+	EventID               string `json:"event_id"`
+	RequestID             string `json:"request_id"`
+	AttemptID             string `json:"attempt_id"`
+	Sequence              uint64 `json:"sequence"`
+	AttemptNumber         int    `json:"attempt"`
+	ProjectID             string `json:"project_id"`
+	WorkUnitID            string `json:"work_unit_id,omitempty"`
+	RunID                 string `json:"run_id,omitempty"`
+	KeyID                 string `json:"key_id,omitempty"`
+	RouteID               string `json:"route_id,omitempty"`
+	DeploymentID          string `json:"deployment_id,omitempty"`
 	// The accounting day this attempt was charged to, decided when its request
 	// was admitted and inherited from there. It is not the completion instant
 	// truncated to a date: a request accepted at 23:59 and settled at 00:02
@@ -308,6 +310,11 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 		if err := a.applySettled(record, accumulator); err != nil {
 			return err
 		}
+		if event.CompleteResourceRequest {
+			if err := a.applyFinalized(record, accumulator); err != nil {
+				return err
+			}
+		}
 	case ledger.EventRequestFinalized:
 		if err := a.applyFinalized(record, accumulator); err != nil {
 			return err
@@ -353,16 +360,16 @@ func (a *Aggregate) applySettled(record ledger.Record, accumulator *pendingReque
 		ProviderID:            event.ProviderID, RequestedModel: event.RequestedModel,
 		OfferingID: event.OfferingID, ProfileID: event.ProfileID, AccountRegionID: event.AccountRegionID,
 		ProviderModel: event.ProviderModel, ProviderInputTokens: event.ProviderInputTokens,
-		ProviderOutputTokens:              event.ProviderOutputTokens,
+		ProviderOutputTokens: event.ProviderOutputTokens, VideoSeconds: event.VideoSeconds,
 		ProviderCachedInputTokens:         event.ProviderCachedInputTokens,
 		ProviderCacheWriteInputTokens:     event.ProviderCacheWriteInputTokens,
 		ProviderCacheWriteLongInputTokens: event.ProviderCacheWriteLongInputTokens,
 		ProviderReasoningTokens:           event.ProviderReasoningTokens,
-		PreparedOutputTokens:              event.PreparedOutputTokens, CostMicrosUSD: committedCostValue,
+		PreparedOutputTokens:              event.PreparedOutputTokens, EstimatedOutputTokens: event.EstimatedOutputTokens, CostMicrosUSD: committedCostValue,
 		LeaseMode: event.LeaseMode, PriceEvidenceStatus: evidenceStatus, CostValueStatus: costStatus,
 		PriceSnapshot: priceSnapshot, InputCostMicrosUSD: inputCost, OutputCostMicrosUSD: outputCost, FixedCostMicrosUSD: fixedCost,
 		Tags:          attemptCostTags(event, evidenceStatus),
-		CostEstimated: event.CostEstimated, TokensEstimated: event.TokenEstimated,
+		CostEstimated: event.CostEstimated, TokensEstimated: event.TokenEstimated || event.EstimatedOutputTokens > 0,
 		TokenUsageSource: event.TokenUsageSource,
 		StartedAt:        startedAt, CompletedAt: event.OccurredAt, Status: event.Outcome,
 		ErrorClass: event.ErrorClass, HTTPStatus: event.HTTPStatus,
@@ -428,6 +435,7 @@ func (a *Aggregate) applySettled(record ledger.Record, accumulator *pendingReque
 	// Provider usage can be unavailable after an ambiguous failure. Such attempts
 	// are settled against a conservative token upper bound; the estimated part is
 	// carried separately so an upper bound is never mistaken for reported usage.
+	contribution.EstimatedOutputTokens = event.EstimatedOutputTokens
 	if event.TokenEstimated {
 		contribution.EstimatedInputTokens, contribution.EstimatedOutputTokens = event.ProviderInputTokens, event.ProviderOutputTokens
 	}
@@ -769,7 +777,7 @@ func recordLatency(buckets *[latencyBucketCount]uint64, latencyMillis uint64) {
 
 func attemptCostTags(event ledger.Event, evidence domain.PriceEvidenceStatus) []string {
 	var tags []string
-	if event.TokenEstimated || event.CostEstimated {
+	if event.TokenEstimated || event.EstimatedOutputTokens > 0 || event.CostEstimated {
 		tags = append(tags, "EST")
 	}
 	switch evidence {

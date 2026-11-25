@@ -22,6 +22,7 @@ import (
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/semantic"
 	"github.com/akz142857/Halro/internal/tokenguard"
+	"github.com/akz142857/Halro/internal/usage"
 )
 
 type nativeMessagesFake struct {
@@ -37,6 +38,7 @@ type nativeMessagesFake struct {
 	// test can assert what the native path actually settled without every fixture
 	// helper growing a return value for it.
 	ledgerState *ledger.State
+	ledgerLog   *ledger.Log
 	// response and streamUsage override what the upstream reports, so a test can
 	// exercise a usage shape the default script does not produce.
 	response    []byte
@@ -191,7 +193,7 @@ func newNativeMessagesFixtureTargets(t *testing.T, profileID domain.ProviderProf
 	}
 	fakes := make([]*nativeMessagesFake, 0, len(providerModels))
 	for index, providerModel := range providerModels {
-		fake := &nativeMessagesFake{providerType: manifest.ProviderType, ledgerState: state}
+		fake := &nativeMessagesFake{providerType: manifest.ProviderType, ledgerState: state, ledgerLog: log}
 		bridge, err := provider.NewLegacyAdapterBridge(fake, manifest, domain.EvidenceForCapabilities(capabilities, domain.EvidenceVerified))
 		if err != nil {
 			t.Fatal(err)
@@ -835,6 +837,75 @@ func TestNativeMessagesSettlesTheWholePromptAcrossCacheTiers(t *testing.T) {
 			// 5 ordinary + 9 read + 4 short writes + 9 long writes + 1 output + 2 fixed.
 			if balance.InputTokens != 100 || balance.OutputTokens != 1 || balance.CommittedMicrosUSD != 30 || balance.ReservedMicrosUSD != 0 {
 				t.Fatalf("balance=%#v", balance)
+			}
+		})
+	}
+}
+
+func TestNativeMessagesCostEstimateReachesDashboard(t *testing.T) {
+	const reportedUsage = `,"usage":{"input_tokens":2,"output_tokens":1,"cache_creation_input_tokens":1,"cache_creation":{"ephemeral_5m_input_tokens":1,"ephemeral_1h_input_tokens":0}}`
+	const totalOnly = `,"usage":{"input_tokens":2,"output_tokens":1,"cache_creation_input_tokens":1}`
+	for _, tc := range []struct {
+		name           string
+		usageJSON      string
+		explicit       bool
+		longRate       int64
+		costEstimated  bool
+		tokenEstimated bool
+		reportedCost   int64
+	}{
+		{name: "migrated rates", usageJSON: reportedUsage, longRate: 1_000_000, costEstimated: true, reportedCost: 6},
+		{name: "explicit equal rates", usageJSON: reportedUsage, longRate: 1_000_000, explicit: true, reportedCost: 6},
+		{name: "explicit rates with unknown split", usageJSON: totalOnly, longRate: 2_000_000, explicit: true, costEstimated: true, reportedCost: 6},
+		{name: "absent usage", longRate: 1_000_000, explicit: true, costEstimated: true, tokenEstimated: true},
+		{name: "null usage", usageJSON: `,"usage":null`, longRate: 1_000_000, explicit: true, costEstimated: true, tokenEstimated: true},
+		{name: "empty usage", usageJSON: `,"usage":{}`, longRate: 1_000_000, explicit: true, costEstimated: true, tokenEstimated: true},
+		{name: "explicit zero usage", usageJSON: `,"usage":{"input_tokens":0,"output_tokens":0}`, longRate: 1_000_000, explicit: true, reportedCost: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, fake, key, closeFixture := newNativeMessagesFixtureWithPrice(t, 1_000_000, 2)
+			defer closeFixture()
+			price := &service.pricing.(*fakePricePinStore).price
+			price.CacheWriteMicrosPerMillion, price.CacheWriteLongMicrosPerMillion = 1_000_000, tc.longRate
+			price.CacheWriteRateEvidence = domain.CacheWriteRateEvidence{ShortExplicit: tc.explicit, LongExplicit: tc.explicit}
+			fake.response = []byte(`{"id":"msg_provider","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-provider","stop_reason":"end_turn"` + tc.usageJSON + `}`)
+			request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(`{"model":"claude","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.MessagesNative(context.Background(), key, anthropicapi.SupportedVersion, nil, request); err != nil {
+				t.Fatal(err)
+			}
+			aggregate := newUsageAggregateForTest(t)
+			var settled ledger.Event
+			if _, err := fake.ledgerLog.Replay(ledger.Watermark{}, func(record ledger.Record) error {
+				if record.Event.Kind == ledger.EventAttemptSettled {
+					settled = record.Event
+				}
+				return aggregate.Apply(record)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if settled.CommittedMicrosUSD == nil || settled.CostEstimated != tc.costEstimated || settled.TokenEstimated != tc.tokenEstimated {
+				t.Fatalf("settlement = %+v", settled)
+			}
+			total := *settled.CommittedMicrosUSD
+			if (!tc.tokenEstimated && total != tc.reportedCost) ||
+				(tc.reportedCost > 2 && settled.TokenUsageSource != ledger.TokenUsageSourceProvider) ||
+				(tc.tokenEstimated && (total <= 2 || settled.TokenUsageSource != ledger.TokenUsageSourceEstimate)) {
+				t.Fatalf("settlement = %+v, cost = %d", settled, total)
+			}
+			dashboard, err := aggregate.Dashboard(settled.OccurredAt, usage.Period{ID: settled.PeriodID, TimezoneVersion: settled.PeriodTimezoneVersion})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantEstimated := int64(0)
+			if tc.costEstimated {
+				wantEstimated = total
+			}
+			if len(dashboard.Hourly) != 1 || dashboard.Hourly[0].EstimatedCostMicrosUSD != wantEstimated ||
+				dashboard.Today.CostMicrosUSD != total || dashboard.Today.EstimatedCostMicrosUSD != wantEstimated {
+				t.Fatalf("today = %+v, hourly = %+v", dashboard.Today, dashboard.Hourly)
 			}
 		})
 	}

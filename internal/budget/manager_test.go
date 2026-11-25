@@ -218,6 +218,7 @@ func TestRecoverStartedLeaseUsesFrozenPriceAndPreparedBounds(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		legacy    bool
+		feeExempt bool
 		profile   domain.ProviderProfileID
 		primitive provider.Primitive
 		wantCost  int64
@@ -225,6 +226,7 @@ func TestRecoverStartedLeaseUsesFrozenPriceAndPreparedBounds(t *testing.T) {
 	}{
 		{name: "legacy snapshot", legacy: true, wantCost: 50},
 		{name: "long write rate", wantCost: 70, wantLong: 10},
+		{name: "waived pinned resource fee", profile: domain.ProfileOpenAIMediaResources, primitive: provider.PrimitiveOpenAIFiles, feeExempt: true, wantCost: 50},
 		{name: "ordinary resource units", profile: domain.ProfileOpenAIMediaResources, primitive: provider.PrimitiveOpenAIFiles, wantCost: 50},
 		{name: "ordinary embedding tokens", profile: domain.ProfileOpenAIChatEmbeddings, primitive: provider.PrimitiveOpenAIEmbeddings, wantCost: 50},
 	} {
@@ -242,7 +244,10 @@ func TestRecoverStartedLeaseUsesFrozenPriceAndPreparedBounds(t *testing.T) {
 			} else {
 				*snapshot.CacheWriteLongMicrosPerMillion = 3_000_000
 			}
-			metadata := AttemptMetadata{DeploymentID: "dep_test"}
+			metadata := AttemptMetadata{DeploymentID: "dep_test", FixedFeeExempt: tc.feeExempt}
+			if tc.feeExempt {
+				*snapshot.FixedRequestMicrosUSD = 75
+			}
 			if tc.profile != "" {
 				metadata.OfferingID = domain.OfferingOpenAIAPI
 				metadata.ProfileID = tc.profile
@@ -268,7 +273,7 @@ func TestRecoverStartedLeaseUsesFrozenPriceAndPreparedBounds(t *testing.T) {
 			}
 			settled, ok := settlementInLog(t, manager.log, attempt.AttemptID)
 			if !ok || settled.ProviderCacheWriteLongInputTokens != tc.wantLong || settled.ProviderCachedInputTokens != 0 ||
-				settled.TokenUsageSource != ledger.TokenUsageSourceEstimate {
+				settled.TokenUsageSource != ledger.TokenUsageSourceEstimate || (tc.feeExempt && (!settled.FixedFeeExempt || settled.FixedCostMicrosUSD != 0)) {
 				t.Fatalf("recovered token breakdown=%+v", settled)
 			}
 			stats := manager.RecoveryStats()

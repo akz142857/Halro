@@ -86,8 +86,9 @@ type PriceTier struct {
 	CachedInputMicrosPerMillion    int64
 	CacheWriteMicrosPerMillion     int64
 	CacheWriteLongMicrosPerMillion int64
-	OutputMicrosPerMillion         int64
-	FixedRequestMicrosUSD          int64
+	CacheWriteRateEvidence
+	OutputMicrosPerMillion int64
+	FixedRequestMicrosUSD  int64
 	// Provenance is nil exactly when the version carries no schedule, which
 	// keeps a fixed price's snapshot byte-identical to what it was before
 	// schedules existed.
@@ -310,6 +311,7 @@ func (p DeploymentPriceVersion) BaseTier() PriceTier {
 		CachedInputMicrosPerMillion:    p.CachedInputMicrosPerMillion,
 		CacheWriteMicrosPerMillion:     p.CacheWriteMicrosPerMillion,
 		CacheWriteLongMicrosPerMillion: p.CacheWriteLongMicrosPerMillion,
+		CacheWriteRateEvidence:         p.CacheWriteRateEvidence,
 		OutputMicrosPerMillion:         p.OutputMicrosPerMillion,
 		FixedRequestMicrosUSD:          p.FixedRequestMicrosUSD,
 	}

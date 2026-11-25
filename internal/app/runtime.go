@@ -622,7 +622,22 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		secretVault.Close()
 		return fail(fmt.Errorf("recover deployment price pins: %w", err))
 	}
-	if err := accounting.RecoverPendingLeases(ctx); err != nil {
+	if err := accounting.RecoverPendingLeasesWithResources(ctx, func(event ledger.Event) (budget.ResourceLeaseRecovery, error) {
+		resource, err := metadata.ProviderResource(ctx, event.ProjectID, event.ProviderResourceID)
+		if errors.Is(err, boltstore.ErrNotFound) {
+			return budget.ResourceLeaseOutcomeUnknown, nil
+		}
+		if err != nil {
+			return budget.ResourceLeaseOutcomeUnknown, err
+		}
+		if resource.AttemptID == event.AttemptID && resource.UpstreamID != "" && resource.CreationStatus == "completed" {
+			return budget.ResourceLeaseRetain, nil
+		}
+		if resource.CreationStatus == "reserved" && resource.AttemptID == "" {
+			return budget.ResourceLeaseNotDispatched, nil
+		}
+		return budget.ResourceLeaseOutcomeUnknown, nil
+	}); err != nil {
 		ledgerLog.Close()
 		metadata.Close()
 		secretVault.Close()

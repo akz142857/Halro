@@ -79,10 +79,11 @@ func (a *Aggregate) addAttemptRollup(event ledger.Event, sequence uint64, commit
 	if event.Outcome != "success" {
 		contribution.Errors = 1
 	}
-	// Estimated tokens and estimated cost are the parts of the totals above
-	// that came from an upper bound rather than from Provider-reported usage.
+	// Estimated tokens came from a local bound. Estimated cost can also come
+	// from applying assumed pricing terms to Provider-reported usage.
 	// Dashboard derives them at read time (query.go); a stored rollup has to
 	// accumulate them at write time or the two views disagree.
+	contribution.EstimatedOutputTokens = event.EstimatedOutputTokens
 	if event.TokenEstimated {
 		contribution.EstimatedInputTokens = event.ProviderInputTokens
 		contribution.EstimatedOutputTokens = event.ProviderOutputTokens

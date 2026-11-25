@@ -60,7 +60,10 @@ func (options BootstrapOptions) rates() domain.PriceTier {
 		CachedInputMicrosPerMillion:    stated(options.CachedInputMicrosPerMillion),
 		CacheWriteMicrosPerMillion:     stated(options.CacheWriteMicrosPerMillion),
 		CacheWriteLongMicrosPerMillion: stated(options.CacheWriteLongMicrosPerMillion),
-		OutputMicrosPerMillion:         options.OutputMicrosPerMillion,
+		CacheWriteRateEvidence: domain.CacheWriteRateEvidence{
+			ShortExplicit: options.CacheWriteMicrosPerMillion != nil, LongExplicit: options.CacheWriteLongMicrosPerMillion != nil,
+		},
+		OutputMicrosPerMillion: options.OutputMicrosPerMillion,
 	}
 }
 
@@ -237,7 +240,7 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 }
 
 func bootstrapPriceVersion(priceID, deploymentID string, billingMode domain.BillingMode, rates domain.PriceTier, now time.Time) domain.DeploymentPriceVersion {
-	evidence := sha256.Sum256([]byte(fmt.Sprintf("halro:bootstrap-pricing:v2:%s:%d:%d:%d:%d:%d", billingMode,
+	digest := sha256.Sum256([]byte(fmt.Sprintf("halro:bootstrap-pricing:v2:%s:%d:%d:%d:%d:%d", billingMode,
 		rates.InputMicrosPerMillion, rates.CachedInputMicrosPerMillion, rates.CacheWriteMicrosPerMillion,
 		rates.CacheWriteLongMicrosPerMillion, rates.OutputMicrosPerMillion)))
 	return domain.DeploymentPriceVersion{
@@ -245,11 +248,12 @@ func bootstrapPriceVersion(priceID, deploymentID string, billingMode domain.Bill
 		BillingMode: billingMode, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
 		InputMicrosPerMillion: rates.InputMicrosPerMillion, CachedInputMicrosPerMillion: rates.CachedInputMicrosPerMillion,
 		CacheWriteMicrosPerMillion: rates.CacheWriteMicrosPerMillion, CacheWriteLongMicrosPerMillion: rates.CacheWriteLongMicrosPerMillion,
+		CacheWriteRateEvidence: rates.CacheWriteRateEvidence,
 		OutputMicrosPerMillion: rates.OutputMicrosPerMillion,
 		EffectiveFrom:          now, CreatedBy: "bootstrap", CreatedAt: now,
 		Source: domain.PriceSource{
 			Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted,
-			ReceivedAt: now, ContentSHA256: "sha256:" + hex.EncodeToString(evidence[:]),
+			ReceivedAt: now, ContentSHA256: "sha256:" + hex.EncodeToString(digest[:]),
 			Reference: "halro bootstrap CLI", AssertedWithoutArchive: true,
 		},
 	}

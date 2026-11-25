@@ -795,6 +795,7 @@ func loadProviderRegistryWithCatalogAndEgress(
 			CachedInputMicrosPerMillion:    rates.CachedInputMicrosPerMillion,
 			CacheWriteMicrosPerMillion:     rates.CacheWriteMicrosPerMillion,
 			CacheWriteLongMicrosPerMillion: rates.CacheWriteLongMicrosPerMillion,
+			CacheWriteRateEvidence:         rates.CacheWriteRateEvidence,
 			OutputMicrosPerMillion:         rates.OutputMicrosPerMillion,
 			FixedRequestMicrosUSD:          rates.FixedRequestMicrosUSD,
 			Priority:                       route.Priority,

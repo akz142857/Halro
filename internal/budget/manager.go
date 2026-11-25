@@ -32,6 +32,9 @@ var (
 )
 
 type Attempt struct {
+	domain.CacheWriteRateEvidence
+	ProviderResourceID          string
+	FixedFeeExempt              bool
 	RequestID                   string
 	AttemptID                   string
 	ProjectID                   string
@@ -76,17 +79,20 @@ type Request struct {
 }
 
 type AttemptMetadata struct {
-	RouteID           string
-	DeploymentID      string
-	ProviderID        string
-	OfferingID        domain.ProviderOfferingID
-	ProfileID         domain.ProviderProfileID
-	AccountRegionID   domain.ProviderRegionID
-	ProviderModel     string
-	ProviderPrimitive provider.Primitive
-	AttemptNumber     int
-	RetryCount        int
-	FallbackCount     int
+	domain.CacheWriteRateEvidence
+	ProviderResourceID string
+	FixedFeeExempt     bool
+	RouteID            string
+	DeploymentID       string
+	ProviderID         string
+	OfferingID         domain.ProviderOfferingID
+	ProfileID          domain.ProviderProfileID
+	AccountRegionID    domain.ProviderRegionID
+	ProviderModel      string
+	ProviderPrimitive  provider.Primitive
+	AttemptNumber      int
+	RetryCount         int
+	FallbackCount      int
 }
 
 type LeaseSpec struct {
@@ -102,9 +108,12 @@ type LeaseSpec struct {
 }
 
 type Settlement struct {
-	CommittedMicrosUSD   int64
-	ProviderInputTokens  int64
-	ProviderOutputTokens int64
+	CompleteResourceRequest bool
+	VideoSeconds            int64
+	EstimatedOutputTokens   int64
+	CommittedMicrosUSD      int64
+	ProviderInputTokens     int64
+	ProviderOutputTokens    int64
 	// The cache tiers are breakdown subsets of ProviderInputTokens, recorded so
 	// the ledger can show why a request cost what it did and so a later pricing
 	// version can re-rate the span without replaying provider traffic.
@@ -151,18 +160,19 @@ func (i GovernanceIntent) validate() error {
 }
 
 type Manager struct {
-	projectLocks sync.Map
-	applyMu      sync.Mutex
-	applyCond    *sync.Cond
-	applyErr     error
-	observerMu   sync.RWMutex
-	log          *ledger.Log
-	state        *ledger.State
-	periods      *PeriodResolver
-	now          func() time.Time
-	observers    []func(ledger.Record)
-	recoveryMu   sync.RWMutex
-	recovery     RecoveryStats
+	resourceSettlementMu sync.Mutex
+	projectLocks         sync.Map
+	applyMu              sync.Mutex
+	applyCond            *sync.Cond
+	applyErr             error
+	observerMu           sync.RWMutex
+	log                  *ledger.Log
+	state                *ledger.State
+	periods              *PeriodResolver
+	now                  func() time.Time
+	observers            []func(ledger.Record)
+	recoveryMu           sync.RWMutex
+	recovery             RecoveryStats
 
 	lockAcquisitions atomic.Uint64
 	lockWaitNanos    atomic.Int64
@@ -980,7 +990,10 @@ func (m *Manager) reserveAttemptDetailed(
 		return Attempt{}, err
 	}
 	attempt := Attempt{
-		RequestID: request.RequestID, AttemptID: attemptID, ProjectID: request.ProjectID,
+		FixedFeeExempt:         metadata.FixedFeeExempt,
+		ProviderResourceID:     metadata.ProviderResourceID,
+		CacheWriteRateEvidence: metadata.CacheWriteRateEvidence,
+		RequestID:              request.RequestID, AttemptID: attemptID, ProjectID: request.ProjectID,
 		Period: request.Period, ReservationMicrosUSD: spec.ReservationMicrosUSD,
 		KeyID: request.KeyID, RequestedModel: request.RequestedModel,
 		WorkUnitID: request.WorkUnitID, RunID: request.RunID,
@@ -1027,29 +1040,32 @@ func (m *Manager) reserveAttemptDetailed(
 		eventPriceSnapshot = &snapshot
 	}
 	reserved := ledger.Event{
-		EventID:              eventID,
-		Kind:                 ledger.EventReservationCreated,
-		RequestID:            request.RequestID,
-		AttemptID:            attemptID,
-		ProjectID:            request.ProjectID,
-		WorkUnitID:           request.WorkUnitID,
-		RunID:                request.RunID,
-		KeyID:                request.KeyID,
-		RouteID:              metadata.RouteID,
-		DeploymentID:         metadata.DeploymentID,
-		ProviderID:           metadata.ProviderID,
-		OfferingID:           metadata.OfferingID,
-		ProfileID:            metadata.ProfileID,
-		AccountRegionID:      metadata.AccountRegionID,
-		RequestedModel:       request.RequestedModel,
-		ProviderModel:        metadata.ProviderModel,
-		ProviderPrimitive:    metadata.ProviderPrimitive,
-		AttemptNumber:        metadata.AttemptNumber,
-		RetryCount:           metadata.RetryCount,
-		FallbackCount:        metadata.FallbackCount,
-		OccurredAt:           m.localNow(),
-		ReservationMicrosUSD: reservationValue,
-		LeaseMode:            spec.Mode, PriceSnapshot: eventPriceSnapshot,
+		FixedFeeExempt:         attempt.FixedFeeExempt,
+		ProviderResourceID:     attempt.ProviderResourceID,
+		CacheWriteRateEvidence: attempt.CacheWriteRateEvidence,
+		EventID:                eventID,
+		Kind:                   ledger.EventReservationCreated,
+		RequestID:              request.RequestID,
+		AttemptID:              attemptID,
+		ProjectID:              request.ProjectID,
+		WorkUnitID:             request.WorkUnitID,
+		RunID:                  request.RunID,
+		KeyID:                  request.KeyID,
+		RouteID:                metadata.RouteID,
+		DeploymentID:           metadata.DeploymentID,
+		ProviderID:             metadata.ProviderID,
+		OfferingID:             metadata.OfferingID,
+		ProfileID:              metadata.ProfileID,
+		AccountRegionID:        metadata.AccountRegionID,
+		RequestedModel:         request.RequestedModel,
+		ProviderModel:          metadata.ProviderModel,
+		ProviderPrimitive:      metadata.ProviderPrimitive,
+		AttemptNumber:          metadata.AttemptNumber,
+		RetryCount:             metadata.RetryCount,
+		FallbackCount:          metadata.FallbackCount,
+		OccurredAt:             m.localNow(),
+		ReservationMicrosUSD:   reservationValue,
+		LeaseMode:              spec.Mode, PriceSnapshot: eventPriceSnapshot,
 		PreparedInputTokens: spec.PreparedInputTokens, PreparedOutputTokens: spec.PreparedOutputTokens,
 		RecoveryKey: spec.RecoveryKey, UnknownPolicyEvidence: spec.UnknownPolicyEvidence,
 		TokenGuardPricingViewDigest: spec.TokenGuardPricingViewDigest,
@@ -1121,7 +1137,7 @@ func (m *Manager) Settle(ctx context.Context, attempt Attempt, settlement Settle
 func unservedSettlement(settlement Settlement) bool {
 	return settlement.CommittedMicrosUSD == 0 &&
 		settlement.ProviderInputTokens == 0 &&
-		settlement.ProviderOutputTokens == 0 &&
+		settlement.ProviderOutputTokens == 0 && settlement.VideoSeconds == 0 &&
 		settlement.ProviderCachedInputTokens == 0 &&
 		settlement.ProviderCacheWriteInputTokens == 0 &&
 		settlement.ProviderCacheWriteLongInputTokens == 0 &&
@@ -1139,12 +1155,15 @@ func unservedSettlement(settlement Settlement) bool {
 // worth of under-estimation, and admission refuses further attempts once the
 // balance reflects it.
 func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, settlement Settlement) error {
-	if settlement.CommittedMicrosUSD < 0 ||
+	if settlement.CommittedMicrosUSD < 0 || settlement.VideoSeconds < 0 ||
+		(settlement.VideoSeconds != 0 && (attempt.ProviderResourceID == "" || settlement.ProviderOutputTokens != 0)) ||
 		settlement.ProviderInputTokens < 0 ||
 		settlement.ProviderOutputTokens < 0 ||
 		settlement.ProviderCachedInputTokens < 0 ||
 		settlement.ProviderReasoningTokens < 0 ||
-		settlement.PreparedOutputTokens < 0 {
+		settlement.PreparedOutputTokens < 0 || settlement.EstimatedOutputTokens < 0 ||
+		settlement.EstimatedOutputTokens > settlement.ProviderOutputTokens ||
+		(settlement.TokenEstimated && settlement.EstimatedOutputTokens != 0) {
 		return ErrInvalidAmount
 	}
 	// The tiers partition the input total. A sum that overruns it means a caller
@@ -1159,7 +1178,7 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		copy := attempt.PriceSnapshot.Clone()
 		priceSnapshot = &copy
 		if copy.CostValueStatus == domain.CostValueKnown && !unservedSettlement(settlement) {
-			cost, costErr := copy.Calculate(settlement.billedTokens())
+			cost, costErr := copy.CalculateAttempt(settlement.billedTokens(), attempt.FixedFeeExempt)
 			if costErr != nil {
 				return costErr
 			}
@@ -1185,41 +1204,48 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		tokenSource = ledger.TokenUsageSourceProvider
 		if settlement.TokenEstimated {
 			tokenSource = ledger.TokenUsageSourceEstimate
+		} else if settlement.EstimatedOutputTokens > 0 {
+			tokenSource = ledger.TokenUsageSourceMixed
 		}
 	}
 	settled := ledger.Event{
-		EventID:            eventID,
-		Kind:               ledger.EventAttemptSettled,
-		RequestID:          attempt.RequestID,
-		AttemptID:          attempt.AttemptID,
-		ProjectID:          attempt.ProjectID,
-		WorkUnitID:         attempt.WorkUnitID,
-		RunID:              attempt.RunID,
-		KeyID:              attempt.KeyID,
-		RouteID:            attempt.RouteID,
-		DeploymentID:       attempt.DeploymentID,
-		ProviderID:         attempt.ProviderID,
-		OfferingID:         attempt.OfferingID,
-		ProfileID:          attempt.ProfileID,
-		AccountRegionID:    attempt.AccountRegionID,
-		RequestedModel:     attempt.RequestedModel,
-		ProviderModel:      attempt.ProviderModel,
-		ProviderPrimitive:  attempt.ProviderPrimitive,
-		AttemptNumber:      attempt.AttemptNumber,
-		RetryCount:         attempt.RetryCount,
-		FallbackCount:      attempt.FallbackCount,
-		OccurredAt:         occurredAt,
-		CommittedMicrosUSD: committedValue,
-		LeaseMode:          attempt.LeaseMode, PriceSnapshot: priceSnapshot,
+		FixedFeeExempt:          attempt.FixedFeeExempt,
+		ProviderResourceID:      attempt.ProviderResourceID,
+		CompleteResourceRequest: settlement.CompleteResourceRequest,
+		VideoSeconds:            settlement.VideoSeconds,
+		EventID:                 eventID,
+		Kind:                    ledger.EventAttemptSettled,
+		RequestID:               attempt.RequestID,
+		AttemptID:               attempt.AttemptID,
+		ProjectID:               attempt.ProjectID,
+		WorkUnitID:              attempt.WorkUnitID,
+		RunID:                   attempt.RunID,
+		KeyID:                   attempt.KeyID,
+		RouteID:                 attempt.RouteID,
+		DeploymentID:            attempt.DeploymentID,
+		ProviderID:              attempt.ProviderID,
+		OfferingID:              attempt.OfferingID,
+		ProfileID:               attempt.ProfileID,
+		AccountRegionID:         attempt.AccountRegionID,
+		RequestedModel:          attempt.RequestedModel,
+		ProviderModel:           attempt.ProviderModel,
+		ProviderPrimitive:       attempt.ProviderPrimitive,
+		AttemptNumber:           attempt.AttemptNumber,
+		RetryCount:              attempt.RetryCount,
+		FallbackCount:           attempt.FallbackCount,
+		OccurredAt:              occurredAt,
+		CommittedMicrosUSD:      committedValue,
+		LeaseMode:               attempt.LeaseMode, PriceSnapshot: priceSnapshot,
 		InputCostMicrosUSD: inputCost, OutputCostMicrosUSD: outputCost, FixedCostMicrosUSD: fixedCost,
 		ProviderInputTokens:               settlement.ProviderInputTokens,
 		ProviderOutputTokens:              settlement.ProviderOutputTokens,
+		EstimatedOutputTokens:             settlement.EstimatedOutputTokens,
 		ProviderCachedInputTokens:         settlement.ProviderCachedInputTokens,
 		ProviderCacheWriteInputTokens:     settlement.ProviderCacheWriteInputTokens,
 		ProviderCacheWriteLongInputTokens: settlement.ProviderCacheWriteLongInputTokens,
 		ProviderReasoningTokens:           settlement.ProviderReasoningTokens,
 		PreparedOutputTokens:              settlement.PreparedOutputTokens,
-		CostEstimated:                     settlement.CostEstimated,
+		CostEstimated:                     settlement.CostEstimated && attempt.LeaseMode != ledger.LeaseModeFree && attempt.LeaseMode != ledger.LeaseModeUnknownAllowed,
 		TokenEstimated:                    settlement.TokenEstimated,
 		TokenUsageSource:                  tokenSource,
 		Outcome:                           settlement.Outcome,
@@ -1242,6 +1268,20 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 // ready. Leases without AttemptStarted are released; started leases are
 // conservatively settled from their prepared token bounds and frozen price.
 func (m *Manager) RecoverPendingLeases(ctx context.Context) error {
+	return m.RecoverPendingLeasesWithResources(ctx, nil)
+}
+
+type ResourceLeaseRecovery uint8
+
+const (
+	ResourceLeaseOutcomeUnknown ResourceLeaseRecovery = iota
+	ResourceLeaseNotDispatched
+	ResourceLeaseRetain
+)
+
+// RecoverPendingLeasesWithResources preserves started leases whose upstream
+// jobs are durably named and can still be reconciled.
+func (m *Manager) RecoverPendingLeasesWithResources(ctx context.Context, decisionFor func(ledger.Event) (ResourceLeaseRecovery, error)) error {
 	pendingLeases := m.state.PendingLeases()
 	now := m.now()
 	m.recoveryMu.Lock()
@@ -1255,25 +1295,19 @@ func (m *Manager) RecoverPendingLeases(ctx context.Context) error {
 	m.recoveryMu.Unlock()
 	for _, pending := range pendingLeases {
 		event := pending.Reservation
-		reservation := int64(0)
-		if event.ReservationMicrosUSD != nil {
-			reservation = *event.ReservationMicrosUSD
+		if pending.Started && event.ProviderResourceID != "" && decisionFor != nil {
+			decision, err := decisionFor(event)
+			if err != nil {
+				return err
+			}
+			switch decision {
+			case ResourceLeaseRetain:
+				continue
+			case ResourceLeaseNotDispatched:
+				pending.Started = false
+			}
 		}
-		attempt := Attempt{
-			RequestID: event.RequestID, AttemptID: event.AttemptID, ProjectID: event.ProjectID,
-			WorkUnitID: event.WorkUnitID, RunID: event.RunID,
-			Period: PeriodFromEvent(event), ReservationMicrosUSD: reservation,
-			KeyID: event.KeyID, RouteID: event.RouteID, DeploymentID: event.DeploymentID,
-			ProviderID: event.ProviderID, OfferingID: event.OfferingID, ProfileID: event.ProfileID,
-			AccountRegionID: event.AccountRegionID,
-			RequestedModel:  event.RequestedModel, ProviderModel: event.ProviderModel,
-			ProviderPrimitive: event.ProviderPrimitive,
-			AttemptNumber:     event.AttemptNumber, RetryCount: event.RetryCount, FallbackCount: event.FallbackCount,
-			LeaseMode: event.LeaseMode, PriceSnapshot: event.PriceSnapshot,
-			PreparedInputTokens: event.PreparedInputTokens, PreparedOutputTokens: event.PreparedOutputTokens,
-			RecoveryKey: event.RecoveryKey, UnknownPolicyEvidence: event.UnknownPolicyEvidence,
-			TokenGuardPricingViewDigest: event.TokenGuardPricingViewDigest,
-		}
+		attempt := attemptFromReservation(event)
 		settlement := Settlement{Outcome: "recovered_not_started", FailurePhase: "accounting", OccurredAt: event.OccurredAt}
 		if pending.Started {
 			settlement = Settlement{
@@ -1282,14 +1316,19 @@ func (m *Manager) RecoverPendingLeases(ctx context.Context) error {
 				Outcome: "recovered_started_unknown_result", FailurePhase: "accounting", Ambiguous: true,
 				OccurredAt: event.OccurredAt,
 			}
+			if event.ProviderResourceID != "" && event.ProfileID == domain.ProfileBedrockAsyncNovaReel {
+				settlement.VideoSeconds, settlement.ProviderOutputTokens = event.PreparedOutputTokens, 0
+				settlement.TokenEstimated = false
+			}
 			if event.PriceSnapshot != nil && event.PriceSnapshot.CostValueStatus == domain.CostValueKnown {
 				// Embeddings and resource operations use ordinary input.
 				// Ambiguous prompt usage uses the frozen conservative split.
 				tokens := domain.BilledTokens{Input: event.PreparedInputTokens, Output: event.PreparedOutputTokens}
-				if !provider.PrimitiveUsesOrdinaryInputEstimate(event.ProfileID, event.ProviderPrimitive) {
+				if !provider.PrimitiveUsesOrdinaryInputEstimate(event.ProfileID, event.ProviderPrimitive) ||
+					(event.ProviderResourceID != "" && event.ProfileID != domain.ProfileBedrockAsyncNovaReel) {
 					tokens = event.PriceSnapshot.ConservativeTokens(tokens.Input, tokens.Output)
 				}
-				cost, err := event.PriceSnapshot.Calculate(tokens)
+				cost, err := event.PriceSnapshot.CalculateAttempt(tokens, event.FixedFeeExempt)
 				if err != nil {
 					return fmt.Errorf("recover attempt %q: %w", event.AttemptID, err)
 				}
@@ -1299,6 +1338,7 @@ func (m *Manager) RecoverPendingLeases(ctx context.Context) error {
 				settlement.CommittedMicrosUSD = cost.TotalCostMicrosUSD
 			}
 		}
+		settlement.CompleteResourceRequest = event.ProviderResourceID != ""
 		digest := sha256.Sum256([]byte("halro:accounting-recovery:v1\x00" + event.AttemptID + "\x00" + settlement.Outcome))
 		eventID := "evt_recovery_" + hex.EncodeToString(digest[:12])
 		if err := m.settle(ctx, eventID, attempt, settlement); err != nil {
@@ -1316,6 +1356,63 @@ func (m *Manager) RecoverPendingLeases(ctx context.Context) error {
 		m.recoveryMu.Unlock()
 	}
 	return nil
+}
+
+func attemptFromReservation(event ledger.Event) Attempt {
+	reservation := int64(0)
+	if event.ReservationMicrosUSD != nil {
+		reservation = *event.ReservationMicrosUSD
+	}
+	return Attempt{
+		FixedFeeExempt: event.FixedFeeExempt, ProviderResourceID: event.ProviderResourceID, CacheWriteRateEvidence: event.CacheWriteRateEvidence,
+		RequestID: event.RequestID, AttemptID: event.AttemptID, ProjectID: event.ProjectID,
+		WorkUnitID: event.WorkUnitID, RunID: event.RunID,
+		Period: PeriodFromEvent(event), ReservationMicrosUSD: reservation,
+		KeyID: event.KeyID, RouteID: event.RouteID, DeploymentID: event.DeploymentID,
+		ProviderID: event.ProviderID, OfferingID: event.OfferingID, ProfileID: event.ProfileID,
+		AccountRegionID: event.AccountRegionID,
+		RequestedModel:  event.RequestedModel, ProviderModel: event.ProviderModel,
+		ProviderPrimitive: event.ProviderPrimitive,
+		AttemptNumber:     event.AttemptNumber, RetryCount: event.RetryCount, FallbackCount: event.FallbackCount,
+		LeaseMode: event.LeaseMode, PriceSnapshot: event.PriceSnapshot,
+		PreparedInputTokens: event.PreparedInputTokens, PreparedOutputTokens: event.PreparedOutputTokens,
+		RecoveryKey: event.RecoveryKey, UnknownPolicyEvidence: event.UnknownPolicyEvidence,
+		TokenGuardPricingViewDigest: event.TokenGuardPricingViewDigest,
+	}
+}
+
+func (m *Manager) PendingResourceLeases() []ledger.Event {
+	var resources []ledger.Event
+	for _, pending := range m.state.PendingLeases() {
+		if pending.Started && pending.Reservation.ProviderResourceID != "" {
+			resources = append(resources, pending.Reservation)
+		}
+	}
+	return resources
+}
+
+// PendingResourceAttempt reads the original price and budget reservation for a
+// job. A settled job has no pending lease and needs no second settlement.
+func (m *Manager) PendingResourceAttempt(resource domain.ProviderResource) (Attempt, bool) {
+	if resource.AttemptID == "" {
+		return Attempt{}, false
+	}
+	record, ok := m.state.PendingLeaseRecord(resource.AttemptID)
+	if !ok || record.Event.ProjectID != resource.ProjectID || record.Event.ProviderResourceID != resource.ID {
+		return Attempt{}, false
+	}
+	return attemptFromReservation(record.Event), true
+}
+
+func (m *Manager) SettleResource(ctx context.Context, resource domain.ProviderResource, settlement Settlement) error {
+	m.resourceSettlementMu.Lock()
+	defer m.resourceSettlementMu.Unlock()
+	attempt, pending := m.PendingResourceAttempt(resource)
+	if !pending {
+		return nil
+	}
+	settlement.CompleteResourceRequest = true
+	return m.Settle(ctx, attempt, settlement)
 }
 
 func (m *Manager) FinalizeRequest(ctx context.Context, attempt Attempt, outcome string) error {
@@ -1422,7 +1519,7 @@ func (s Settlement) billedTokens() domain.BilledTokens {
 		CachedInput:    s.ProviderCachedInputTokens,
 		CacheWrite:     s.ProviderCacheWriteInputTokens,
 		CacheWriteLong: s.ProviderCacheWriteLongInputTokens,
-		Output:         s.ProviderOutputTokens,
+		Output:         s.ProviderOutputTokens + s.VideoSeconds,
 	}
 }
 

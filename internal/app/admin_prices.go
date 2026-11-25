@@ -283,6 +283,11 @@ func (r *Runtime) createAdminDeploymentPrice(writer http.ResponseWriter, request
 	defer r.adminTopologyMu.Unlock()
 	pricingUnlock := r.store.LockDeploymentPricingExclusive(price.DeploymentID)
 	defer pricingUnlock()
+	if !legacyReplay {
+		// This is storage evidence derived from the request shape. It stays out
+		// of the idempotency digest so a completed v0.17 request can still replay.
+		price.CacheWriteRateEvidence = domain.CacheWriteRateEvidence{ShortExplicit: true, LongExplicit: true}
+	}
 	price, effectiveIntent, replayed, err := r.store.CreateDeploymentPriceVersionIdempotent(request.Context(), price, intent, keyDigest)
 	if err != nil {
 		writePriceError(writer, err)
@@ -569,6 +574,9 @@ func (r *Runtime) createAdminDeploymentPriceProposal(writer http.ResponseWriter,
 		OutputMicrosPerMillion: rates.OutputMicrosPerMillion, FixedRequestMicrosUSD: rates.FixedRequestMicrosUSD, Schedule: schedule,
 		Source: source, FetchedAt: now, Warnings: input.Warnings, Match: input.Match, ExpiresAt: input.ExpiresAt.UTC(),
 		Status: domain.PriceProposalPending, CreatedBy: admin.session.Username, CreatedAt: now, Revision: 1,
+	}
+	if !legacyReplay {
+		proposal.CacheWriteRateEvidence = domain.CacheWriteRateEvidence{ShortExplicit: true, LongExplicit: true}
 	}
 	proposal.Digest, err = proposal.ComputeDigest()
 	if err != nil || proposal.Validate() != nil {

@@ -96,13 +96,34 @@ func TestStreamUsageKeepsTheThinkingSpanWhicheverSpellingCarriesIt(t *testing.T)
 			t.Errorf("%s: reasoning tokens %d, want %d", test.name, got, test.want)
 		}
 		// The guard must not cost the counts beside it. Output tokens are the
-		// delta's own running total and are replaced unconditionally.
+		// delta's own running total when that counter is present.
 		if usage.OutputTokens != 40 {
 			t.Errorf("%s: output tokens %d, want the delta's 40", test.name, usage.OutputTokens)
 		}
 		if usage.InputTokens != 10 {
 			t.Errorf("%s: input tokens %d, want the start's 10", test.name, usage.InputTokens)
 		}
+	}
+}
+
+func TestStreamUsageDoesNotInventOrEraseTokenCounts(t *testing.T) {
+	if usage := updateUsage(nil, usageEvent("message_start", `null`)); usage != nil {
+		t.Fatalf("absent usage became %+v", usage)
+	}
+	if usage := updateUsage(nil, anthropicapi.RawStreamEvent{Type: "error"}); usage != nil {
+		t.Fatalf("error frame invented usage %+v", usage)
+	}
+	if usage := updateUsage(nil, usageEvent("message_delta", `{}`)); usage != nil {
+		t.Fatalf("empty delta invented usage %+v", usage)
+	}
+	usage := updateUsage(nil, usageEvent("message_start", `{"input_tokens":10,"output_tokens":1}`))
+	if !usage.OutputIncomplete {
+		t.Fatal("initial output count was marked final")
+	}
+	usage = updateUsage(usage, usageEvent("message_delta", `{"output_tokens":40}`))
+	usage = updateUsage(usage, usageEvent("message_delta", `{"cache_creation_input_tokens":2}`))
+	if usage.InputTokens != 10 || usage.OutputTokens != 40 || usage.CacheCreationInputTokens != 2 || usage.OutputIncomplete {
+		t.Fatalf("partial delta corrupted counters: %+v", usage)
 	}
 }
 

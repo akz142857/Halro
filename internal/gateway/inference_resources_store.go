@@ -427,7 +427,7 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 	units := int64(len(call.Data))/4 + 1
 	if localOnly {
 		units = 1
-		target.FixedRequestMicrosUSD = 0
+		target.FixedFeeExempt = true
 	}
 	err = s.accountedInferenceResources(ctx, principal, route, target, provider.OperationFiles, units, &requestID, func() error {
 		call.RequestID = requestID
@@ -531,7 +531,7 @@ func (s *Service) localFileObject(ctx context.Context, principal auth.AuthResult
 	if err != nil {
 		return provider.FileObject{}, err
 	}
-	target.FixedRequestMicrosUSD = 0
+	target.FixedFeeExempt = true
 	requestID := ""
 	if err := s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, provider.OperationFiles, 1, &requestID, func() error {
 		return s.redactFileObject(principal.Project.RedactionPolicyID, &result)
@@ -581,7 +581,7 @@ func (s *Service) GetFile(ctx context.Context, key, idValue string) (provider.Fi
 		return s.localFileObject(ctx, principal, resource)
 	}
 	target, _ := s.ownedTarget(resource)
-	target.FixedRequestMicrosUSD = 0
+	target.FixedFeeExempt = true
 	requestID := ""
 	var result provider.FileObject
 	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, provider.OperationFiles, 1, &requestID, func() error {
@@ -612,7 +612,7 @@ func (s *Service) DownloadFile(ctx context.Context, key, idValue string) (provid
 		return s.downloadUpstreamFile(ctx, principal, resource)
 	}
 	target, _ := s.ownedTarget(resource)
-	target.FixedRequestMicrosUSD = 0
+	target.FixedFeeExempt = true
 	requestID := ""
 	var data []byte
 	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, provider.OperationFiles, 1, &requestID, func() error {
@@ -638,7 +638,7 @@ func (s *Service) downloadUpstreamFile(ctx context.Context, principal auth.AuthR
 	if resource.UpstreamID == "" {
 		return provider.FileContent{}, gatewayError("resource_store_unavailable", "file content is unavailable", 503, nil)
 	}
-	target.FixedRequestMicrosUSD = 0
+	target.FixedFeeExempt = true
 	requestID := ""
 	var content provider.FileContent
 	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, provider.OperationFiles, 1, &requestID, func() error {
@@ -678,7 +678,7 @@ func (s *Service) DeleteFile(ctx context.Context, key, idValue string) (provider
 		return result, nil
 	}
 	target, _ := s.ownedTarget(resource)
-	target.FixedRequestMicrosUSD = 0
+	target.FixedFeeExempt = true
 	freshDelete := resource.CleanupStatus == ""
 	if freshDelete {
 		resource.CleanupStatus = "deleting"
@@ -758,6 +758,12 @@ func (s *Service) CleanupExpiredProviderResource(ctx context.Context, resource d
 		return s.forgetDeferred(ctx, resource)
 	}
 	if resource.Kind != domain.ResourceFile {
+		if err := s.settleExpiredResource(ctx, resource); err != nil {
+			return err
+		}
+		if resource.Kind == domain.ResourceBatch && resource.ObjectPath != "" {
+			return s.forgetLocalResource(ctx, resource)
+		}
 		return s.resources.DeleteProviderResource(ctx, resource.ProjectID, resource.ID)
 	}
 	// A file with no upstream twin skips the upstream half of the dance and goes
@@ -841,13 +847,12 @@ func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, c
 	// requests travel with the batch. Reading them here rather than in the
 	// adapter keeps the object directory the gateway's business: an adapter has
 	// no idea where Halro puts its bytes, and should not learn.
+	data, readErr := s.readResourceObject(file)
+	if readErr != nil {
+		return provider.BatchObject{}, gatewayError("resource_store_unavailable", "batch input could not be read", 503, readErr)
+	}
 	if file.UpstreamID == "" {
-		call.ProviderModel = batchTarget.ProviderModel
-		data, readErr := s.readResourceObject(file)
-		if readErr != nil {
-			return provider.BatchObject{}, gatewayError("resource_store_unavailable", "batch input could not be read", 503, readErr)
-		}
-		call.InputRequests = data
+		call.ProviderModel, call.InputRequests = batchTarget.ProviderModel, data
 	}
 	adapter, ok := batchTarget.Adapter.(provider.ResourceBatchesAdapter)
 	if !ok {
@@ -879,6 +884,10 @@ func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, c
 	case idempotencyOutcomeUnknown:
 		return provider.BatchObject{}, outcomeUnknownError()
 	}
+	plan, bounds, err := planBatchBilling(data, call.Endpoint, batchTarget, principal.Project, file.UpstreamID == "")
+	if err != nil {
+		return provider.BatchObject{}, gatewayError("invalid_batch_billing_input", err.Error(), 400, err)
+	}
 	externalID := existing.ID
 	expectedRevision := existing.Revision
 	if verdict != idempotencyReclaim {
@@ -894,35 +903,29 @@ func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, c
 	if err != nil {
 		return provider.BatchObject{}, gatewayError("idempotency_in_progress", "batch creation is already reserved", 409, err)
 	}
-	if record, err = s.markInFlight(ctx, record); err != nil {
+	billingPlan, err := json.Marshal(plan)
+	if err != nil {
+		s.releaseUnusedJobReservation(ctx, record)
 		return provider.BatchObject{}, err
 	}
-	requestID := ""
-	call.RequestID = requestID
+	record.ObjectPath, err = s.writeResourceObjectContext(ctx, record.ID, record.ProjectID, objectRoleContent, billingPlan)
+	if err != nil {
+		s.releaseUnusedJobReservation(ctx, record)
+		return provider.BatchObject{}, gatewayError("resource_store_unavailable", "batch billing bounds could not be stored", 503, err)
+	}
+	record.InputFileID = file.ID
 	var upstream provider.BatchObject
-	target, _ := s.ownedTarget(file)
-	err = s.accountedInferenceResources(ctx, principal, file.PublicModel, target, provider.OperationBatches, 1, &requestID, func() error {
+	err = s.submitAccountedResource(ctx, principal, batchTarget, provider.OperationBatches, record, bounds.Input, bounds.Output, func(requestID string) (string, string, error) {
 		call.RequestID = requestID
-		var callErr error
-		upstream, callErr = adapter.CreateBatch(ctx, call)
-		if callErr == nil {
-			callErr = s.redactBatchObject(principal.Project.RedactionPolicyID, &upstream)
-		}
-		return callErr
+		var invokeErr error
+		upstream, invokeErr = adapter.CreateBatch(ctx, call)
+		return upstream.ID, upstream.Status, invokeErr
 	})
 	if err != nil {
-		record.CreationStatus = creationUnknown
-		record.UpdatedAt = s.now()
-		_, _ = s.resources.PutProviderResource(ctx, record, record.Revision)
 		return provider.BatchObject{}, err
 	}
-	record.UpstreamID = upstream.ID
-	record.InputFileID = file.ID
-	record.CreationStatus = creationCompleted
-	record.Status = upstream.Status
-	record.UpdatedAt = s.now()
-	if _, err := s.resources.PutProviderResource(ctx, record, record.Revision); err != nil {
-		return provider.BatchObject{}, gatewayError("resource_store_unavailable", "batch owner could not be recorded", 503, err)
+	if err := s.redactBatchObject(principal.Project.RedactionPolicyID, &upstream); err != nil {
+		return provider.BatchObject{}, gatewayError("sensitive_output_detected", "batch metadata violated redaction policy", 502, err)
 	}
 	upstream.ID = externalID
 	upstream.InputFileID = file.ID
@@ -969,25 +972,24 @@ func (s *Service) materialiseBatchResults(ctx context.Context, principal auth.Au
 	if err != nil {
 		return resource, err
 	}
-	fetcher, ok := target.Adapter.(provider.BatchResultsAdapter)
-	if !ok {
-		return resource, nil
-	}
-	target.FixedRequestMicrosUSD = 0
+	target.FixedFeeExempt = true
 	requestID := ""
-	var raw []byte
-	if err := s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, provider.OperationBatches, 1, &requestID, func() error {
+	var collected batchBillingResults
+	if err := s.readAccountedJob(ctx, principal, target, resource, provider.OperationBatches, &requestID, func() error {
 		var fetchErr error
-		raw, fetchErr = fetcher.FetchBatchResults(ctx, requestID, resource.UpstreamID, result.ResultsURL)
+		collected, fetchErr = fetchProviderBatchResults(ctx, target, requestID, resource.UpstreamID, result.ResultsURL)
 		return fetchErr
 	}); err != nil {
 		return resource, err
+	}
+	if err := s.settleBatchStatus(ctx, resource, target, *result, &collected); err != nil {
+		return resource, gatewayError("accounting_unavailable", "batch usage could not be settled", 503, err)
 	}
 	// Results are model output travelling outbound, and storing them writes a
 	// response body outside its one-time response path. Every line goes through
 	// the project's outbound policy before any of it reaches disk — redacting on
 	// the way out instead would leave the unredacted copy sitting there.
-	redacted, err := s.redactBatchResults(principal.Project.RedactionPolicyID, raw)
+	redacted, err := s.redactBatchResults(principal.Project.RedactionPolicyID, collected.output)
 	if err != nil {
 		return resource, gatewayError("sensitive_data_detected", "batch results contain material this project may not receive", 502, err)
 	}
@@ -1156,10 +1158,10 @@ func (s *Service) GetBatch(ctx context.Context, key, idValue string) (provider.B
 		return provider.BatchObject{}, err
 	}
 	target, _ := s.ownedTarget(resource)
-	target.FixedRequestMicrosUSD = 0
+	target.FixedFeeExempt = true
 	requestID := ""
 	var result provider.BatchObject
-	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, provider.OperationBatches, 1, &requestID, func() error {
+	err = s.readAccountedJob(ctx, principal, target, resource, provider.OperationBatches, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.GetBatch(ctx, requestID, resource.UpstreamID)
 		if callErr == nil {
@@ -1181,6 +1183,9 @@ func (s *Service) GetBatch(ctx context.Context, key, idValue string) (provider.B
 	if err != nil {
 		return provider.BatchObject{}, err
 	}
+	if err := s.settleBatchStatus(ctx, resource, target, result, nil); err != nil {
+		return provider.BatchObject{}, gatewayError("accounting_unavailable", "batch usage could not be settled", 503, err)
+	}
 	if _, err := s.nameBatchFiles(ctx, resource, &result); err != nil {
 		return provider.BatchObject{}, err
 	}
@@ -1192,10 +1197,10 @@ func (s *Service) CancelBatch(ctx context.Context, key, idValue string) (provide
 		return provider.BatchObject{}, err
 	}
 	target, _ := s.ownedTarget(resource)
-	target.FixedRequestMicrosUSD = 0
+	target.FixedFeeExempt = true
 	requestID := ""
 	var result provider.BatchObject
-	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, provider.OperationBatches, 1, &requestID, func() error {
+	err = s.readAccountedJob(ctx, principal, target, resource, provider.OperationBatches, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.CancelBatch(ctx, requestID, resource.UpstreamID)
 		if callErr == nil {
@@ -1212,6 +1217,9 @@ func (s *Service) CancelBatch(ctx context.Context, key, idValue string) (provide
 	resource, err = s.resources.ProviderResource(ctx, principal.Project.ID, resource.ID)
 	if err != nil {
 		return provider.BatchObject{}, gatewayError("resource_store_unavailable", "batch owner could not be read", 503, err)
+	}
+	if err := s.settleBatchStatus(ctx, resource, target, result, nil); err != nil {
+		return provider.BatchObject{}, gatewayError("accounting_unavailable", "batch usage could not be settled", 503, err)
 	}
 	if _, err := s.nameBatchFiles(ctx, resource, &result); err != nil {
 		return provider.BatchObject{}, err
@@ -1259,6 +1267,10 @@ func (s *Service) StartAsyncInvoke(ctx context.Context, key, idempotencyKey stri
 	if !ok {
 		return provider.AsyncInvokeObject{}, gatewayError("unsupported_feature", "async adapter is unavailable", 400, nil)
 	}
+	if request.DurationSeconds < 6 || request.DurationSeconds > 120 || request.DurationSeconds%6 != 0 ||
+		(target.ProviderModel == "amazon.nova-reel-v1:0" && request.DurationSeconds != 6) {
+		return provider.AsyncInvokeObject{}, gatewayError("invalid_request_error", "duration is outside the selected video model's supported bounds", 400, nil)
+	}
 	encoded, _ := json.Marshal(request)
 	keyHash := sha256.Sum256([]byte(idempotencyKey))
 	fingerprint := sha256.Sum256(encoded)
@@ -1289,28 +1301,14 @@ func (s *Service) StartAsyncInvoke(ctx context.Context, key, idempotencyKey stri
 	if err != nil {
 		return provider.AsyncInvokeObject{}, gatewayError("idempotency_in_progress", "async invocation is already reserved", 409, err)
 	}
-	if record, err = s.markInFlight(ctx, record); err != nil {
-		return provider.AsyncInvokeObject{}, err
-	}
-	requestID := ""
 	var upstream provider.AsyncInvokeObject
-	err = s.accountedInferenceResources(ctx, principal, request.Model, target, provider.OperationAsyncInvoke, int64(len(request.Prompt))/4+1, &requestID, func() error {
-		var callErr error
-		upstream, callErr = adapter.StartAsyncInvoke(ctx, provider.AsyncInvokeCall{RequestID: requestID, ProviderModel: target.ProviderModel, Prompt: request.Prompt, S3OutputURI: request.S3OutputURI, DurationSeconds: request.DurationSeconds, Dimension: request.Dimension, FPS: request.FPS, Seed: request.Seed})
-		return callErr
+	err = s.submitAccountedResource(ctx, principal, target, provider.OperationAsyncInvoke, record, 0, int64(request.DurationSeconds), func(requestID string) (string, string, error) {
+		var invokeErr error
+		upstream, invokeErr = adapter.StartAsyncInvoke(ctx, provider.AsyncInvokeCall{RequestID: requestID, ProviderModel: target.ProviderModel, Prompt: request.Prompt, S3OutputURI: request.S3OutputURI, DurationSeconds: request.DurationSeconds, Dimension: request.Dimension, FPS: request.FPS, Seed: request.Seed})
+		return upstream.InvocationARN, upstream.Status, invokeErr
 	})
 	if err != nil {
-		record.CreationStatus = creationUnknown
-		record.UpdatedAt = s.now()
-		_, _ = s.resources.PutProviderResource(ctx, record, record.Revision)
 		return provider.AsyncInvokeObject{}, err
-	}
-	record.UpstreamID = upstream.InvocationARN
-	record.CreationStatus = creationCompleted
-	record.Status = upstream.Status
-	record.UpdatedAt = s.now()
-	if _, err := s.resources.PutProviderResource(ctx, record, record.Revision); err != nil {
-		return provider.AsyncInvokeObject{}, gatewayError("resource_store_unavailable", "async owner could not be recorded", 503, err)
 	}
 	upstream.InvocationARN = externalID
 	return upstream, nil
@@ -1332,16 +1330,19 @@ func (s *Service) GetAsyncInvoke(ctx context.Context, key, idValue string) (prov
 	if !ok {
 		return provider.AsyncInvokeObject{}, gatewayError("resource_owner_unavailable", "async owner adapter is unavailable", 409, nil)
 	}
-	target.FixedRequestMicrosUSD = 0
+	target.FixedFeeExempt = true
 	requestID := ""
 	var result provider.AsyncInvokeObject
-	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, provider.OperationAsyncInvoke, 1, &requestID, func() error {
+	err = s.readAccountedJob(ctx, principal, target, resource, provider.OperationAsyncInvoke, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.GetAsyncInvoke(ctx, requestID, resource.UpstreamID)
 		return callErr
 	})
 	if err != nil {
 		return provider.AsyncInvokeObject{}, err
+	}
+	if err := s.settleAsyncStatus(ctx, resource, result.Status); err != nil {
+		return provider.AsyncInvokeObject{}, gatewayError("accounting_unavailable", "video usage could not be settled", 503, err)
 	}
 	if err := s.updateResourceStatus(ctx, resource, result.Status); err != nil {
 		return provider.AsyncInvokeObject{}, err

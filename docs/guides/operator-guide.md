@@ -1459,7 +1459,34 @@ Halro uses the short rate. Metadata schema 43 backfills both rates from each
 existing base price or time window's input rate. Set the published write prices
 on a new version to charge a provider's write premium. When both write rates
 equal the ordinary input rate, all three spans share one rounding step.
-Existing settlements retain their original costs. See [ADR 0028](../adr/0028-cache-write-input-pricing.md).
+Usage reports classify charges as estimated when cache writes use inherited
+rates or a missing lifetime split can affect the charge. Provider-reported
+token counts keep their original source. Existing settlements retain their
+original costs and classification. See [ADR 0028](../adr/0028-cache-write-input-pricing.md).
+
+New Batch submissions reserve the combined estimated input and output for the
+submitted lines against the deployment's configured price. Generation lines
+need an explicit output limit. The metered endpoints cover Chat Completions,
+Responses, Completions, Embeddings and Moderations. Each batch has one fixed
+request fee when billable work was performed. Halro settles reported result
+usage and uses the original bounds for items whose execution or usage cannot
+be established. A proven unexecuted item releases its share. Set the deployment
+rates for the Batch tariff when the supplier bills Batch differently.
+
+On the Bedrock asynchronous video profile, the output rate is USD per million
+video seconds and the fixed request fee is per invocation. The rate can be
+set as a fixed invocation fee alone. An input-only metered price is insufficient
+for this operation. Bedrock's status response exposes no billable duration, so
+Halro estimates a terminal charge from the requested duration at the original
+rates. For accepted jobs with an uncertain outcome, the same quote provides
+the settlement estimate.
+
+Batch and video holds survive restarts and belong to the original accounting
+day. Status polls for these jobs use the normal request slots and do not draw
+on the job's budget hold. Resource maintenance also reconciles unpolled jobs.
+Halro uses the pinned estimate when usage is still unavailable at the
+resource's retention deadline. Earlier jobs keep the accounting recorded when
+they were submitted.
 
 Pricing Proposals are a separate review queue. The interactive Admin API accepts
 only asserted official-URL evidence; `verified_api` and `signed_import` are

@@ -239,6 +239,7 @@ type inferenceResourcesServiceFixture struct {
 	plaintext string
 	project   domain.Project
 	state     *ledger.State
+	log       *ledger.Log
 	store     *inferenceResourcesMemoryStore
 	objectDir string
 	close     func()
@@ -304,7 +305,7 @@ func newInferenceResourcesServiceFixture(t *testing.T, profileID domain.Provider
 	if err != nil {
 		t.Fatal(err)
 	}
-	return inferenceResourcesServiceFixture{service: service, plaintext: plaintext, project: project, state: state, store: store, objectDir: objectDir, close: func() { _ = log.Close() }}
+	return inferenceResourcesServiceFixture{service: service, plaintext: plaintext, project: project, state: state, log: log, store: store, objectDir: objectDir, close: func() { _ = log.Close() }}
 }
 
 func inferenceResourcesTargetFor(model string, adapter provider.Adapter) provider.Target {

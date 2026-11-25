@@ -98,6 +98,7 @@ an authentication boundary.
 | `halro_usage_queue_depth` | gauge | none |
 | `halro_usage_queue_capacity` | gauge | none |
 | `halro_accounting_pending_leases` | gauge | none |
+| `halro_accounting_pending_resource_leases` | gauge | none |
 | `halro_accounting_oldest_pending_lease_age_seconds` | gauge | none |
 | `halro_accounting_pending_lease_normal_max_age_seconds` | gauge | none |
 | `halro_accounting_recovery_total` | counter | `status` |

@@ -669,6 +669,9 @@ func TestScheduledPriceRoundTripsThroughTheAdminAPIAndPricesEveryTier(t *testing
 	if err := json.Unmarshal(created.Body.Bytes(), &stored); err != nil {
 		t.Fatal(err)
 	}
+	if !stored.ShortExplicit || !stored.LongExplicit {
+		t.Fatalf("admin price lost explicit write rate evidence: %+v", stored)
+	}
 	if stored.Schedule == nil || stored.Schedule.Timezone != "Asia/Shanghai" || len(stored.Schedule.Windows) != 2 {
 		t.Fatalf("stored schedule=%#v", stored.Schedule)
 	}

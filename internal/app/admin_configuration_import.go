@@ -593,6 +593,7 @@ func (p configurationPrice) version(deploymentID, actor string, now time.Time) (
 		BillingMode: p.BillingMode, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
 		InputMicrosPerMillion: p.InputMicrosPerMillion, CachedInputMicrosPerMillion: p.CachedInputMicrosPerMillion,
 		CacheWriteMicrosPerMillion: *p.CacheWriteMicrosPerMillion, CacheWriteLongMicrosPerMillion: *p.CacheWriteLongMicrosPerMillion,
+		CacheWriteRateEvidence: p.CacheWriteRateEvidence,
 		OutputMicrosPerMillion: p.OutputMicrosPerMillion, FixedRequestMicrosUSD: p.FixedRequestMicrosUSD,
 		CreatedBy: actor, CreatedAt: now, EffectiveFrom: now,
 		Source: domain.PriceSource{

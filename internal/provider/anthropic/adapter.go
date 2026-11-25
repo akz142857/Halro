@@ -868,29 +868,35 @@ func malformed(message string, cause error) error {
 }
 
 func updateUsage(current *anthropicapi.Usage, event anthropicapi.RawStreamEvent) *anthropicapi.Usage {
-	if current == nil {
-		current = &anthropicapi.Usage{}
-	}
 	if event.Type == "message_start" {
 		var value struct {
 			Message struct {
-				Usage anthropicapi.Usage `json:"usage"`
+				Usage *anthropicapi.Usage `json:"usage"`
 			} `json:"message"`
 		}
-		if json.Unmarshal(event.Data, &value) == nil {
-			*current = value.Message.Usage
+		if json.Unmarshal(event.Data, &value) == nil && value.Message.Usage != nil {
+			value.Message.Usage.OutputIncomplete = true
+			return value.Message.Usage
 		}
 	}
 	if event.Type == "message_delta" {
 		var value struct {
-			Usage struct {
+			Usage *struct {
 				anthropicapi.Usage
 				Input              *int64 `json:"input_tokens"`
+				Output             *int64 `json:"output_tokens"`
 				CacheRead          *int64 `json:"cache_read_input_tokens"`
 				CacheCreationTotal *int64 `json:"cache_creation_input_tokens"`
 			} `json:"usage"`
 		}
-		if json.Unmarshal(event.Data, &value) == nil {
+		if json.Unmarshal(event.Data, &value) == nil && value.Usage != nil {
+			if current == nil {
+				if value.Usage.Input == nil && value.Usage.Output == nil &&
+					value.Usage.CacheRead == nil && value.Usage.CacheCreationTotal == nil {
+					return nil
+				}
+				current = &anthropicapi.Usage{OutputIncomplete: true}
+			}
 			if value.Usage.Input != nil {
 				current.InputTokens = *value.Usage.Input
 			}
@@ -914,7 +920,10 @@ func updateUsage(current *anthropicapi.Usage, event anthropicapi.RawStreamEvent)
 				current.CacheCreation = value.Usage.CacheCreation
 				current.CacheCreationPartial = false
 			}
-			current.OutputTokens = value.Usage.OutputTokens
+			if value.Usage.Output != nil {
+				current.OutputTokens = *value.Usage.Output
+				current.OutputIncomplete = false
+			}
 			// The thinking span, in whichever of the two spellings the upstream
 			// uses — which one it is is a property of the upstream, and this
 			// accumulator serves several. Reading only the flat member reported

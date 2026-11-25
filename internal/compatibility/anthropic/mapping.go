@@ -577,8 +577,11 @@ func DecodeResult(message anthropicapi.Message) (semantic.GenerateResult, error)
 		}
 	}
 	termination := DecodeStopReason(message.StopReason)
-	usage := DecodeUsage(message.Usage)
-	result := semantic.GenerateResult{ID: message.ID, Model: message.Model, Choices: []semantic.GenerateChoice{{Index: 0, Message: canonical, Termination: termination, NativeTermination: stringValue(message.StopReason)}}, Usage: &usage, Translation: semantic.TranslationNone, MappingRevision: MappingRevision}
+	result := semantic.GenerateResult{ID: message.ID, Model: message.Model, Choices: []semantic.GenerateChoice{{Index: 0, Message: canonical, Termination: termination, NativeTermination: stringValue(message.StopReason)}}, Translation: semantic.TranslationNone, MappingRevision: MappingRevision}
+	if !message.UsageMissing {
+		usage := DecodeUsage(message.Usage)
+		result.Usage = &usage
+	}
 	return result, result.Validate()
 }
 
@@ -601,8 +604,8 @@ func DecodeUsage(usage anthropicapi.Usage) semantic.Usage {
 	return semantic.Usage{
 		InputTokens: prompt, CachedInputTokens: usage.CacheReadInputTokens,
 		CacheWriteInputTokens: usage.CacheCreationInputTokens, CacheWriteLongInputTokens: long,
-		CacheWriteTTLPair: ttlPair,
-		OutputTokens:      usage.OutputTokens, ReasoningTokens: usage.ReasoningTokens(),
+		CacheWriteTTLPair: ttlPair, OutputIncomplete: usage.OutputIncomplete,
+		OutputTokens: usage.OutputTokens, ReasoningTokens: usage.ReasoningTokens(),
 		TotalTokens: prompt + usage.OutputTokens, Source: semantic.UsageProviderReported,
 	}
 }

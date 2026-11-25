@@ -201,12 +201,12 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 		add("ledger", "fail", chainDetail)
 	} else {
 		add("ledger", chainStatus, fmt.Sprintf("committed sequence %d at offset %d; %s", watermark.Sequence, watermark.Offset, chainDetail))
-		pending, oldestAge := ledgerState.PendingLeaseStats(time.Now())
+		pending, providerJobs, oldestAge := ledgerState.PendingLeaseStats(time.Now())
 		status := "pass"
 		if pending > 0 {
 			status = "warn"
 		}
-		add("accounting_leases", status, fmt.Sprintf("pending=%d oldest_age=%s recovered_released=%d recovered_settled=%d", pending, oldestAge.Round(time.Second), recoveredReleased, recoveredSettled))
+		add("accounting_leases", status, fmt.Sprintf("pending=%d pending_provider_jobs=%d oldest_age=%s recovered_released=%d recovered_settled=%d", pending, providerJobs, oldestAge.Round(time.Second), recoveredReleased, recoveredSettled))
 	}
 
 	exporter, exportErr := usage.NewExporter(cfg.UsagePath())

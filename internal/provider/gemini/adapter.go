@@ -347,6 +347,11 @@ func (a *Adapter) ChatStream(ctx context.Context, call provider.ChatCall, emit f
 	}
 	decoder := sse.NewDecoder(response.Body, semantic.MaxEncodedEventBytes)
 	var usage *openaiapi.Usage
+	expectedCandidates := 1
+	if count := payload.GenerationConfig.CandidateCount; count != nil && *count > 0 {
+		expectedCandidates = *count
+	}
+	finished := make(map[int]struct{})
 	emitted := false
 	for {
 		event, err := decoder.Next()
@@ -370,7 +375,15 @@ func (a *Adapter) ChatStream(ctx context.Context, call provider.ChatCall, emit f
 		if err != nil {
 			return usage, err
 		}
+		for _, output := range semanticEvent.Outputs {
+			if output.Termination != "" && !strings.EqualFold(output.NativeTermination, "FINISH_REASON_UNSPECIFIED") {
+				finished[output.Index] = struct{}{}
+			}
+		}
 		if chunkUsage != nil {
+			// Usage can accompany a content chunk before the final candidate.
+			// A later terminal chunk without usage cannot finalize that count.
+			chunkUsage.OutputIncomplete = len(finished) < expectedCandidates
 			usage = chunkUsage
 		}
 		if len(semanticEvent.Outputs) == 0 {
