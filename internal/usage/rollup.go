@@ -64,12 +64,10 @@ func rollupDimensions(event ledger.Event, requestLevel bool) []domain.RollupKey 
 // can never disagree with the total about the same attempt.
 func (a *Aggregate) addAttemptRollup(event ledger.Event, sequence uint64, committedCost int64, costKnown bool) error {
 	contribution := domain.DailyRollup{
-		Attempts:              1,
-		InputTokens:           event.ProviderInputTokens,
-		OutputTokens:          event.ProviderOutputTokens,
-		CostMicrosUSD:         committedCost,
-		LatencyMillis:         event.LatencyMillis,
-		AttemptLatencySamples: 1,
+		Attempts:      1,
+		InputTokens:   event.ProviderInputTokens,
+		OutputTokens:  event.ProviderOutputTokens,
+		CostMicrosUSD: committedCost,
 	}
 	contribution.Identity(event.PeriodID, event.PeriodTimezoneVersion, event.PeriodTimezone,
 		event.PeriodStartMicros, event.PeriodEndMicros)
@@ -83,30 +81,42 @@ func (a *Aggregate) addAttemptRollup(event ledger.Event, sequence uint64, commit
 	// from applying assumed pricing terms to Provider-reported usage.
 	// Dashboard derives them at read time (query.go); a stored rollup has to
 	// accumulate them at write time or the two views disagree.
+	contribution.EstimatedInputTokens = event.EstimatedInputTokens
 	contribution.EstimatedOutputTokens = event.EstimatedOutputTokens
 	if event.TokenEstimated {
 		contribution.EstimatedInputTokens = event.ProviderInputTokens
 		contribution.EstimatedOutputTokens = event.ProviderOutputTokens
 	} else {
-		contribution.ProviderCachedInputTokens = event.ProviderCachedInputTokens
-		contribution.ProviderCacheWriteInputTokens = event.ProviderCacheWriteInputTokens
-		contribution.ProviderCacheWriteLongInputTokens = event.ProviderCacheWriteLongInputTokens
+		contribution.ProviderCachedInputTokens, contribution.ProviderCacheWriteInputTokens,
+			contribution.ProviderCacheWriteLongInputTokens = reportedCacheTierCounts(event)
 		contribution.ProviderReasoningTokens = event.ProviderReasoningTokens
 	}
 	if event.CostEstimated && costKnown {
 		contribution.EstimatedCostMicrosUSD = committedCost
 	}
-	if event.LatencyMillis > 0 {
+	if !event.CompleteResourceRequest {
+		contribution.LatencyMillis, contribution.AttemptLatencySamples = event.LatencyMillis, 1
 		index, overflow := latencyBucketIndex(uint64(event.LatencyMillis))
 		if overflow {
 			contribution.AttemptLatencyOverflow = 1
 		} else {
 			contribution.AttemptLatencyBuckets[index] = 1
 		}
-	} else {
-		contribution.AttemptLatencyBuckets[0] = 1
 	}
 	return a.mergeRollup(rollupDimensions(event, false), contribution, event, sequence)
+}
+
+// Batch charges place estimated prompts into the most expensive tier of the
+// frozen quote. Remove those synthetic tier counts from usage attribution.
+func reportedCacheTierCounts(event ledger.Event) (cached, write, long int64) {
+	cached, write, long = event.ProviderCachedInputTokens, event.ProviderCacheWriteInputTokens, event.ProviderCacheWriteLongInputTokens
+	if event.CompleteResourceRequest && event.EstimatedInputTokens > 0 && event.PriceSnapshot != nil {
+		estimate := event.PriceSnapshot.ConservativeTokens(event.EstimatedInputTokens, 0)
+		cached = max(0, cached-estimate.CachedInput)
+		write = max(0, write-estimate.CacheWrite)
+		long = max(0, long-estimate.CacheWriteLong)
+	}
+	return cached, write, long
 }
 
 // addRequestRollup folds one finalized request in. Request identity exists only

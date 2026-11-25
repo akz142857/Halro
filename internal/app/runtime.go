@@ -633,7 +633,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		if resource.AttemptID == event.AttemptID && resource.UpstreamID != "" && resource.CreationStatus == "completed" {
 			return budget.ResourceLeaseRetain, nil
 		}
-		if resource.CreationStatus == "reserved" && resource.AttemptID == "" {
+		if resource.CreationStatus == "reserved" {
 			return budget.ResourceLeaseNotDispatched, nil
 		}
 		return budget.ResourceLeaseOutcomeUnknown, nil
@@ -1134,7 +1134,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	runtime.backgroundCancel = backgroundCancel
 	runtime.alerts.SetObserver(runtime.auditAlertDelivery)
 	runtime.alerts.Start()
-	runtime.backgroundWait.Add(12)
+	runtime.backgroundWait.Add(13)
 	go func() {
 		defer runtime.backgroundWait.Done()
 		runtime.usageCollector.Run(backgroundContext)
@@ -1178,6 +1178,10 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	go func() {
 		defer runtime.backgroundWait.Done()
 		runtime.runProviderResourceMaintenance(backgroundContext)
+	}()
+	go func() {
+		defer runtime.backgroundWait.Done()
+		runtime.runProviderResourceBilling(backgroundContext)
 	}()
 	go func() {
 		defer runtime.backgroundWait.Done()

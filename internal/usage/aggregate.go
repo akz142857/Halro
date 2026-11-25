@@ -56,6 +56,7 @@ var LatencyBucketsMillis = [latencyBucketCount]uint64{
 }
 
 type AttemptEvent struct {
+	EstimatedInputTokens  int64  `json:"estimated_input_tokens,omitempty"`
 	VideoSeconds          int64  `json:"video_seconds,omitempty"`
 	EstimatedOutputTokens int64  `json:"estimated_output_tokens,omitempty"`
 	EventID               string `json:"event_id"`
@@ -349,6 +350,7 @@ func (a *Aggregate) applySettled(record ledger.Record, accumulator *pendingReque
 	if startedAt.IsZero() {
 		startedAt = event.OccurredAt.Add(-time.Duration(event.LatencyMillis) * time.Millisecond)
 	}
+	cached, cacheWrite, cacheWriteLong := reportedCacheTierCounts(event)
 	attempt := AttemptEvent{
 		EventID: event.EventID, RequestID: event.RequestID, AttemptID: event.AttemptID,
 		Sequence: record.Sequence, AttemptNumber: event.AttemptNumber,
@@ -361,15 +363,15 @@ func (a *Aggregate) applySettled(record ledger.Record, accumulator *pendingReque
 		OfferingID: event.OfferingID, ProfileID: event.ProfileID, AccountRegionID: event.AccountRegionID,
 		ProviderModel: event.ProviderModel, ProviderInputTokens: event.ProviderInputTokens,
 		ProviderOutputTokens: event.ProviderOutputTokens, VideoSeconds: event.VideoSeconds,
-		ProviderCachedInputTokens:         event.ProviderCachedInputTokens,
-		ProviderCacheWriteInputTokens:     event.ProviderCacheWriteInputTokens,
-		ProviderCacheWriteLongInputTokens: event.ProviderCacheWriteLongInputTokens,
+		ProviderCachedInputTokens:         cached,
+		ProviderCacheWriteInputTokens:     cacheWrite,
+		ProviderCacheWriteLongInputTokens: cacheWriteLong,
 		ProviderReasoningTokens:           event.ProviderReasoningTokens,
-		PreparedOutputTokens:              event.PreparedOutputTokens, EstimatedOutputTokens: event.EstimatedOutputTokens, CostMicrosUSD: committedCostValue,
+		PreparedOutputTokens:              event.PreparedOutputTokens, EstimatedInputTokens: event.EstimatedInputTokens, EstimatedOutputTokens: event.EstimatedOutputTokens, CostMicrosUSD: committedCostValue,
 		LeaseMode: event.LeaseMode, PriceEvidenceStatus: evidenceStatus, CostValueStatus: costStatus,
 		PriceSnapshot: priceSnapshot, InputCostMicrosUSD: inputCost, OutputCostMicrosUSD: outputCost, FixedCostMicrosUSD: fixedCost,
 		Tags:          attemptCostTags(event, evidenceStatus),
-		CostEstimated: event.CostEstimated, TokensEstimated: event.TokenEstimated || event.EstimatedOutputTokens > 0,
+		CostEstimated: event.CostEstimated, TokensEstimated: event.TokenEstimated || event.EstimatedInputTokens > 0 || event.EstimatedOutputTokens > 0,
 		TokenUsageSource: event.TokenUsageSource,
 		StartedAt:        startedAt, CompletedAt: event.OccurredAt, Status: event.Outcome,
 		ErrorClass: event.ErrorClass, HTTPStatus: event.HTTPStatus,
@@ -435,6 +437,7 @@ func (a *Aggregate) applySettled(record ledger.Record, accumulator *pendingReque
 	// Provider usage can be unavailable after an ambiguous failure. Such attempts
 	// are settled against a conservative token upper bound; the estimated part is
 	// carried separately so an upper bound is never mistaken for reported usage.
+	contribution.EstimatedInputTokens = event.EstimatedInputTokens
 	contribution.EstimatedOutputTokens = event.EstimatedOutputTokens
 	if event.TokenEstimated {
 		contribution.EstimatedInputTokens, contribution.EstimatedOutputTokens = event.ProviderInputTokens, event.ProviderOutputTokens
@@ -456,10 +459,16 @@ func (a *Aggregate) applySettled(record ledger.Record, accumulator *pendingReque
 	if !costKnown {
 		a.metrics.UnknownAttempts++
 	}
-	if event.Outcome != "success" {
-		a.metrics.AttemptsError++
-	} else {
-		a.metrics.AttemptsSuccess++
+	if !event.CompleteResourceRequest {
+		if event.Outcome != "success" {
+			a.metrics.AttemptsError++
+		} else {
+			a.metrics.AttemptsSuccess++
+		}
+		if err := addUint64(&a.metrics.AttemptLatencyMillis, uint64(event.LatencyMillis)); err != nil {
+			return err
+		}
+		recordLatency(&a.metrics.AttemptLatencyBuckets, uint64(event.LatencyMillis))
 	}
 	if err := addUint64(&a.metrics.InputTokens, uint64(event.ProviderInputTokens)); err != nil {
 		return err
@@ -470,10 +479,6 @@ func (a *Aggregate) applySettled(record ledger.Record, accumulator *pendingReque
 	if err := addUint64(&a.metrics.CostMicrosUSD, uint64(committedCost)); err != nil {
 		return err
 	}
-	if err := addUint64(&a.metrics.AttemptLatencyMillis, uint64(event.LatencyMillis)); err != nil {
-		return err
-	}
-	recordLatency(&a.metrics.AttemptLatencyBuckets, uint64(event.LatencyMillis))
 	if err := a.addAttemptRollup(event, record.Sequence, committedCost, costKnown); err != nil {
 		return err
 	}
@@ -501,7 +506,8 @@ func (a *Aggregate) applyFinalized(record ledger.Record, accumulator *pendingReq
 	}
 
 	var latencyMillis uint64
-	latencyKnown := !summary.AcceptedAt.IsZero() && event.OccurredAt.After(summary.AcceptedAt)
+	// A job can settle days after admission and carries no HTTP request latency.
+	latencyKnown := !event.CompleteResourceRequest && !summary.AcceptedAt.IsZero() && event.OccurredAt.After(summary.AcceptedAt)
 	if latencyKnown {
 		latencyMillis = uint64(event.OccurredAt.Sub(summary.AcceptedAt).Milliseconds())
 	}
@@ -530,10 +536,12 @@ func (a *Aggregate) applyFinalized(record ledger.Record, accumulator *pendingReq
 	if err := addInt64(&a.totals.Requests, 1); err != nil {
 		return err
 	}
-	if event.Outcome == "success" {
-		a.metrics.RequestsSuccess++
-	} else {
-		a.metrics.RequestsError++
+	if !event.CompleteResourceRequest {
+		if event.Outcome == "success" {
+			a.metrics.RequestsSuccess++
+		} else {
+			a.metrics.RequestsError++
+		}
 	}
 	if latencyKnown {
 		if err := addUint64(&a.metrics.RequestLatencyMillis, latencyMillis); err != nil {
@@ -777,7 +785,7 @@ func recordLatency(buckets *[latencyBucketCount]uint64, latencyMillis uint64) {
 
 func attemptCostTags(event ledger.Event, evidence domain.PriceEvidenceStatus) []string {
 	var tags []string
-	if event.TokenEstimated || event.EstimatedOutputTokens > 0 || event.CostEstimated {
+	if event.TokenEstimated || event.EstimatedInputTokens > 0 || event.EstimatedOutputTokens > 0 || event.CostEstimated {
 		tags = append(tags, "EST")
 	}
 	switch evidence {

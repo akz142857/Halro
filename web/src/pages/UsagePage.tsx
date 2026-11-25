@@ -2,7 +2,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api } from "../api";
 import { EmptyState, ErrorState, Loading, LoadMore, Modal, PageHeader, StatusDot } from "../components";
-import { compactNumber, money, useInstantFormatter } from "../format";
+import { compactNumber, exactNumber, money, useInstantFormatter } from "../format";
 import type { Translate } from "../i18n";
 import { Link, navigate } from "../navigation";
 import { useTranslation } from "react-i18next";
@@ -330,16 +330,24 @@ export function UsagePage() {
                   </td>
                   <td className="usage-accounting-cell" data-label={t("usage.usageAndCost")}>
                     <div className="usage-accounting-summary">
-                      <div className="usage-accounting-metric">
+                      {attempt.video_seconds ? <div className="usage-accounting-metric">
+                        <span>{t("usage.estimatedVideoDuration")}</span>
+                        <strong>{t("usage.videoSeconds", { seconds: exactNumber(attempt.video_seconds) })}</strong>
+                      </div> : <div className="usage-accounting-metric">
                         <span>{t("usage.tokens")}</span>
                         <strong>{compactNumber(attempt.provider_input_tokens + attempt.provider_output_tokens)}</strong>
-                      </div>
+                      </div>}
                       <div className="usage-accounting-metric">
                         <span>{t("usage.cost")}</span>
                         <div className="usage-cost-value"><CostValue attempt={attempt} /></div>
                       </div>
                     </div>
-                    <p className="usage-token-breakdown">{t("usage.inputOutput", { input: compactNumber(attempt.provider_input_tokens), output: compactNumber(attempt.provider_output_tokens) })} · {attempt.tokens_estimated ? t("usage.conservative") : t("usage.reported")}</p>
+                    {(!attempt.video_seconds || attempt.provider_input_tokens > 0 || attempt.provider_output_tokens > 0) && (
+                      <p className="usage-token-breakdown">
+                        {t("usage.inputOutput", { input: compactNumber(attempt.provider_input_tokens), output: compactNumber(attempt.provider_output_tokens) })}
+                        {" · "}{tokenUsageEvidence(attempt, t)}
+                      </p>
+                    )}
                     <CostEvidence attempt={attempt} />
                   </td>
                 </tr>
@@ -547,6 +555,17 @@ export function billedTierLabel(tier: PriceScheduleTier, t: Translate) {
   return t("usage.billedZoneUnavailable", { timezone: tier.timezone });
 }
 
+function tokenUsageEvidence(attempt: UsageAttempt, t: Translate) {
+  const estimates = [];
+  if (attempt.estimated_input_tokens) {
+    estimates.push(t("usage.estimatedInputTokens", { tokens: exactNumber(attempt.estimated_input_tokens) }));
+  }
+  if (attempt.estimated_output_tokens) {
+    estimates.push(t("usage.estimatedOutputTokens", { tokens: exactNumber(attempt.estimated_output_tokens) }));
+  }
+  return estimates.length ? estimates.join(" · ") : t(attempt.tokens_estimated ? "usage.conservative" : "usage.reported");
+}
+
 // The amount and its classification belong in the scan line. The arithmetic
 // that produced it is evidence, not another metric, so it remains in a separate
 // disclosure below the token and cost summary.
@@ -569,6 +588,7 @@ function CostValue({ attempt }: { attempt: UsageAttempt }) {
 // components that summed to it.
 function CostEvidence({ attempt }: { attempt: UsageAttempt }) {
   const { t } = useTranslation();
+  const cacheWritesEstimated = attempt.token_usage_source === "gateway_estimated" || (!attempt.token_usage_source && attempt.tokens_estimated);
   return (
       <details className="cost-evidence">
         <summary>{t("usage.costEvidence")}</summary>
@@ -581,7 +601,7 @@ function CostEvidence({ attempt }: { attempt: UsageAttempt }) {
           {!!attempt.provider_cache_write_input_tokens && <>{t("usage.cacheWrites", {
             total: compactNumber(attempt.provider_cache_write_input_tokens),
             long: compactNumber(attempt.provider_cache_write_long_input_tokens ?? 0),
-          })}{attempt.tokens_estimated && <> · {t("usage.conservative")}</>}<br /></>}
+          })}{cacheWritesEstimated && <> · {t("usage.conservative")}</>}<br /></>}
           {attempt.input_cost_micros_usd == null ? "" : t("usage.formulaComponents", { input: money(attempt.input_cost_micros_usd), output: money(attempt.output_cost_micros_usd ?? 0), fixed: money(attempt.fixed_cost_micros_usd ?? 0) })}
         </small>
       </details>

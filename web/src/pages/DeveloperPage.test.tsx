@@ -535,7 +535,10 @@ describe("DeveloperPage", () => {
   // A conservative stand-in read as a measurement is the one reading that
   // cannot be corrected later, and a cost with unknown attempts behind it is
   // not a complete figure — in the history row as much as in the panel.
-  it("states whose numbers these are and how complete the cost is", async () => {
+  it.each([
+    { estimate: { tokens_estimated: true, cost_estimated: true } as const, label: "保守上限" },
+    { estimate: { tokens_estimated: true, cost_estimated: true, token_usage_source: "gateway_estimated_output", estimated_output_tokens: 9 } as const, label: "含估算词元" },
+  ])("states whose numbers these are ($label) and how complete the cost is", async ({ estimate, label }) => {
     vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
     vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
     vi.spyOn(api, "developerExecute").mockResolvedValue(new Response(
@@ -544,7 +547,7 @@ describe("DeveloperPage", () => {
     ));
     vi.spyOn(api, "usageRequest").mockResolvedValue(settlementFixture(
       { unknown_attempts: 1, attempts: 2 },
-      [attemptFixture({ tokens_estimated: true, cost_estimated: true })],
+      [attemptFixture(estimate)],
     ));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
@@ -552,7 +555,7 @@ describe("DeveloperPage", () => {
     fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
-    expect(await screen.findByText("保守上限")).toBeVisible();
+    expect(await screen.findByText(label)).toBeVisible();
     // The incompleteness is stated in the panel and in the history row, never
     // in only one of them.
     expect(screen.getAllByText(/1 次调用费用未知/)).toHaveLength(2);

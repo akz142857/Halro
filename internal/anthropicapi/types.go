@@ -717,6 +717,7 @@ func validateBlock(role string, block ContentBlock) error {
 }
 
 type Usage struct {
+	InputIncomplete          bool                  `json:"-"`
 	OutputIncomplete         bool                  `json:"-"`
 	InputTokens              int64                 `json:"input_tokens"`
 	OutputTokens             int64                 `json:"output_tokens"`

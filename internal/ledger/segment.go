@@ -35,9 +35,10 @@ import (
 // thing forever, whichever file holds them.
 
 const (
-	segmentManifestName    = "segments.json"
-	segmentManifestVersion = 1
-	segmentTempSuffix      = ".partial"
+	segmentManifestName          = "segments.json"
+	segmentManifestLegacyVersion = 1
+	segmentManifestVersion       = 2
+	segmentTempSuffix            = ".partial"
 )
 
 // ErrSegmentMissing says the manifest names a generation whose bytes are not on
@@ -92,7 +93,7 @@ func segmentManifestPath(directory string) string {
 func loadSegmentManifest(directory string) (segmentManifest, error) {
 	raw, err := os.ReadFile(segmentManifestPath(directory))
 	if errors.Is(err, os.ErrNotExist) {
-		return segmentManifest{Version: segmentManifestVersion}, nil
+		return segmentManifest{Version: segmentManifestLegacyVersion}, nil
 	}
 	if err != nil {
 		return segmentManifest{}, fmt.Errorf("read ledger segment manifest: %w", err)
@@ -105,7 +106,7 @@ func loadSegmentManifest(directory string) (segmentManifest, error) {
 	// perfectly well the moment the manifest gains a field. A range accepts
 	// everything up to what this build understands and refuses only what was
 	// written by something newer.
-	if manifest.Version < 1 || manifest.Version > segmentManifestVersion {
+	if manifest.Version < segmentManifestLegacyVersion || manifest.Version > segmentManifestVersion {
 		return segmentManifest{}, fmt.Errorf("%w: ledger segment manifest version %d", ErrUnsupportedVersion, manifest.Version)
 	}
 	// Generations are numbered from one and never skipped, so the manifest has
@@ -135,7 +136,13 @@ func loadSegmentManifest(directory string) (segmentManifest, error) {
 }
 
 func saveSegmentManifest(directory string, manifest segmentManifest) error {
-	manifest.Version = segmentManifestVersion
+	// Once an epoch-6 frame is sealed, its active successor may be empty.
+	// Mark the manifest too so older readers refuse before opening the WAL.
+	manifest.Version = segmentManifestLegacyVersion
+	if manifest.Pending != nil && manifest.Pending.EndEpoch >= frameVersionDeferredAccounting ||
+		len(manifest.Segments) > 0 && manifest.Segments[len(manifest.Segments)-1].EndEpoch >= frameVersionDeferredAccounting {
+		manifest.Version = segmentManifestVersion
+	}
 	encoded, err := json.Marshal(manifest)
 	if err != nil {
 		return fmt.Errorf("encode ledger segment manifest: %w", err)

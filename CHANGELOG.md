@@ -20,12 +20,16 @@ semantic versioning.
   tokens and cache tiers.
 - Reserve Batch and asynchronous video costs at submission. Settle once at
   completion or reconcile unpolled jobs in resource maintenance.
+- Recover deferred job settlements after transient storage failures and keep
+  terminal job outcomes and durations out of the interactive request metrics.
+- Show the estimated token subsets in call details and label asynchronous video
+  rates by duration. Preserve TLS setup errors when a handshake times out.
 
 ### Upgrading
 
 - Upgrade all members of an HA cluster together. Resource settlements and
-  mixed stream usage require the new peer accounting contract. Restore a
-  verified pre-upgrade backup when rolling back.
+  mixed stream usage require the new peer accounting contract and Ledger
+  epoch 6. Restore a verified pre-upgrade backup when rolling back.
 
 ## [0.17.0] - 2026-11-19
 

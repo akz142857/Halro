@@ -23,13 +23,14 @@ type LeaseMode string
 type TokenUsageSource string
 
 const (
-	LeaseModeMetered         LeaseMode        = "metered"
-	LeaseModeFree            LeaseMode        = "free"
-	LeaseModeUnknownAllowed  LeaseMode        = "unknown_allowed"
-	TokenUsageSourceProvider TokenUsageSource = "provider_reported"
-	TokenUsageSourceMixed    TokenUsageSource = "gateway_estimated_output"
-	TokenUsageSourceEstimate TokenUsageSource = "gateway_estimated"
-	TokenUsageSourceNone     TokenUsageSource = "none"
+	LeaseModeMetered           LeaseMode        = "metered"
+	LeaseModeFree              LeaseMode        = "free"
+	LeaseModeUnknownAllowed    LeaseMode        = "unknown_allowed"
+	TokenUsageSourceProvider   TokenUsageSource = "provider_reported"
+	TokenUsageSourceMixed      TokenUsageSource = "gateway_estimated_output"
+	TokenUsageSourceMixedInput TokenUsageSource = "gateway_estimated_mixed"
+	TokenUsageSourceEstimate   TokenUsageSource = "gateway_estimated"
+	TokenUsageSourceNone       TokenUsageSource = "none"
 )
 
 func MicrosUSD(value int64) *int64 { return &value }
@@ -102,6 +103,7 @@ type Event struct {
 	UnknownPolicyEvidence       *domain.UnknownPricePolicyEvidence `json:"unknown_policy_evidence,omitempty"`
 	TokenGuardPricingViewDigest string                             `json:"token_guard_pricing_view_digest,omitempty"`
 	ProviderInputTokens         int64                              `json:"provider_input_tokens,omitempty"`
+	EstimatedInputTokens        int64                              `json:"estimated_input_tokens,omitempty"`
 	EstimatedOutputTokens       int64                              `json:"estimated_output_tokens,omitempty"`
 	ProviderOutputTokens        int64                              `json:"provider_output_tokens,omitempty"`
 	// Cache tiers partition ProviderInputTokens; reasoning partitions
@@ -308,13 +310,15 @@ func (e Event) Validate() error {
 		} else if e.CommittedMicrosUSD == nil {
 			problems = append(problems, errors.New("known settlement cost is required"))
 		}
-		if e.EstimatedOutputTokens < 0 || e.EstimatedOutputTokens > e.ProviderOutputTokens ||
-			(e.EstimatedOutputTokens > 0) != (e.TokenUsageSource == TokenUsageSourceMixed) {
-			problems = append(problems, errors.New("estimated output must be a subset of recorded output with mixed usage source"))
+		if e.EstimatedInputTokens < 0 || e.EstimatedInputTokens > e.ProviderInputTokens ||
+			e.EstimatedOutputTokens < 0 || e.EstimatedOutputTokens > e.ProviderOutputTokens ||
+			(e.EstimatedInputTokens > 0) != (e.TokenUsageSource == TokenUsageSourceMixedInput) ||
+			(e.EstimatedInputTokens == 0 && e.EstimatedOutputTokens > 0) != (e.TokenUsageSource == TokenUsageSourceMixed) {
+			problems = append(problems, errors.New("estimated token subsets require the matching mixed usage source"))
 		}
 		if e.TokenUsageSource != "" {
 			switch e.TokenUsageSource {
-			case TokenUsageSourceProvider, TokenUsageSourceMixed:
+			case TokenUsageSourceProvider, TokenUsageSourceMixed, TokenUsageSourceMixedInput:
 				if e.TokenEstimated {
 					problems = append(problems, errors.New("provider-reported usage cannot be estimated"))
 				}

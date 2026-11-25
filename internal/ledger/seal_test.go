@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -102,6 +103,77 @@ func TestTheChainContinuesIntoTheNextGeneration(t *testing.T) {
 	}
 	if _, err := OpenWithOptions(path, NewStatus(), Options{ChainKey: testChainKey}); !errors.Is(err, ErrTampered) {
 		t.Fatalf("detaching the successor from its sealed predecessor: err=%v, want ErrTampered", err)
+	}
+}
+
+func TestDeferredAccountingEpochAdvancesLegacySealedLedger(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "ledger.wal")
+	legacy := validReservation("evt_v5", "attempt_v5")
+	payload, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, _ := encodeChainFrameVersion(frameVersionRunAttribution, testChainKey, 1, legacy.Kind, payload, [32]byte{})
+	if err := os.WriteFile(path, frame, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	log := openChained(t, path, nil)
+	sealed, err := log.Roll()
+	if err != nil || !sealed.Rolled || sealed.Sealed.EndEpoch != frameVersionRunAttribution {
+		t.Fatalf("v5 roll=%#v err=%v", sealed, err)
+	}
+	if manifest, err := loadSegmentManifest(directory); err != nil || manifest.Version != 1 {
+		t.Fatalf("legacy manifest version=%d err=%v", manifest.Version, err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	log = openChained(t, path, nil)
+	appendReservations(t, log, 2, 1)
+	sealed, err = log.Roll()
+	if err != nil || !sealed.Rolled || sealed.Sealed.EndEpoch != frameVersionDeferredAccounting {
+		t.Fatalf("v6 roll=%#v err=%v", sealed, err)
+	}
+	// An older reader checks the manifest version before opening the
+	// empty active file. It must fail there even without a v6 active frame.
+	if manifest, err := loadSegmentManifest(directory); err != nil || manifest.Version != 2 {
+		t.Fatalf("post-upgrade manifest version=%d err=%v", manifest.Version, err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	log = openChained(t, path, nil)
+	var epochs []uint8
+	if _, err := log.Replay(Watermark{}, func(record Record) error {
+		epochs = append(epochs, record.Epoch)
+		return nil
+	}); err != nil || !slices.Equal(epochs, []uint8{frameVersionRunAttribution, frameVersionDeferredAccounting}) {
+		t.Fatalf("replay epochs=%v err=%v", epochs, err)
+	}
+	if reports, err := log.VerifySealed(0); err != nil || len(reports) != 2 {
+		t.Fatalf("verified %d sealed generations, err=%v", len(reports), err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	anchor, err := decodeChainHash(sealed.Sealed.EndHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, _ = encodeChainFrameVersion(frameVersionRunAttribution, testChainKey, 3, legacy.Kind, payload, anchor)
+	if err := os.WriteFile(path, frame, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := VerifyChain(path, testChainKey); !errors.Is(err, ErrTampered) {
+		t.Fatalf("verify accepted a signed v5 frame after sealed v6: %v", err)
+	}
+	if _, err := OpenWithOptions(path, NewStatus(), Options{ChainKey: testChainKey}); !errors.Is(err, ErrTampered) {
+		t.Fatalf("open accepted a signed v5 frame after sealed v6: %v", err)
 	}
 }
 
@@ -321,7 +393,7 @@ func TestAnInterruptedRollIsFinishedOrAbandonedByTheFilesAlone(t *testing.T) {
 		// The intent, written; the rename, never reached.
 		if err := saveSegmentManifest(directory, segmentManifest{Pending: &Segment{
 			Generation: 1, File: "ledger-1.wal", FirstSequence: 1, LastSequence: head.Sequence,
-			Length: length, StoredLength: length, EndHash: encodeChainHash(hash), EndEpoch: frameVersionRunAttribution,
+			Length: length, StoredLength: length, EndHash: encodeChainHash(hash), EndEpoch: frameVersionDeferredAccounting,
 			PlainChecksum: checksum, StoredChecksum: checksum,
 		}}); err != nil {
 			t.Fatal(err)
@@ -355,7 +427,7 @@ func TestAnInterruptedRollIsFinishedOrAbandonedByTheFilesAlone(t *testing.T) {
 		}
 		if err := saveSegmentManifest(directory, segmentManifest{Pending: &Segment{
 			Generation: 1, File: "ledger-1.wal", FirstSequence: 1, LastSequence: head.Sequence,
-			Length: length, StoredLength: length, EndHash: encodeChainHash(hash), EndEpoch: frameVersionRunAttribution,
+			Length: length, StoredLength: length, EndHash: encodeChainHash(hash), EndEpoch: frameVersionDeferredAccounting,
 			PlainChecksum: checksum, StoredChecksum: checksum,
 		}}); err != nil {
 			t.Fatal(err)

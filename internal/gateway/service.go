@@ -97,6 +97,7 @@ type Service struct {
 	// instanceID identifies this process. It is what tells a reservation left
 	// behind by a crash apart from one another request is holding right now.
 	instanceID                    string
+	resourceSubmissions           sync.Map
 	now                           func() time.Time
 	resources                     InferenceResourcesResourceStore
 	resourceObjectDir             string
@@ -3460,7 +3461,7 @@ func setSettlementCost(result *budget.Settlement, target provider.Target, reserv
 		}
 		result.PreparedOutputTokens = prepared.Output
 		result.ProviderReasoningTokens = 0
-		result.EstimatedOutputTokens = 0
+		result.EstimatedInputTokens, result.EstimatedOutputTokens = 0, 0
 		result.TokenEstimated, result.CostEstimated = true, true
 		cost, err = tier.Calculate(tokens)
 	}
@@ -3569,6 +3570,12 @@ func streamSettlement(
 		result.ProviderInputTokens = usage.InputTokens
 		result.ProviderOutputTokens = usage.OutputTokens
 		recordUsageTiers(&result, *usage, target)
+		if usage.InputIncomplete {
+			// The cache counters are reported subsets. Estimate only the remaining ordinary input.
+			result.EstimatedInputTokens = max(0, estimatedInputTokens-usage.InputTokens)
+			result.ProviderInputTokens += result.EstimatedInputTokens
+			result.CostEstimated = true
+		}
 		if usage.OutputIncomplete {
 			output := max(usage.OutputTokens, min(estimatedOutputTokens, deliveredOutputTokens))
 			result.EstimatedOutputTokens = output - usage.OutputTokens

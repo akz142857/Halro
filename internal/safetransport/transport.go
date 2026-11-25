@@ -115,18 +115,17 @@ func pinnedDialTLSContext(policy Policy, resolver Resolver, dialer Dialer, timeo
 				return nil, err
 			}
 		}
-		stopCancel := context.AfterFunc(setup, func() { _ = conn.Close() })
 		providerTLS := tls.Client(conn, &tls.Config{
 			MinVersion: tls.VersionTLS12,
 			ServerName: strings.Trim(host, "[]"),
 			NextProtos: []string{"h2", "http/1.1"},
 		})
+		// HandshakeContext closes the socket on cancellation and reports the
+		// context error. A second closer can obscure that cause with net.ErrClosed.
 		if err := providerTLS.HandshakeContext(setup); err != nil {
-			stopCancel()
 			_ = conn.Close()
 			return nil, err
 		}
-		stopCancel()
 		if err := providerTLS.SetDeadline(noDeadline); err != nil {
 			_ = providerTLS.Close()
 			return nil, err

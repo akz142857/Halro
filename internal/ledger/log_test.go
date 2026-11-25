@@ -19,9 +19,8 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 )
 
-// testChainKey is a fixed 32-byte HMAC key for exercising epoch-4 append and
-// verification paths in tests. Every event this build writes is promoted to
-// epoch 4 (eventFrameVersion), so any test that appends now needs one.
+// testChainKey is a fixed 32-byte HMAC key for testing authenticated appends
+// and verification.
 var testChainKey = bytes.Repeat([]byte{0x24}, 32)
 
 func openChained(t *testing.T, path string, status *Status) *Log {
@@ -33,12 +32,8 @@ func openChained(t *testing.T, path string, status *Status) *Log {
 	return log
 }
 
-// TestMixedV1V2V3ReplayAndUnsupportedFutureEpoch builds every historical
-// epoch by hand (natural Append calls can no longer produce anything but
-// epoch 4, since eventFrameVersion collapsed to a single writer epoch per
-// ADR 0016) and checks that a reader still accepts all four in one file,
-// reports each correctly, and rejects an epoch beyond the newest one it
-// understands.
+// Build the original four epochs by hand to verify they still replay
+// together and that an unsupported future epoch fails closed.
 func TestMixedV1V2V3ReplayAndUnsupportedFutureEpoch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mixed.wal")
 	now := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
@@ -91,7 +86,7 @@ func TestMixedV1V2V3ReplayAndUnsupportedFutureEpoch(t *testing.T) {
 	}
 	payload, _ := json.Marshal(Event{EventID: "future", Kind: EventRequestAccepted, RequestID: "r", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now})
 	future := filepath.Join(t.TempDir(), "future.wal")
-	if err := os.WriteFile(future, encodeFrameVersion(frameVersionRunAttribution+1, 1, EventRequestAccepted, payload), 0o600); err != nil {
+	if err := os.WriteFile(future, encodeFrameVersion(frameVersionDeferredAccounting+1, 1, EventRequestAccepted, payload), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := Inspect(future); !errors.Is(err, ErrUnsupportedVersion) {

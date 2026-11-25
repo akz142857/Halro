@@ -871,12 +871,19 @@ func updateUsage(current *anthropicapi.Usage, event anthropicapi.RawStreamEvent)
 	if event.Type == "message_start" {
 		var value struct {
 			Message struct {
-				Usage *anthropicapi.Usage `json:"usage"`
+				Usage *struct {
+					anthropicapi.Usage
+					Input *int64 `json:"input_tokens"`
+				} `json:"usage"`
 			} `json:"message"`
 		}
 		if json.Unmarshal(event.Data, &value) == nil && value.Message.Usage != nil {
-			value.Message.Usage.OutputIncomplete = true
-			return value.Message.Usage
+			usage := &value.Message.Usage.Usage
+			usage.InputIncomplete, usage.OutputIncomplete = value.Message.Usage.Input == nil, true
+			if input := value.Message.Usage.Input; input != nil {
+				usage.InputTokens = *input
+			}
+			return usage
 		}
 	}
 	if event.Type == "message_delta" {
@@ -895,10 +902,11 @@ func updateUsage(current *anthropicapi.Usage, event anthropicapi.RawStreamEvent)
 					value.Usage.CacheRead == nil && value.Usage.CacheCreationTotal == nil {
 					return nil
 				}
-				current = &anthropicapi.Usage{OutputIncomplete: true}
+				current = &anthropicapi.Usage{InputIncomplete: true, OutputIncomplete: true}
 			}
 			if value.Usage.Input != nil {
 				current.InputTokens = *value.Usage.Input
+				current.InputIncomplete = false
 			}
 			// message_start carries the cache tiers today and the full-struct copy
 			// above captures them, but a delta that restates them must win rather

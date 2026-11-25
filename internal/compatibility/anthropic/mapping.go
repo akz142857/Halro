@@ -604,7 +604,7 @@ func DecodeUsage(usage anthropicapi.Usage) semantic.Usage {
 	return semantic.Usage{
 		InputTokens: prompt, CachedInputTokens: usage.CacheReadInputTokens,
 		CacheWriteInputTokens: usage.CacheCreationInputTokens, CacheWriteLongInputTokens: long,
-		CacheWriteTTLPair: ttlPair, OutputIncomplete: usage.OutputIncomplete,
+		CacheWriteTTLPair: ttlPair, InputIncomplete: usage.InputIncomplete, OutputIncomplete: usage.OutputIncomplete,
 		OutputTokens: usage.OutputTokens, ReasoningTokens: usage.ReasoningTokens(),
 		TotalTokens: prompt + usage.OutputTokens, Source: semantic.UsageProviderReported,
 	}

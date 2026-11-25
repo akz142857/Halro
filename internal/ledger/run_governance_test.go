@@ -210,8 +210,16 @@ func TestV4HistoryMayAdvanceToV5(t *testing.T) {
 func TestRunAttributionEpochCannotDowngradeAcrossSealedBoundary(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "ledger.wal")
+	initial := validReservation("evt_v5", "attempt_v5")
+	initialPayload, err := json.Marshal(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialFrame, _ := encodeChainFrameVersion(frameVersionRunAttribution, testChainKey, 1, initial.Kind, initialPayload, [32]byte{})
+	if err := os.WriteFile(path, initialFrame, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	log := openChained(t, path, nil)
-	appendReservations(t, log, 1, 1)
 	sealed, err := log.Roll()
 	if err != nil {
 		t.Fatal(err)

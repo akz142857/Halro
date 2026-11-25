@@ -1149,6 +1149,9 @@ export interface UsageAttempt {
   provider_model?: string;
   provider_input_tokens: number;
   provider_output_tokens: number;
+  estimated_input_tokens?: number;
+  estimated_output_tokens?: number;
+  video_seconds?: number;
   provider_cache_write_input_tokens?: number;
   provider_cache_write_long_input_tokens?: number;
   cost_micros_usd: number | null;
@@ -1160,7 +1163,7 @@ export interface UsageAttempt {
   output_cost_micros_usd: number | null;
   fixed_cost_micros_usd: number | null;
   tags?: string[];
-  token_usage_source?: "provider_reported" | "gateway_estimated" | "none";
+  token_usage_source?: "provider_reported" | "gateway_estimated" | "gateway_estimated_output" | "gateway_estimated_mixed" | "none";
   cost_estimated: boolean;
   tokens_estimated: boolean;
   started_at: string;

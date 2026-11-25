@@ -162,3 +162,21 @@ func TestStreamUsageMergesCacheWriteLifetimeDetails(t *testing.T) {
 		t.Fatalf("explicit zero did not replace the start's details: %+v", got)
 	}
 }
+
+func TestStreamUsageDistinguishesOmittedInputFromReportedZero(t *testing.T) {
+	for _, start := range []string{`null`, `{}`, `{"cache_read_input_tokens":3}`} {
+		usage := updateUsage(nil, usageEvent("message_start", start))
+		usage = updateUsage(usage, usageEvent("message_delta", `{"output_tokens":7}`))
+		if !usage.InputIncomplete || usage.OutputIncomplete || usage.OutputTokens != 7 {
+			t.Fatalf("start %s lost input presence or reported output: %+v", start, usage)
+		}
+		usage = updateUsage(usage, usageEvent("message_delta", `{"input_tokens":0}`))
+		if usage.InputIncomplete || usage.InputTokens != 0 || usage.OutputTokens != 7 {
+			t.Fatalf("start %s did not preserve an explicit zero: %+v", start, usage)
+		}
+	}
+	usage := updateUsage(nil, usageEvent("message_start", `{"input_tokens":0}`))
+	if usage.InputIncomplete {
+		t.Fatalf("explicit zero in start was treated as absent: %+v", usage)
+	}
+}

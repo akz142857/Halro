@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -143,12 +145,16 @@ func TestBatchBillingHoldsBudgetUntilTerminalUsageAndSettlesOnce(t *testing.T) {
 
 type billedVideoAdapter struct {
 	inferenceResourcesAdapter
-	starts int
-	state  string
+	starts   int
+	state    string
+	startErr error
 }
 
 func (a *billedVideoAdapter) StartAsyncInvoke(context.Context, provider.AsyncInvokeCall) (provider.AsyncInvokeObject, error) {
 	a.starts++
+	if a.startErr != nil {
+		return provider.AsyncInvokeObject{}, a.startErr
+	}
 	return provider.AsyncInvokeObject{InvocationARN: "arn:aws:bedrock:test", Status: "InProgress"}, nil
 }
 
@@ -216,6 +222,203 @@ func TestVideoBillingReservesDurationWithoutBlockingPoll(t *testing.T) {
 	}
 }
 
+func TestResourcePreDispatchWriteFailureAllowsRetry(t *testing.T) {
+	ctx := context.Background()
+	adapter := &billedVideoAdapter{inferenceResourcesAdapter: inferenceResourcesAdapter{providerType: string(domain.ProviderBedrock)}, state: "Completed"}
+	target := inferenceResourcesTargetFor("video", adapter)
+	target.ProviderModel = "amazon.nova-reel-v1:0"
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileBedrockAsyncNovaReel, adapter, target, nil)
+	defer f.close()
+	configureJobPrice(t, f, 0, 100_000_000_000, 0)
+	f.store.failInFlightWrite = true
+	request := openaiapi.AsyncInvokeRequest{Model: "video", Prompt: "clouds", S3OutputURI: "s3://out/video", DurationSeconds: 6}
+	const key = "retry-undispatched-video"
+	if _, err := f.service.StartAsyncInvoke(ctx, f.plaintext, key, request); err == nil || adapter.starts != 0 {
+		t.Fatalf("pre-dispatch write error = %v, upstream starts = %d", err, adapter.starts)
+	}
+	resource, ok, err := f.store.ProviderResourceByIdempotency(ctx, f.project.ID, domain.ResourceAsyncInvoke, sha256.Sum256([]byte(key)))
+	if err != nil || !ok || resource.CreationStatus != creationReserved || resource.ReservedBy != "" || resource.AttemptID != "" {
+		t.Fatalf("pre-dispatch refusal stranded reservation: %+v, found %t, err %v", resource, ok, err)
+	}
+	if got := currentJobBalance(f); got.ReservedMicrosUSD != 0 || got.CommittedMicrosUSD != 0 {
+		t.Fatalf("pre-dispatch refusal charged or held funds: %+v", got)
+	}
+	job, err := f.service.StartAsyncInvoke(ctx, f.plaintext, key, request)
+	if err != nil || job.InvocationARN != resource.ID || adapter.starts != 1 {
+		t.Fatalf("retry job = %+v, error = %v, upstream starts = %d", job, err, adapter.starts)
+	}
+}
+
+func TestRefusedResourceIsReclaimableAndFailedJobSettles(t *testing.T) {
+	ctx := context.Background()
+	adapter := &billedVideoAdapter{
+		inferenceResourcesAdapter: inferenceResourcesAdapter{providerType: string(domain.ProviderBedrock)},
+		state:                     "Failed", startErr: &provider.Error{Class: provider.ErrorBadRequest, StatusCode: 400},
+	}
+	target := inferenceResourcesTargetFor("video", adapter)
+	target.ProviderModel = "amazon.nova-reel-v1:0"
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileBedrockAsyncNovaReel, adapter, target, nil)
+	defer f.close()
+	configureJobPrice(t, f, 0, 100_000_000_000, 0)
+	request := openaiapi.AsyncInvokeRequest{Model: "video", Prompt: "clouds", S3OutputURI: "s3://out/video", DurationSeconds: 6}
+	const key = "retry-refused-video"
+	_, err := f.service.StartAsyncInvoke(ctx, f.plaintext, key, request)
+	var gatewayFailure *Error
+	if !errors.As(err, &gatewayFailure) || gatewayFailure.HTTPStatus != 400 || adapter.starts != 1 {
+		t.Fatalf("provider refusal = %v, starts = %d", err, adapter.starts)
+	}
+	if got := currentJobBalance(f); got.ReservedMicrosUSD != 0 || got.CommittedMicrosUSD != 0 {
+		t.Fatalf("unserved refusal charged or held funds: %+v", got)
+	}
+	adapter.startErr = nil
+	job, err := f.service.StartAsyncInvoke(ctx, f.plaintext, key, request)
+	if err != nil || adapter.starts != 2 {
+		t.Fatalf("retry = %+v, starts = %d, error = %v", job, adapter.starts, err)
+	}
+	if status, err := f.service.GetAsyncInvoke(ctx, f.plaintext, job.InvocationARN); err != nil || status.Status != "Failed" {
+		t.Fatalf("terminal provider failure = %+v, error = %v", status, err)
+	}
+	if got := currentJobBalance(f); got.ReservedMicrosUSD != 0 || got.CommittedMicrosUSD != 600_000 {
+		t.Fatalf("terminal provider failure did not settle: %+v", got)
+	}
+}
+
+type jobResourceWriteFaultStore struct {
+	*inferenceResourcesMemoryStore
+	commitBeforeError bool
+	failed            bool
+}
+
+func (s *jobResourceWriteFaultStore) PutProviderResource(ctx context.Context, resource domain.ProviderResource, revision uint64) (domain.ProviderResource, error) {
+	if resource.Kind == domain.ResourceAsyncInvoke && resource.CreationStatus == creationCompleted && !s.failed {
+		s.failed = true
+		if s.commitBeforeError {
+			if _, err := s.inferenceResourcesMemoryStore.PutProviderResource(ctx, resource, revision); err != nil {
+				return domain.ProviderResource{}, err
+			}
+		}
+		return domain.ProviderResource{}, errors.New("injected job identity write failure")
+	}
+	return s.inferenceResourcesMemoryStore.PutProviderResource(ctx, resource, revision)
+}
+
+func TestAcceptedResourceIdentityWriteFailureReconcilesOriginalJob(t *testing.T) {
+	for name, persisted := range map[string]bool{"write_failed": false, "confirmation_failed": true} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			adapter := &billedVideoAdapter{inferenceResourcesAdapter: inferenceResourcesAdapter{providerType: string(domain.ProviderBedrock)}, state: "Completed"}
+			target := inferenceResourcesTargetFor("video", adapter)
+			target.ProviderModel = "amazon.nova-reel-v1:0"
+			f := newInferenceResourcesServiceFixture(t, domain.ProfileBedrockAsyncNovaReel, adapter, target, nil)
+			defer f.close()
+			configureJobPrice(t, f, 0, 100_000_000_000, 0)
+			f.service.resources = &jobResourceWriteFaultStore{inferenceResourcesMemoryStore: f.store, commitBeforeError: persisted}
+			request := openaiapi.AsyncInvokeRequest{Model: "video", Prompt: "clouds", S3OutputURI: "s3://out/video", DurationSeconds: 6}
+			const key = "recover-accepted-video"
+			if _, err := f.service.StartAsyncInvoke(ctx, f.plaintext, key, request); err == nil || adapter.starts != 1 {
+				t.Fatalf("lost identity write error = %v, upstream starts = %d", err, adapter.starts)
+			}
+			if got := currentJobBalance(f); got.ReservedMicrosUSD != 600_000 || got.CommittedMicrosUSD != 0 {
+				t.Fatalf("lost identity write changed pending hold: %+v", got)
+			}
+			f.service.ReconcileProviderResourceBilling(ctx)
+			job, err := f.service.StartAsyncInvoke(ctx, f.plaintext, key, request)
+			if err != nil || job.InvocationARN == "" || job.Status != "Completed" || adapter.starts != 1 {
+				t.Fatalf("recovered job = %+v, err = %v, upstream starts = %d", job, err, adapter.starts)
+			}
+			if got := currentJobBalance(f); got.ReservedMicrosUSD != 0 || got.CommittedMicrosUSD != 600_000 {
+				t.Fatalf("recovered job was not settled once: %+v", got)
+			}
+		})
+	}
+}
+
+func TestUnknownResourceReconcilesFailedSettlement(t *testing.T) {
+	ctx := context.Background()
+	adapter := &billedVideoAdapter{inferenceResourcesAdapter: inferenceResourcesAdapter{providerType: string(domain.ProviderBedrock)}, state: "InProgress"}
+	target := inferenceResourcesTargetFor("video", adapter)
+	target.ProviderModel = "amazon.nova-reel-v1:0"
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileBedrockAsyncNovaReel, adapter, target, nil)
+	defer f.close()
+	configureJobPrice(t, f, 0, 100_000_000_000, 0)
+	job, err := f.service.StartAsyncInvoke(ctx, f.plaintext, "unknown-video", openaiapi.AsyncInvokeRequest{
+		Model: "video", Prompt: "clouds", S3OutputURI: "s3://out/video", DurationSeconds: 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resource, err := f.store.ProviderResource(ctx, f.project.ID, job.InvocationARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resource.CreationStatus, resource.UpstreamID = creationUnknown, ""
+	resource, err = f.store.PutProviderResource(ctx, resource, resource.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := f.service.settleUnconfirmedResource(canceled, resource); !errors.Is(err, context.Canceled) {
+		t.Fatalf("initial settlement error = %v", err)
+	}
+	f.service.ReconcileProviderResourceBilling(ctx)
+	f.service.ReconcileProviderResourceBilling(ctx)
+	if got := currentJobBalance(f); got.ReservedMicrosUSD != 0 || got.CommittedMicrosUSD != 600_000 {
+		t.Fatalf("unknown job did not recover once: %+v", got)
+	}
+}
+
+type blockedVideoSubmission struct {
+	billedVideoAdapter
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (a *blockedVideoSubmission) StartAsyncInvoke(ctx context.Context, call provider.AsyncInvokeCall) (provider.AsyncInvokeObject, error) {
+	close(a.entered)
+	select {
+	case <-a.release:
+		return a.billedVideoAdapter.StartAsyncInvoke(ctx, call)
+	case <-ctx.Done():
+		return provider.AsyncInvokeObject{}, ctx.Err()
+	}
+}
+
+func TestResourceReconciliationLeavesActiveSubmissionReserved(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	adapter := &blockedVideoSubmission{
+		billedVideoAdapter: billedVideoAdapter{inferenceResourcesAdapter: inferenceResourcesAdapter{providerType: string(domain.ProviderBedrock)}, state: "InProgress"},
+		entered:            make(chan struct{}), release: make(chan struct{}),
+	}
+	target := inferenceResourcesTargetFor("video", adapter)
+	target.ProviderModel = "amazon.nova-reel-v1:0"
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileBedrockAsyncNovaReel, adapter, target, nil)
+	defer f.close()
+	configureJobPrice(t, f, 0, 100_000_000_000, 0)
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.service.StartAsyncInvoke(ctx, f.plaintext, "held-active-video", openaiapi.AsyncInvokeRequest{
+			Model: "video", Prompt: "clouds", S3OutputURI: "s3://out/video", DurationSeconds: 6,
+		})
+		done <- err
+	}()
+	select {
+	case <-adapter.entered:
+	case err := <-done:
+		t.Fatalf("submission never called upstream: %v", err)
+	}
+	f.service.ReconcileProviderResourceBilling(ctx)
+	got := currentJobBalance(f)
+	close(adapter.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got.ReservedMicrosUSD != 600_000 || got.CommittedMicrosUSD != 0 {
+		t.Fatalf("reconciliation settled an active submission: %+v", got)
+	}
+}
+
 func TestInterruptedStreamChargesOnlyMissingOutputAsEstimated(t *testing.T) {
 	usage := &semantic.Usage{InputTokens: 10, CachedInputTokens: 5, OutputTokens: 2, TotalTokens: 12, OutputIncomplete: true, Source: semantic.UsageProviderReported}
 	target := provider.Target{InputMicrosPerMillion: 1_000_000, CachedInputMicrosPerMillion: 200_000, OutputMicrosPerMillion: 2_000_000}
@@ -269,5 +472,65 @@ func TestConcurrentVideoSettlementCommitsOnce(t *testing.T) {
 	}
 	if got := currentJobBalance(f); got.ReservedMicrosUSD != 0 || got.CommittedMicrosUSD != 600_000 {
 		t.Fatalf("concurrent settlement balance = %+v", got)
+	}
+}
+
+func TestStreamSettlementEstimatesMissingInputAndRetainsReportedOutput(t *testing.T) {
+	target := provider.Target{InputMicrosPerMillion: 1_000_000, OutputMicrosPerMillion: 2_000_000,
+		CachedInputMicrosPerMillion: 500_000}
+	usage := &semantic.Usage{
+		InputIncomplete: true, InputTokens: 4, CachedInputTokens: 4,
+		OutputTokens: 7, TotalTokens: 11, Source: semantic.UsageProviderReported,
+	}
+	settlement := streamSettlement(usage, nil, true, 12, 100, 6, target, 212)
+	if settlement.ProviderInputTokens != 12 || settlement.EstimatedInputTokens != 8 ||
+		settlement.ProviderCachedInputTokens != 4 || settlement.ProviderOutputTokens != 7 ||
+		settlement.EstimatedOutputTokens != 0 || settlement.TokenEstimated || !settlement.CostEstimated ||
+		settlement.CommittedMicrosUSD != 24 {
+		t.Fatalf("mixed settlement = %+v", settlement)
+	}
+}
+
+func TestBatchSettlementRetainsReportedUsageWhenAResultIsMissing(t *testing.T) {
+	ctx := context.Background()
+	adapter := &billedBatchAdapter{batchResultsAdapter: batchResultsAdapter{
+		inferenceResourcesAdapter: inferenceResourcesAdapter{providerType: string(domain.ProviderAnthropic)},
+		results:                   []byte("{\"custom_id\":\"reported\",\"response\":{\"status_code\":200,\"body\":{\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":2,\"total_tokens\":6}}}}\n"),
+	}}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileAnthropicMessages, adapter, inferenceResourcesTargetFor("resources", adapter), nil)
+	defer f.close()
+	configureJobPrice(t, f, 1_000_000, 2_000_000, 200)
+	file, err := f.service.CreateFile(ctx, f.plaintext, "resources", "mixed-batch-input", provider.FileCreateCall{
+		Filename: "batch.jsonl", Purpose: "batch", ContentType: "application/jsonl",
+		Data: []byte("{\"custom_id\":\"reported\",\"method\":\"POST\",\"url\":\"/v1/chat/completions\",\"body\":{\"model\":\"resources\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":10}}\n" +
+			"{\"custom_id\":\"missing\",\"method\":\"POST\",\"url\":\"/v1/chat/completions\",\"body\":{\"model\":\"resources\",\"messages\":[{\"role\":\"user\",\"content\":\"world\"}],\"max_tokens\":12}}\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := f.service.CreateBatch(ctx, f.plaintext, "mixed-batch", provider.BatchCreateCall{
+		InputFileID: file.ID, Endpoint: "/v1/chat/completions", CompletionWindow: "24h",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.batch = provider.BatchObject{ID: "msgbatch_1", Status: "completed", ResultsURL: "https://api.anthropic.com/result"}
+	if _, err := f.service.GetBatch(ctx, f.plaintext, batch.ID); err != nil {
+		t.Fatal(err)
+	}
+	var settled ledger.Event
+	if _, err := f.log.Replay(ledger.Watermark{}, func(record ledger.Record) error {
+		if record.Event.CompleteResourceRequest && record.Event.ProviderResourceID == batch.ID {
+			settled = record.Event
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if settled.TokenUsageSource != ledger.TokenUsageSourceMixedInput || !settled.CostEstimated || settled.TokenEstimated ||
+		settled.EstimatedInputTokens <= 0 || settled.EstimatedOutputTokens != 12 ||
+		settled.ProviderInputTokens-settled.EstimatedInputTokens != 4 ||
+		settled.ProviderOutputTokens-settled.EstimatedOutputTokens != 2 {
+		t.Fatalf("settled mixed Batch job = %+v", settled)
 	}
 }
