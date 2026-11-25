@@ -639,6 +639,13 @@ the lockfile integrity and retains byte-identical Apache-2.0, additional
 MIT, and vendored qs license files. No transitive versions change.
 These SDKs are confined to compatibility tests.
 
+The 2026-11-25 Go OpenAI SDK compatibility update (#528)
+upgrades `github.com/openai/openai-go/v3` from 3.98.0 to 3.100.0
+under the same Apache-2.0 license. Thirteen AWS SDK modules and Smithy
+also move in the isolated compatibility module's checksum file.
+The module paths, LICENSE files, and applicable NOTICE files are unchanged.
+These SDKs are confined to compatibility tests.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -654,8 +661,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `go.sum`: `fa1db6415f270cc09ab06b5b4694a1bcc78922b5`
 - `web/package.json`: `654a40d723e005f7f4603eebde214526ed29a010`
 - `web/package-lock.json`: `85aeb9d673fd173a36bd159ff1bcbdc481496461`
-- `tests/compatibility/go/go.mod`: `773676f6449c95c2b9f3ea98d70003de7c4aa014`
-- `tests/compatibility/go/go.sum`: `504b5da47dd9e08145d2f8fcf0afc8f6a445d91c`
+- `tests/compatibility/go/go.mod`: `dcd748f8c9de07f96d3684a44c46171deb03ab70`
+- `tests/compatibility/go/go.sum`: `9a8d56b6c70b6587958234bfb531d3320ff52b34`
 - `tests/compatibility/node/package.json`: `b51bfe5795d48ee30b1f481d92891e1576f274e5`
 - `tests/compatibility/node/package-lock.json`: `6a735804b7a55336e66a1f50cf61c66970eb88ae`
 - `tests/compatibility/python/requirements.in`: `83faff2527d7acc243f2228fd1bcb3426f8ce8d1`
