@@ -35,6 +35,11 @@ Usage schema 9 adds `provider_cache_write_long_input_tokens`, the long-lived
 subset of `provider_cache_write_input_tokens`. Schema 3–8 partitions remain
 readable and return zero for the new counter.
 
+Usage schema 10 adds `estimated_output_tokens` for the estimated subset of
+an otherwise provider-reported output count and `video_seconds` for
+duration-based asynchronous video. Earlier partitions read both columns as
+zero. Video seconds are separate from token totals.
+
 ## The console checkpoint
 
 The aggregate the console reads is checkpointed into `metadata.db` so a restart

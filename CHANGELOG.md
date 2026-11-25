@@ -6,6 +6,27 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- Report cache-write charges based on inherited rates or an unreported
+  lifetime split as estimated. Preserve reported token counts and the charge
+  calculated from the pinned rates.
+- Estimate a Messages charge when the upstream omits its usage counters.
+  Preserve reported output tokens across stream events that omit them.
+- Compare Token Guard limits without integer overflow and keep very large
+  budget pressure totals visible.
+- Honor fixed-fee exemptions on resource polls, including recovered attempts.
+- Estimate the missing output of interrupted streams while preserving reported
+  tokens and cache tiers.
+- Reserve Batch and asynchronous video costs at submission. Settle once at
+  completion or reconcile unpolled jobs in resource maintenance.
+
+### Upgrading
+
+- Upgrade all members of an HA cluster together. Resource settlements and
+  mixed stream usage require the new peer accounting contract. Restore a
+  verified pre-upgrade backup when rolling back.
+
 ## [0.17.0] - 2026-11-19
 
 ### Changed

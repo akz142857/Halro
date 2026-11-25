@@ -163,6 +163,26 @@ func (t PriceTier) writesShareInputRounding() bool {
 		(t.Provenance == nil || !t.Provenance.SeparateCacheWriteRounding)
 }
 
+// CacheWriteCostEstimated reports whether the charge uses an inherited rate or
+// depends on a lifetime split the provider did not reliably report.
+func (t PriceTier) CacheWriteCostEstimated(tokens BilledTokens, exactSplit bool) bool {
+	if tokens.CacheWrite == 0 {
+		return false
+	}
+	if !exactSplit {
+		// Equal rates can still differ by one micro-dollar when the split
+		// forces separate rounding of fractional charges.
+		if t.CacheWriteMicrosPerMillion != t.CacheWriteLongMicrosPerMillion ||
+			(tokens.CacheWrite > 1 && !t.writesShareInputRounding() && t.CacheWriteMicrosPerMillion%microsPerUSD != 0) {
+			return true
+		}
+	}
+	shortRateAssumed := !t.ShortExplicit && t.CacheWriteMicrosPerMillion == t.InputMicrosPerMillion
+	longRateAssumed := !t.LongExplicit && t.CacheWriteLongMicrosPerMillion == t.InputMicrosPerMillion
+	return (shortRateAssumed && (!exactSplit || tokens.CacheWrite > tokens.CacheWriteLong)) ||
+		(longRateAssumed && (!exactSplit || tokens.CacheWriteLong > 0))
+}
+
 type inputPriceSpan struct{ tokens, rate int64 }
 
 func (t PriceTier) inputSpans(tokens BilledTokens) [4]inputPriceSpan {

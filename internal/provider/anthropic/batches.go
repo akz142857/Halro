@@ -15,6 +15,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/anthropicapi"
 	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/semantic"
 
 	"github.com/akz142857/Halro/internal/compatibility"
 	anthropicwire "github.com/akz142857/Halro/internal/compatibility/anthropic"
@@ -465,6 +466,39 @@ func batchResultErrorCode(raw json.RawMessage) string {
 // read under. A batch whose results exceed it fails with a bound the caller can
 // act on rather than being truncated into a file that looks complete.
 func (adapter *Adapter) FetchBatchResults(ctx context.Context, requestID, id, resultsURL string) ([]byte, error) {
+	raw, err := adapter.fetchRawBatchResults(ctx, requestID, id, resultsURL)
+	if err != nil {
+		return nil, err
+	}
+	return renderBatchResults(id, raw)
+}
+
+func (adapter *Adapter) FetchBatchResultsWithUsage(ctx context.Context, requestID, id, resultsURL string) ([]byte, map[string]semantic.Usage, error) {
+	raw, err := adapter.fetchRawBatchResults(ctx, requestID, id, resultsURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	reported := make(map[string]semantic.Usage)
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	scanner.Buffer(make([]byte, 0, 64<<10), maxBatchInputLineBytes)
+	for scanner.Scan() {
+		var line batchResultLine
+		if json.Unmarshal(scanner.Bytes(), &line) != nil || line.Result.Type != "succeeded" {
+			continue
+		}
+		message, err := anthropicapi.DecodeMessage(line.Result.Message)
+		if err == nil && !message.UsageMissing {
+			reported[line.CustomID] = anthropicwire.DecodeUsage(message.Usage)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, nil, err
+	}
+	content, err := renderBatchResults(id, raw)
+	return content, reported, err
+}
+
+func (adapter *Adapter) fetchRawBatchResults(ctx context.Context, requestID, id, resultsURL string) ([]byte, error) {
 	expected := adapter.batchesPath(id + "/results")
 	if resultsURL != "" {
 		declared, err := url.Parse(resultsURL)
@@ -495,7 +529,7 @@ func (adapter *Adapter) FetchBatchResults(ctx context.Context, requestID, id, re
 			Cause:   err,
 		}
 	}
-	return renderBatchResults(id, raw)
+	return raw, nil
 }
 
 // renderBatchResults translates a whole results file line by line.

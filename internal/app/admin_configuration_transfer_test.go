@@ -474,6 +474,7 @@ func TestConfigurationPriceRequiresWriteRatesForBaseAndEachWindow(t *testing.T) 
 	price := domain.DeploymentPriceVersion{
 		BillingMode: domain.BillingModeMetered, InputMicrosPerMillion: 1_000_000,
 		CacheWriteMicrosPerMillion: 0, CacheWriteLongMicrosPerMillion: 1_500_000,
+		CacheWriteRateEvidence: domain.CacheWriteRateEvidence{ShortExplicit: true, LongExplicit: true},
 		Schedule: &domain.PriceSchedule{Timezone: "UTC", Windows: []domain.PriceWindow{{
 			StartMinute: 60, EndMinute: 120, InputMicrosPerMillion: 2_000_000,
 			CacheWriteMicrosPerMillion: 2_500_000, CacheWriteLongMicrosPerMillion: 0,

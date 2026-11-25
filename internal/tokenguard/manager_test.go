@@ -2,6 +2,7 @@ package tokenguard
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -70,6 +71,35 @@ func TestAttemptCostRecheckDoesNotReacquireNonCostDimensions(t *testing.T) {
 		t.Fatalf("unsafe recheck=%#v", decision)
 	}
 	lease.Release()
+}
+
+func TestCostLimitRejectsOverflowAtAdmissionAndRecheck(t *testing.T) {
+	policy := domain.TokenGuardPolicy{
+		ID: "guard_cost", Name: "cost", Enabled: true, Action: "observe",
+		CostMicrosPerMinute: math.MaxInt64, Revision: 1,
+	}
+	manager, err := New([]domain.TokenGuardPolicy{policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	input := Input{PolicyID: policy.ID, ProjectID: "prj", KeyID: "key", EstimatedCostMicrosUSD: math.MaxInt64 - 1, Now: now}
+	first := manager.Admit(input)
+	if !first.Allowed || first.Reason != "" {
+		t.Fatalf("first = %+v", first)
+	}
+	input.EstimatedCostMicrosUSD = 1
+	atLimit, lease := manager.Acquire(input)
+	if !atLimit.Allowed || atLimit.Reason != "" || lease == nil {
+		t.Fatalf("at limit = %+v", atLimit)
+	}
+	defer lease.Release()
+	if decision := manager.RecheckCost(lease, 2, now); decision.Allowed || decision.Reason != "cost_per_minute" {
+		t.Fatalf("recheck = %+v", decision)
+	}
+	if overLimit := manager.Admit(input); overLimit.Reason != "cost_per_minute" {
+		t.Fatalf("admission = %+v", overLimit)
+	}
 }
 
 func TestSingleViolationDoesNotBlockAndRepeatedViolationDoes(t *testing.T) {

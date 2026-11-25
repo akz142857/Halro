@@ -44,8 +44,9 @@ type DeploymentPriceProposal struct {
 	CachedInputMicrosPerMillion    int64 `json:"cached_input_micros_per_million"`
 	CacheWriteMicrosPerMillion     int64 `json:"cache_write_micros_per_million"`
 	CacheWriteLongMicrosPerMillion int64 `json:"cache_write_long_micros_per_million"`
-	OutputMicrosPerMillion         int64 `json:"output_micros_per_million"`
-	FixedRequestMicrosUSD          int64 `json:"fixed_request_micros_usd"`
+	CacheWriteRateEvidence
+	OutputMicrosPerMillion int64 `json:"output_micros_per_million"`
+	FixedRequestMicrosUSD  int64 `json:"fixed_request_micros_usd"`
 	// Schedule mirrors the adopted price version's time-of-day rule for the
 	// same reason the cache-read term does: adoption copies the proposal
 	// verbatim, so a proposal that could not carry the rule would silently

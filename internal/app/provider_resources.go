@@ -133,6 +133,7 @@ func (r *Runtime) sweepOrphanedProviderObjects(ctx context.Context) {
 }
 
 func (r *Runtime) reapProviderResources(ctx context.Context) {
+	r.gatewayService.ReconcileProviderResourceBilling(ctx)
 	expired, err := r.store.ExpiredProviderResources(ctx, time.Now().UTC())
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {

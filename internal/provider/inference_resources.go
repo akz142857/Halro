@@ -2,7 +2,9 @@ package provider
 
 import (
 	"context"
+
 	"encoding/json"
+	"github.com/akz142857/Halro/internal/semantic"
 	"time"
 )
 
@@ -131,6 +133,12 @@ type BatchObject struct {
 // BatchResultsAdapter is implemented by providers whose finished batches leave
 // their results somewhere Halro must collect, rather than as a file the caller
 // can already name. An upstream that returns an output file needs none of this.
+// BatchResultsUsageAdapter preserves provider usage that the public result
+// representation cannot express, such as Anthropic's cache-write lifetimes.
+type BatchResultsUsageAdapter interface {
+	FetchBatchResultsWithUsage(context.Context, string, string, string) ([]byte, map[string]semantic.Usage, error)
+}
+
 type BatchResultsAdapter interface {
 	FetchBatchResults(ctx context.Context, requestID, batchID, resultsURL string) ([]byte, error)
 }

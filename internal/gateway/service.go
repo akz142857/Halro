@@ -734,6 +734,8 @@ func (s *Service) startAttempt(
 		AccountRegionID: target.AccountRegionID,
 		ProviderModel:   target.ProviderModel, ProviderPrimitive: resolved.ProviderPrimitive(),
 		AttemptNumber: attemptNumber, RetryCount: targetTry, FallbackCount: targetIndex,
+		FixedFeeExempt: target.FixedFeeExempt, ProviderResourceID: target.ProviderResourceID,
+		CacheWriteRateEvidence: pricedTarget.CacheWriteRateEvidence,
 	}
 	var attempt budget.Attempt
 	if snapshot == nil {
@@ -839,6 +841,7 @@ func accountingTermsFromSnapshot(price domain.DeploymentPriceVersion, snapshot d
 	priced.CachedInputMicrosPerMillion = rates.CachedInputMicrosPerMillion
 	priced.CacheWriteMicrosPerMillion = rates.CacheWriteMicrosPerMillion
 	priced.CacheWriteLongMicrosPerMillion = rates.CacheWriteLongMicrosPerMillion
+	priced.CacheWriteRateEvidence = price.CacheWriteRateEvidence
 	priced.OutputMicrosPerMillion = rates.OutputMicrosPerMillion
 	priced.FixedRequestMicrosUSD = rates.FixedRequestMicrosUSD
 	priced.PriceScheduleTier = rates.Provenance
@@ -846,8 +849,11 @@ func accountingTermsFromSnapshot(price domain.DeploymentPriceVersion, snapshot d
 }
 
 func snapshotReservationCost(snapshot domain.PriceSnapshot, target provider.Target, inputTokens, outputTokens int64) (int64, error) {
+	if err := validateVideoQuote(snapshot, target); err != nil {
+		return 0, err
+	}
 	if target.OrdinaryInputEstimate {
-		cost, err := snapshot.Calculate(domain.BilledTokens{Input: inputTokens, Output: outputTokens})
+		cost, err := snapshot.CalculateAttempt(domain.BilledTokens{Input: inputTokens, Output: outputTokens}, target.FixedFeeExempt)
 		return cost.TotalCostMicrosUSD, err
 	}
 	return snapshot.ReservationCost(inputTokens, outputTokens)
@@ -889,7 +895,6 @@ func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settle
 	}
 	if attempt.accounting.LeaseMode == ledger.LeaseModeUnknownAllowed {
 		settlement.CommittedMicrosUSD = 0
-		settlement.CostEstimated = false
 	}
 	attempt.concurrency.Release()
 	attempt.run.recordProviderResult(providerErr, settlement)
@@ -1894,7 +1899,7 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 			}
 		}
 	}
-	if message.ID != "" {
+	if message.ID != "" && !message.UsageMissing {
 		usage := nativeAnthropicUsage(message.Usage)
 		semanticResult.Usage = &usage
 	}
@@ -2087,14 +2092,14 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 		providerErr = gate.Finish()
 	}
 	emitted := gate.emitted
-	deliveredBytes := gate.delivered
+	observedOutputBytes := gate.observedOutputBytes
 	semanticUsage := (*semantic.Usage)(nil)
 	if usage != nil {
 		converted := nativeAnthropicUsage(*usage)
 		semanticUsage = &converted
 	}
 	settlement := streamSettlement(semanticUsage, providerErr, emitted, inputTokens, outputTokens,
-		estimateInputTokens(deliveredBytes), attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD)
+		estimateOutputFromBytes(observedOutputBytes), attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD)
 	if err := attempt.finish(providerErr, settlement); err != nil {
 		return err
 	}
@@ -2311,15 +2316,15 @@ func (s *Service) inspectOutboundJSON(policyID string, payload json.RawMessage) 
 // briefly — bounded by the widest rule, not by the block — and an event whose
 // text turns out to need rewriting is never emitted at all.
 type nativeStreamGate struct {
-	inspector *redaction.StreamInspector
-	policyID  string
-	service   *Service
-	emit      func(anthropicapi.RawStreamEvent) error
-	queue     []gatedStreamEvent
-	pushed    map[string]int64
-	confirmed map[string]int64
-	delivered int64
-	emitted   bool
+	inspector           *redaction.StreamInspector
+	policyID            string
+	service             *Service
+	emit                func(anthropicapi.RawStreamEvent) error
+	queue               []gatedStreamEvent
+	pushed              map[string]int64
+	confirmed           map[string]int64
+	observedOutputBytes int64
+	emitted             bool
 }
 
 type gatedStreamEvent struct {
@@ -2355,6 +2360,7 @@ func (g *nativeStreamGate) Accept(event anthropicapi.RawStreamEvent, payload jso
 	}
 	switch {
 	case channel != "":
+		g.observedOutputBytes += int64(len(text))
 		confirmed, err := g.inspector.Push(channel, strings.HasSuffix(channel, ":input_json_delta"), text)
 		if err != nil {
 			return err
@@ -2430,7 +2436,6 @@ func (g *nativeStreamGate) drain() error {
 		if err := g.emit(head.event); err != nil {
 			return err
 		}
-		g.delivered += int64(len(head.event.Data))
 		g.emitted = true
 	}
 	return nil
@@ -2628,7 +2633,7 @@ func (s *Service) generateStream(
 			}
 			totalAttempts++
 			attemptEmitted := false
-			attemptDeliveredBytes := int64(0)
+			attemptObservedOutputBytes := int64(0)
 			streamRedactor, streamErr := s.redactor.NewStream(
 				principal.Project.RedactionPolicyID,
 			)
@@ -2660,6 +2665,7 @@ func (s *Service) generateStream(
 				if conversionErr != nil {
 					return conversionErr
 				}
+				attemptObservedOutputBytes += deliveredChunkBytes(chunk)
 				chunks, redactionErr := streamRedactor.Process(chunk)
 				if redactionErr != nil {
 					return redactionErr
@@ -2669,7 +2675,7 @@ func (s *Service) generateStream(
 					if err := emit(safeChunk); err != nil {
 						return err
 					}
-					attemptDeliveredBytes += deliveredChunkBytes(safeChunk)
+
 					attemptEmitted = true
 					emitted = true
 				}
@@ -2688,7 +2694,7 @@ func (s *Service) generateStream(
 					safeChunk.Model = publicModel
 					providerErr = emit(safeChunk)
 					if providerErr == nil {
-						attemptDeliveredBytes += deliveredChunkBytes(safeChunk)
+
 						attemptEmitted = true
 						emitted = true
 					}
@@ -2696,7 +2702,7 @@ func (s *Service) generateStream(
 			}
 			settlement := streamSettlement(
 				semanticUsage, providerErr, attemptEmitted, inputTokens, outputTokens,
-				estimateInputTokens(attemptDeliveredBytes),
+				estimateOutputFromBytes(attemptObservedOutputBytes),
 				attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD,
 			)
 			if err := attempt.finish(providerErr, settlement); err != nil {
@@ -3372,7 +3378,7 @@ func settlementForResult(
 		if validSemanticUsage(response.Usage) {
 			result.ProviderInputTokens = response.Usage.InputTokens
 			result.ProviderOutputTokens = response.Usage.OutputTokens
-			recordUsageTiers(&result, *response.Usage)
+			recordUsageTiers(&result, *response.Usage, target)
 			setSettlementCost(&result, target, reservationMicrosUSD, prepared)
 			return result
 		}
@@ -3393,7 +3399,7 @@ func settlementForResult(
 	} else {
 		result.ProviderInputTokens = response.Usage.InputTokens
 		result.ProviderOutputTokens = response.Usage.OutputTokens
-		recordUsageTiers(&result, *response.Usage)
+		recordUsageTiers(&result, *response.Usage, target)
 	}
 	setSettlementCost(&result, target, reservationMicrosUSD, prepared)
 	return result
@@ -3413,18 +3419,16 @@ func nativeAnthropicUsage(usage anthropicapi.Usage) semantic.Usage {
 	return anthropicwire.DecodeUsage(usage)
 }
 
-// recordUsageTiers copies the provider's token breakdown onto the settlement.
-//
-// Every tier it copies has its own rate on the price version — cache reads,
-// and cache writes at both of their lifetimes — so a reported tier is charged
-// at what it actually costs and needs no estimated flag. (A write tier used to
-// set CostEstimated, because it was charged at the ordinary input rate while
-// upstreams bill it at a premium; ADR 0028 gave it its rates.)
-func recordUsageTiers(result *budget.Settlement, usage semantic.Usage) {
+// recordUsageTiers keeps token evidence independent of the confidence in the
+// rate or lifetime mix used to price those tokens.
+func recordUsageTiers(result *budget.Settlement, usage semantic.Usage, target provider.Target) {
 	result.ProviderCachedInputTokens = usage.CachedInputTokens
 	result.ProviderCacheWriteInputTokens = usage.CacheWriteInputTokens
 	result.ProviderCacheWriteLongInputTokens = usage.CacheWriteLongInputTokens
 	result.ProviderReasoningTokens = usage.ReasoningTokens
+	result.CostEstimated = target.PriceTier().CacheWriteCostEstimated(domain.BilledTokens{
+		CacheWrite: usage.CacheWriteInputTokens, CacheWriteLong: usage.CacheWriteLongInputTokens,
+	}, usage.CacheWriteTTLPair != "")
 }
 
 // setSettlementCost bills the attempt at its pinned rates. An estimated
@@ -3432,6 +3436,9 @@ func recordUsageTiers(result *budget.Settlement, usage semantic.Usage) {
 // units use ordinary input. Settlement stores the split for Ledger validation.
 func setSettlementCost(result *budget.Settlement, target provider.Target, reservationMicrosUSD int64, prepared domain.BilledTokens) {
 	tier := target.PriceTier()
+	if tier.Provenance != nil && tier.Provenance.Source == domain.PriceTierZoneUnavailable {
+		result.CostEstimated = true
+	}
 	tokens := domain.BilledTokens{
 		Input:          result.ProviderInputTokens,
 		CachedInput:    result.ProviderCachedInputTokens,
@@ -3453,6 +3460,7 @@ func setSettlementCost(result *budget.Settlement, target provider.Target, reserv
 		}
 		result.PreparedOutputTokens = prepared.Output
 		result.ProviderReasoningTokens = 0
+		result.EstimatedOutputTokens = 0
 		result.TokenEstimated, result.CostEstimated = true, true
 		cost, err = tier.Calculate(tokens)
 	}
@@ -3560,9 +3568,15 @@ func streamSettlement(
 	if validSemanticUsage(usage) {
 		result.ProviderInputTokens = usage.InputTokens
 		result.ProviderOutputTokens = usage.OutputTokens
-		recordUsageTiers(&result, *usage)
+		recordUsageTiers(&result, *usage, target)
+		if usage.OutputIncomplete {
+			output := max(usage.OutputTokens, min(estimatedOutputTokens, deliveredOutputTokens))
+			result.EstimatedOutputTokens = output - usage.OutputTokens
+			result.ProviderOutputTokens = output
+			result.CostEstimated = true
+		}
 	} else if providerErr == nil || emitted {
-		estimate := cappedOutputEstimate(estimatedOutputTokens, deliveredOutputTokens)
+		estimate := cappedOutputEstimate(estimatedOutputTokens, max(1, deliveredOutputTokens))
 		result.ProviderInputTokens = estimatedInputTokens
 		result.ProviderOutputTokens = estimate
 		result.PreparedOutputTokens = estimate
@@ -3636,7 +3650,7 @@ func cappedOutputEstimate(estimated, delivered int64) int64 {
 }
 
 func validSemanticUsage(usage *semantic.Usage) bool {
-	if usage == nil || usage.Validate() != nil {
+	if usage == nil || usage.Source != semantic.UsageProviderReported || usage.Validate() != nil {
 		return false
 	}
 	if usage.InputTokens > maxAccountableTokens ||
@@ -3672,6 +3686,10 @@ func requestedOutputTokens(request semantic.GenerateRequest, projectLimit int64)
 		}
 	}
 	return requested, nil
+}
+
+func estimateOutputFromBytes(bytes int64) int64 {
+	return (bytes + 3) / 4
 }
 
 func estimateInputTokens(bytes int64) int64 {

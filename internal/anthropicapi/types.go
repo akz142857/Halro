@@ -717,6 +717,7 @@ func validateBlock(role string, block ContentBlock) error {
 }
 
 type Usage struct {
+	OutputIncomplete         bool                  `json:"-"`
 	InputTokens              int64                 `json:"input_tokens"`
 	OutputTokens             int64                 `json:"output_tokens"`
 	CacheCreationInputTokens int64                 `json:"cache_creation_input_tokens,omitempty"`
@@ -775,6 +776,7 @@ type Message struct {
 	StopReason   *string         `json:"stop_reason"`
 	StopSequence *string         `json:"stop_sequence"`
 	Usage        Usage           `json:"usage"`
+	UsageMissing bool            `json:"-"`
 	Raw          json.RawMessage `json:"-"`
 }
 
@@ -793,8 +795,26 @@ func DecodeMessage(payload []byte) (Message, error) {
 		return Message{}, errors.New("Anthropic message response has invalid size")
 	}
 	var message Message
-	if err := json.Unmarshal(payload, &message); err != nil {
+	wire := struct {
+		*Message
+		Usage *struct {
+			Usage
+			Input  *int64 `json:"input_tokens"`
+			Output *int64 `json:"output_tokens"`
+		} `json:"usage"`
+	}{Message: &message}
+	if err := json.Unmarshal(payload, &wire); err != nil {
 		return Message{}, err
+	}
+	message.UsageMissing = wire.Usage == nil || wire.Usage.Input == nil || wire.Usage.Output == nil
+	if wire.Usage != nil {
+		message.Usage = wire.Usage.Usage
+		if wire.Usage.Input != nil {
+			message.Usage.InputTokens = *wire.Usage.Input
+		}
+		if wire.Usage.Output != nil {
+			message.Usage.OutputTokens = *wire.Usage.Output
+		}
 	}
 	if message.ID == "" || message.Type != "message" || message.Role != "assistant" || message.Model == "" {
 		return Message{}, errors.New("Anthropic message response is missing required fields")

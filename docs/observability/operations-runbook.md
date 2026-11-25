@@ -226,7 +226,7 @@ This root probe does not perform a write or establish client-final success.
 
 ### HalroAccountingLeaseStale
 
-- Trigger: a pending Accounting Lease remains older than `max(gateway.route_total_timeout, gateway.stream_max_duration)` for two minutes. The exported `halro_accounting_pending_lease_normal_max_age_seconds` is that configured ceiling; the alert's `for` duration is scrape/jitter grace, not permission for a longer request.
+- Trigger: a pending interactive Accounting Lease remains older than `max(gateway.route_total_timeout, gateway.stream_max_duration)` for two minutes. The configured ceiling is exported as `halro_accounting_pending_lease_normal_max_age_seconds`. The alert's two-minute window allows for scrape jitter. Asynchronous provider jobs have a separate `halro_accounting_pending_resource_leases` gauge.
 - Immediate: correlate the oldest lease with active Provider attempts and request deadlines. Check for a stuck adapter, blocked network read, stalled Ledger writer, or an incomplete startup recovery; do not delete or edit the lease.
 - Recover: cancel or drain through the normal request lifecycle, or restart only through the documented graceful-shutdown path. Require a terminal Attempt settlement, a non-success Request finalization where appropriate, zero stale leases, and a healthy `halro doctor` result.
 - Escalate: page the accounting and Provider owners when the lease cannot be closed within one additional route timeout, or immediately if WAL/readiness is degraded. Treat the Provider result as ambiguous unless the durable attempt record proves it was never sent.

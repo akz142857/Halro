@@ -34,7 +34,9 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-const memberBinaryVersion uint16 = 1
+// Resource settlements also finalize the submitting request. Older members
+// cannot apply that transition or interpret mixed streaming usage.
+const memberBinaryVersion uint16 = 2
 
 const reseedRequiredMarker = "reseed-required"
 

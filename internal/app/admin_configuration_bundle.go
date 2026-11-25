@@ -86,6 +86,7 @@ type configurationDeployment struct {
 
 type configurationPrice struct {
 	BillingMode domain.BillingMode `json:"billing_mode"`
+	domain.CacheWriteRateEvidence
 	configurationPriceRates
 	Schedule *configurationPriceSchedule `json:"schedule,omitempty"`
 }
@@ -111,7 +112,10 @@ type configurationPriceWindow struct {
 }
 
 func exportConfigurationPrice(price domain.DeploymentPriceVersion) *configurationPrice {
-	out := &configurationPrice{BillingMode: price.BillingMode, configurationPriceRates: exportConfigurationPriceRates(price.BaseTier())}
+	out := &configurationPrice{
+		BillingMode: price.BillingMode, CacheWriteRateEvidence: price.CacheWriteRateEvidence,
+		configurationPriceRates: exportConfigurationPriceRates(price.BaseTier()),
+	}
 	if price.Schedule != nil {
 		out.Schedule = &configurationPriceSchedule{
 			Timezone: price.Schedule.Timezone, Windows: make([]configurationPriceWindow, 0, len(price.Schedule.Windows)),

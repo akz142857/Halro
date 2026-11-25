@@ -551,9 +551,12 @@ type Target struct {
 	CachedInputMicrosPerMillion    int64
 	CacheWriteMicrosPerMillion     int64
 	CacheWriteLongMicrosPerMillion int64
-	OutputMicrosPerMillion         int64
-	FixedRequestMicrosUSD          int64
-	PriceScheduleTier              *domain.PriceScheduleTier
+	domain.CacheWriteRateEvidence
+	OutputMicrosPerMillion int64
+	FixedRequestMicrosUSD  int64
+	PriceScheduleTier      *domain.PriceScheduleTier
+	ProviderResourceID     string
+	FixedFeeExempt         bool
 	// OrdinaryInputEstimate applies to embedding inputs and synthetic
 	// resource units that have no generation cache split.
 	OrdinaryInputEstimate bool
@@ -1235,13 +1238,18 @@ func (target Target) CapabilityModel() string {
 // reads, so that pricing an attempt against its target and against its frozen
 // snapshot go through the same code and cannot disagree by a micro-USD.
 func (t Target) PriceTier() domain.PriceTier {
+	fixedFee := t.FixedRequestMicrosUSD
+	if t.FixedFeeExempt {
+		fixedFee = 0
+	}
 	return domain.PriceTier{
 		InputMicrosPerMillion:          t.InputMicrosPerMillion,
 		CachedInputMicrosPerMillion:    t.CachedInputMicrosPerMillion,
 		CacheWriteMicrosPerMillion:     t.CacheWriteMicrosPerMillion,
 		CacheWriteLongMicrosPerMillion: t.CacheWriteLongMicrosPerMillion,
+		CacheWriteRateEvidence:         t.CacheWriteRateEvidence,
 		OutputMicrosPerMillion:         t.OutputMicrosPerMillion,
-		FixedRequestMicrosUSD:          t.FixedRequestMicrosUSD,
+		FixedRequestMicrosUSD:          fixedFee,
 		Provenance:                     t.PriceScheduleTier,
 	}
 }

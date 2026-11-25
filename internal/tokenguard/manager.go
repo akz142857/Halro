@@ -335,13 +335,12 @@ func (m *Manager) RecheckCost(lease *Lease, estimatedCostMicrosUSD int64, now ti
 	m.expireBuckets(current, now)
 	delta := estimatedCostMicrosUSD - lease.admittedCost
 	stats := aggregate(current, now.Add(-time.Minute))
-	projected := saturatingAdd(stats.cost, delta)
-	if policy.CostMicrosPerMinute > 0 && projected > policy.CostMicrosPerMinute {
+	if exceedsLimit(stats.cost, delta, policy.CostMicrosPerMinute) {
 		return Decision{Allowed: false, Status: StatusSuspicious, Reason: "cost_per_minute"}
 	}
-	if policy.EWMAEnabled && policy.EWMAAbsoluteCostMicrosPerMinute > 0 &&
-		projected > policy.EWMAAbsoluteCostMicrosPerMinute && current.baseline.Initialized &&
-		float64(projected) > current.baseline.CostPerMinute*policy.EWMAMultiplier {
+	if policy.EWMAEnabled && current.baseline.Initialized &&
+		exceedsLimit(stats.cost, delta, policy.EWMAAbsoluteCostMicrosPerMinute) &&
+		float64(stats.cost)+float64(delta) > current.baseline.CostPerMinute*policy.EWMAMultiplier {
 		return Decision{Allowed: false, Status: StatusSuspicious, Reason: "ewma_cost_per_minute"}
 	}
 	if bucket := current.buckets[lease.bucketStart]; bucket != nil {
@@ -894,9 +893,9 @@ func violationReason(policy domain.TokenGuardPolicy, input Input, stats windowSt
 	switch {
 	case policy.RequestTokens > 0 && input.EstimatedTokens > policy.RequestTokens:
 		return "request_tokens"
-	case policy.TokensPerMinute > 0 && stats.tokens+input.EstimatedTokens > policy.TokensPerMinute:
+	case exceedsLimit(stats.tokens, input.EstimatedTokens, policy.TokensPerMinute):
 		return "tokens_per_minute"
-	case policy.CostMicrosPerMinute > 0 && stats.cost+input.EstimatedCostMicrosUSD > policy.CostMicrosPerMinute:
+	case exceedsLimit(stats.cost, input.EstimatedCostMicrosUSD, policy.CostMicrosPerMinute):
 		return "cost_per_minute"
 	case policy.Concurrency > 0 && input.Concurrency > policy.Concurrency:
 		return "concurrency"
@@ -909,6 +908,12 @@ func violationReason(policy domain.TokenGuardPolicy, input Input, stats windowSt
 	default:
 		return ""
 	}
+}
+
+// Admission counters and estimates are nonnegative. Compare against remaining
+// headroom so the sum cannot overflow, even with the highest valid limit.
+func exceedsLimit(used, additional, limit int64) bool {
+	return limit > 0 && (additional > limit || used > limit-additional)
 }
 
 func uniqueSourceCount(stats windowStats, source [32]byte) int64 {
