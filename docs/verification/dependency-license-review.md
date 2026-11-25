@@ -633,6 +633,12 @@ byte-identical Apache-2.0 and vendored httpx-aiohttp license files. The
 combined lock keeps Anthropic 2.9.0 with no transitive version changes.
 These SDKs are confined to compatibility tests.
 
+The 2026-11-25 Node Anthropic SDK compatibility update (#529)
+upgrades `@anthropic-ai/sdk` from 1.7.0 to 1.9.0. The npm artifact matches
+the lockfile integrity and retains byte-identical Apache-2.0, additional
+MIT, and vendored qs license files. No transitive versions change.
+These SDKs are confined to compatibility tests.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -650,8 +656,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `web/package-lock.json`: `85aeb9d673fd173a36bd159ff1bcbdc481496461`
 - `tests/compatibility/go/go.mod`: `773676f6449c95c2b9f3ea98d70003de7c4aa014`
 - `tests/compatibility/go/go.sum`: `504b5da47dd9e08145d2f8fcf0afc8f6a445d91c`
-- `tests/compatibility/node/package.json`: `9ea13eaa9cbe048115e33eb6eb672e48025db057`
-- `tests/compatibility/node/package-lock.json`: `4e9519004b74a3696acaa9a9f1829e2dc5c31609`
+- `tests/compatibility/node/package.json`: `b51bfe5795d48ee30b1f481d92891e1576f274e5`
+- `tests/compatibility/node/package-lock.json`: `6a735804b7a55336e66a1f50cf61c66970eb88ae`
 - `tests/compatibility/python/requirements.in`: `83faff2527d7acc243f2228fd1bcb3426f8ce8d1`
 - `tests/compatibility/python/requirements.txt`: `6cb02e8a11186c547815065caa42589f671f8a2e`
 
