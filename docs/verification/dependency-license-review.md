@@ -621,6 +621,12 @@ All six remain MIT with byte-identical LICENSE files. The lockfile adds
 and removes no package paths. The embedded console is rebuilt from the
 updated lockfile.
 
+The 2026-11-25 Python Anthropic SDK compatibility update (#531)
+upgrades `anthropic` from 2.7.0 to 2.9.0. The hash-locked wheel retains
+byte-identical Apache-2.0 and MIT license files and the vendored
+httpx-aiohttp license and notice. No transitive versions change.
+These SDKs are confined to compatibility tests.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -640,8 +646,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `tests/compatibility/go/go.sum`: `504b5da47dd9e08145d2f8fcf0afc8f6a445d91c`
 - `tests/compatibility/node/package.json`: `9ea13eaa9cbe048115e33eb6eb672e48025db057`
 - `tests/compatibility/node/package-lock.json`: `4e9519004b74a3696acaa9a9f1829e2dc5c31609`
-- `tests/compatibility/python/requirements.in`: `7a97cfab0a029086015babb6ee01fd00cf4428a7`
-- `tests/compatibility/python/requirements.txt`: `c1b7932c641ad2109ebd105e4b87b335bfd38656`
+- `tests/compatibility/python/requirements.in`: `4396975aef519a28c7607bb229da1e07556f1179`
+- `tests/compatibility/python/requirements.txt`: `5840bdc5938f163b0a51fe0fc27ba5b658b97d13`
 
 The Python lock hash records the 2026-11-15 OpenTelemetry patch above.
 All ten hashes moved for the 2026-10-23 refreshes recorded above, and
