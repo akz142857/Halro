@@ -1,6 +1,6 @@
 # Dependency and License Review
 
-Date: 2026-11-16
+Date: 2026-11-25
 
 Halro is distributed under Apache-2.0. The source tree includes the project
 license in `LICENSE`, required attribution in `NOTICE`, and the runtime
@@ -17,16 +17,16 @@ module and lock files.
 
 | Module | Version | License | Distribution scope |
 |---|---:|---|---|
-| `github.com/aws/aws-sdk-go-v2` | 1.47.8 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/config` | 1.33.17 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/credentials` | 1.20.17 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.62.5 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2` | 1.48.0 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/config` | 1.33.19 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/credentials` | 1.21.1 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.63.0 | Apache-2.0 | runtime |
 | `github.com/aws/smithy-go` | 1.28.9 | Apache-2.0 | runtime |
 | `github.com/go-chi/chi/v5` | 5.5.0 | MIT | runtime |
 | `github.com/google/jsonschema-go` | 0.4.3 | MIT | test/release tooling |
 | `github.com/parquet-go/parquet-go` | 0.32.0 | Apache-2.0 | runtime |
 | `go.etcd.io/bbolt` | 1.5.0 | MIT | runtime |
-| `golang.org/x/crypto` | 0.58.0 | BSD-3-Clause | runtime |
+| `golang.org/x/crypto` | 0.59.0 | BSD-3-Clause | runtime |
 | `golang.org/x/sys` | 0.50.0 | BSD-3-Clause | runtime |
 | `gopkg.in/yaml.v3` | 3.0.1 | MIT and Apache-2.0 | runtime |
 
@@ -606,6 +606,13 @@ modules also move. All 15 modules retain byte-identical LICENSE and, where
 present, NOTICE files. The module path set and distribution notices are
 unchanged. The existing Parquet compression security pins are preserved.
 
+The 2026-11-25 Go runtime refresh (#533) updates four direct AWS SDK
+modules, ten indirect AWS modules, and `golang.org/x/crypto`. The module
+path sets in `go.mod` and `go.sum` are unchanged. The LICENSE and NOTICE
+files, where present, are byte-identical for all 15 updated modules. The
+AWS SDK now defaults to retry behavior 2.1. The KMS adapter still configures
+one attempt per SDK invocation.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -617,8 +624,8 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `2d3a0ad8b1288f6766cf9a2c5eb8c6d7deea037e`
-- `go.sum`: `6f8c4480662e038e09ec5182f9682a76bda7213c`
+- `go.mod`: `c9166192bc3ee5f0c3f3d3a282a3dcc18b588b44`
+- `go.sum`: `fa1db6415f270cc09ab06b5b4694a1bcc78922b5`
 - `web/package.json`: `83106c440c9f277dfc71d343a99eaf42695dbde9`
 - `web/package-lock.json`: `0ad71689c04c45e1891bb4debf0d944d6aa71dea`
 - `tests/compatibility/go/go.mod`: `773676f6449c95c2b9f3ea98d70003de7c4aa014`
