@@ -43,6 +43,7 @@ const (
 // bills reasoning at the output rate, so it is reported for observability and
 // must not be added to OutputTokens when pricing.
 type Usage struct {
+	InputIncomplete           bool              `json:"-"`
 	OutputIncomplete          bool              `json:"-"`
 	InputTokens               int64             `json:"input_tokens"`
 	CachedInputTokens         int64             `json:"cached_input_tokens,omitempty"`

@@ -696,6 +696,38 @@ describe("UsagePage failure detail", () => {
       expect(evidence).not.toHaveTextContent("保守上限");
     }
   });
+
+  it("shows the estimated portion of mixed token usage without relabeling cache writes", async () => {
+    vi.spyOn(api, "usage").mockResolvedValue({
+      items: [failedAttempt({
+        status: "success", provider_input_tokens: 40, provider_output_tokens: 12,
+        provider_cache_write_input_tokens: 30, provider_cache_write_long_input_tokens: 10,
+        tokens_estimated: true, token_usage_source: "gateway_estimated_mixed", estimated_input_tokens: 4, estimated_output_tokens: 3,
+      })] as never,
+      next_cursor: "",
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    expect(await screen.findByText(/40 输入 \/ 12 输出 · 含 4 个估算输入词元 · 含 3 个估算输出词元/)).toBeVisible();
+    const evidence = screen.getByText("计价证据").closest("details");
+    expect(evidence).toHaveTextContent("缓存写入 30（其中长时 10）");
+    expect(evidence).not.toHaveTextContent("保守上限");
+  });
+
+  it("displays video duration without counting it as tokens", async () => {
+    vi.spyOn(api, "usage").mockResolvedValue({
+      items: [failedAttempt({ status: "success", provider_input_tokens: 0, video_seconds: 6 })] as never,
+      next_cursor: "",
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    const row = (await screen.findByText("估算视频时长")).closest("tr")!;
+    expect(within(row).getByText("6 秒")).toBeVisible();
+    expect(within(row).queryByText("词元")).not.toBeInTheDocument();
+    expect(within(row).queryByText("服务商报告")).not.toBeInTheDocument();
+  });
 });
 
 function emptySummaryMetrics() {

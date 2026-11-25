@@ -421,9 +421,9 @@ func VerifySegments(directory string, key []byte, since uint64) ([]ChainReport, 
 			return nil, fmt.Errorf("%w: generation %d does not end at its recorded chain head",
 				ErrTampered, segment.Generation)
 		}
-		if verifier.epoch == frameVersionRunAttribution && segment.EndEpoch != uint8(frameVersionRunAttribution) {
-			return nil, fmt.Errorf("%w: generation %d omits or misstates its run-attribution epoch",
-				ErrCorrupt, segment.Generation)
+		if verifier.epoch >= frameVersionRunAttribution && segment.EndEpoch == 0 {
+			return nil, fmt.Errorf("%w: generation %d omits its authenticated epoch %d",
+				ErrCorrupt, segment.Generation, verifier.epoch)
 		}
 		if segment.EndEpoch != 0 && byte(segment.EndEpoch) != verifier.epoch {
 			return nil, fmt.Errorf("%w: generation %d ends at epoch %d, manifest says %d",

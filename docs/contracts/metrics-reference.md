@@ -302,7 +302,9 @@ Two kinds of counter are exported here and they do not reset together.
 `halro_requests_total`, `halro_attempts_total`, `halro_tokens_total` and
 `halro_cost_usd_total` are read-model totals: startup replays the Ledger into
 the Usage aggregate, so they carry the whole history of the data directory
-across restarts.
+across restarts. Batch and asynchronous job settlements enter the
+token and cost counters. Their terminal outcomes and completion times are
+excluded from the HTTP request and attempt counters and latency histograms.
 
 `halro_shutdown_truncated_attempts_total` is also durable. When
 `server.shutdown_timeout` expires, Halro counts Provider attempts still active

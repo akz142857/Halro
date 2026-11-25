@@ -32,6 +32,21 @@ func (r *Runtime) runProviderResourceMaintenance(ctx context.Context) {
 	}
 }
 
+// Provider status reads can take up to one timeout per outstanding job. Keep
+// them off the worker that expires resources and removes unreferenced objects.
+func (r *Runtime) runProviderResourceBilling(ctx context.Context) {
+	ticker := time.NewTicker(providerResourceReapInterval)
+	defer ticker.Stop()
+	for {
+		r.gatewayService.ReconcileProviderResourceBilling(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
 // orphanSettlingPeriod is how long a sealed object nothing names is left alone
 // before it is treated as an orphan.
 //
@@ -133,7 +148,6 @@ func (r *Runtime) sweepOrphanedProviderObjects(ctx context.Context) {
 }
 
 func (r *Runtime) reapProviderResources(ctx context.Context) {
-	r.gatewayService.ReconcileProviderResourceBilling(ctx)
 	expired, err := r.store.ExpiredProviderResources(ctx, time.Now().UTC())
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {

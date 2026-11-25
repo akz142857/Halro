@@ -154,12 +154,20 @@ A three-member promotion also needs a peer's durable promise. A lagging candidat
 
 - **Replica backup:** Run `cluster maintenance on` on the Replica and confirm that readiness fails while liveness stays healthy. Create an encrypted archive with `backup create --replica` and run `backup verify`. Run `maintenance off` and wait for catch-up. Then stop the Primary and record the verified archive with `cluster report-backup`. See the [runbook](../runbooks/ha-operations.md#replica-backup-and-reporting) for complete commands and file permissions.
 - **Whole-cluster restore:** Isolate all old members and client traffic. Restore a verified HA backup with a **new incarnation**, then seed every Replica. An old PVC retains the former incarnation and cannot simply rejoin; follow the [restore procedure](../runbooks/ha-operations.md#whole-cluster-restore).
-- **Upgrade:** Change one member at a time. Confirm it is not the active Primary; perform a `stepdown` first if necessary. Validate adjacent-version and schema compatibility using the [HA test guide](../verification/ha-test-guide.zh-CN.md). The example StatefulSet uses `OnDelete`; it does not choose the upgrade order for you.
+- **Compatible upgrades** follow the [HA test guide](../verification/ha-test-guide.zh-CN.md) to verify peer binary and schema compatibility. When adjacent versions are compatible, change one member at a time. Confirm the target member is not the active Primary and perform a `stepdown` first if necessary. The example StatefulSet uses `OnDelete` and leaves the upgrade order to the operator.
 
-The cache-write pricing upgrade moves metadata from schema 42 to 43. HA peers
-require a matching schema, and the new Primary requires a schema 43 projection.
-Plan this upgrade as an offline whole-cluster restore. Quiesce writes, confirm
-that the Replica covers the final durable index, and report a verified HA backup.
+The Batch and asynchronous inference accounting upgrade from v0.17.0 changes
+peer compatibility and writes authenticated Ledger epoch 6. Schedule a
+coordinated offline upgrade.
+Quiesce writes, verify a complete pre-upgrade backup, stop all members, and
+replace every member binary before restarting the cluster. Check peer catch-up
+and Primary readiness before restoring traffic. Roll back from the verified
+pre-upgrade backup using the [whole-cluster restore procedure](../runbooks/ha-operations.md#whole-cluster-restore).
+
+The earlier cache-write pricing upgrade moved metadata from schema 42 to 43.
+If upgrading from schema 42, perform an offline whole-cluster restore. Quiesce
+writes, confirm that the Replica covers the final durable index, and report a
+verified HA backup.
 Restore it with the new binary and a new incarnation, then seed the Replicas.
 Follow the [whole-cluster restore procedure](../runbooks/ha-operations.md#whole-cluster-restore).
 

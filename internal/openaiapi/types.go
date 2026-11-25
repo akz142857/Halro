@@ -195,6 +195,7 @@ type Choice struct {
 }
 
 type Usage struct {
+	InputIncomplete  bool  `json:"-"`
 	OutputIncomplete bool  `json:"-"`
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`

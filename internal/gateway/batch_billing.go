@@ -159,7 +159,8 @@ func (s *Service) settleBatchStatus(ctx context.Context, resource domain.Provide
 	tier := attempt.PriceSnapshot.Tier()
 	tier.CacheWriteRateEvidence = attempt.CacheWriteRateEvidence
 	var tokens domain.BilledTokens
-	var billed, tokensEstimated bool
+	var billed bool
+	var estimatedInput, estimatedOutput int64
 	costEstimated := tier.Provenance != nil && tier.Provenance.Source == domain.PriceTierZoneUnavailable
 	record := func(item domain.BilledTokens) error {
 		if item.Input > maxAccountableTokens-tokens.Input || item.Output > maxAccountableTokens-tokens.Output {
@@ -174,8 +175,13 @@ func (s *Service) settleBatchStatus(ctx context.Context, resource domain.Provide
 		return nil
 	}
 	useEstimate := func(bound batchItemBound) error {
-		costEstimated, tokensEstimated = true, true
-		return record(attempt.PriceSnapshot.ConservativeTokens(bound.Input, bound.Output))
+		if err := record(attempt.PriceSnapshot.ConservativeTokens(bound.Input, bound.Output)); err != nil {
+			return err
+		}
+		costEstimated = true
+		estimatedInput += bound.Input
+		estimatedOutput += bound.Output
+		return nil
 	}
 	addReported := func(usage *semantic.Usage) error {
 		item := domain.BilledTokens{Input: usage.InputTokens, CachedInput: usage.CachedInputTokens,
@@ -248,7 +254,15 @@ func (s *Service) settleBatchStatus(ctx context.Context, resource domain.Provide
 	if !billed {
 		return s.accounting.SettleResource(ctx, resource, budget.Settlement{Outcome: "provider_error"})
 	}
-	return s.settleResourceUsage(ctx, resource, attempt, tokens, costEstimated, tokensEstimated, outcome)
+	settlement := budget.Settlement{CostEstimated: costEstimated, Outcome: outcome}
+	if estimatedInput != 0 || estimatedOutput != 0 {
+		if estimatedInput == tokens.Input && estimatedOutput == tokens.Output {
+			settlement.TokenEstimated = true
+		} else {
+			settlement.EstimatedInputTokens, settlement.EstimatedOutputTokens = estimatedInput, estimatedOutput
+		}
+	}
+	return s.settleResourceUsage(ctx, resource, attempt, tokens, settlement)
 }
 
 func decodeBatchUsage(data []byte) *semantic.Usage {

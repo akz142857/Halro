@@ -337,3 +337,38 @@ func TestCheckpointCarriesTheDedupWindow(t *testing.T) {
 			after.CostMicrosUSD, after.Attempts, before.CostMicrosUSD, before.Attempts)
 	}
 }
+
+func TestDeferredSettlementRetainsAccountingWithoutSkewingGatewaySLIs(t *testing.T) {
+	aggregate := newTestAggregate(t)
+	now := time.Date(2026, 11, 26, 0, 0, 0, 0, time.UTC)
+	quote := usagePriceSnapshot(t, domain.BillingModeMetered, now)
+	*quote.CacheWriteMicrosPerMillion = 3_000_000
+	events := []ledger.Event{
+		{EventID: "accepted_job", Kind: ledger.EventRequestAccepted, RequestID: "req_job", ProjectID: "p",
+			PeriodID: "2026-11-26", OccurredAt: now},
+		{EventID: "settled_job", Kind: ledger.EventAttemptSettled, RequestID: "req_job", AttemptID: "att_job",
+			ProjectID: "p", PeriodID: "2026-11-26", OccurredAt: now.Add(3 * time.Hour), ProviderResourceID: "batch_job",
+			CompleteResourceRequest: true, Outcome: "provider_error", CommittedMicrosUSD: ledger.MicrosUSD(163),
+			PriceSnapshot: quote, CostEstimated: true, TokenUsageSource: ledger.TokenUsageSourceMixedInput,
+			ProviderInputTokens: 100, ProviderOutputTokens: 12, ProviderCacheWriteInputTokens: 45,
+			EstimatedInputTokens: 35, EstimatedOutputTokens: 7},
+	}
+	for index, event := range events {
+		if err := aggregate.Apply(ledger.Record{Generation: 1, Sequence: uint64(index + 1), Offset: int64(index + 1), Event: event}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot := snapshotOf(t, aggregate)
+	if snapshot.Totals.EstimatedInputTokens != 35 || snapshot.Totals.EstimatedOutputTokens != 7 ||
+		snapshot.Totals.CostMicrosUSD != 163 || snapshot.Totals.Requests != 1 || len(snapshot.Attempts) != 1 {
+		t.Fatalf("accounting totals = %+v", snapshot.Totals)
+	}
+	if attempt := snapshot.Attempts[0]; attempt.ProviderCacheWriteInputTokens != 10 || attempt.EstimatedInputTokens != 35 {
+		t.Fatalf("attempt usage = %+v", attempt)
+	}
+	metrics := aggregate.Metrics()
+	if metrics.RequestsError != 0 || metrics.AttemptsError != 0 ||
+		metrics.RequestLatencyMillis != 0 || metrics.AttemptLatencyBuckets[0] != 0 || metrics.ActiveRequests != 0 {
+		t.Fatalf("terminal job skewed request SLIs: %+v", metrics)
+	}
+}

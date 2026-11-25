@@ -20,6 +20,9 @@ import (
 	"github.com/akz142857/Halro/internal/durable"
 )
 
+// Schema 11 adds the mixed estimated input subset. Schema 10 added mixed
+// estimated output and video duration.
+//
 // Schema 9 adds the long-lived subset of cache writes. Older rows read as zero.
 //
 // Schema 8 adds account-region attribution and canonical provider failure
@@ -44,7 +47,7 @@ import (
 // reasoning spans that partition the input and output totals. Rows written under
 // schema 3 decode with those columns zero, which reads correctly as "no tier
 // reported" rather than as a tier of size zero.
-const parquetSchemaVersion = 10
+const parquetSchemaVersion = 11
 
 // parquetSchemaMinReadable is the oldest manifest this build still opens. Every
 // version from here to parquetSchemaVersion is accepted and upgraded in place;
@@ -101,6 +104,7 @@ type parquetAttempt struct {
 	TokenUsageSource                  string `parquet:"token_usage_source,dict" json:"token_usage_source"`
 	CostEstimated                     bool   `parquet:"cost_estimated" json:"cost_estimated"`
 	VideoSeconds                      int64  `parquet:"video_seconds" json:"video_seconds"`
+	EstimatedInputTokens              int64  `parquet:"estimated_input_tokens" json:"estimated_input_tokens"`
 	EstimatedOutputTokens             int64  `parquet:"estimated_output_tokens" json:"estimated_output_tokens"`
 	TokensEstimated                   bool   `parquet:"tokens_estimated" json:"tokens_estimated"`
 	StartedAtMicros                   int64  `parquet:"started_at_utc,timestamp(microsecond)" json:"started_at_utc"`
@@ -701,6 +705,9 @@ func (e *Exporter) safeManifestPath(relative string) (string, error) {
 // columns the row's own schema could express take part in the comparison.
 func narrowToSchema(row parquetAttempt, version int32) parquetAttempt {
 	row.SchemaVersion = version
+	if version < 11 {
+		row.EstimatedInputTokens = 0
+	}
 	if version < 10 {
 		row.EstimatedOutputTokens = 0
 		row.VideoSeconds = 0
@@ -823,7 +830,7 @@ func toParquetAttempt(attempt AttemptEvent) parquetAttempt {
 		}(),
 		PriceSnapshotJSON: snapshotJSON, InputCostMicrosUSD: inputCost, OutputCostMicrosUSD: outputCost, FixedCostMicrosUSD: fixedCost,
 		TokenUsageSource: string(attempt.TokenUsageSource), CostEstimated: attempt.CostEstimated,
-		TokensEstimated: attempt.TokensEstimated, EstimatedOutputTokens: attempt.EstimatedOutputTokens, VideoSeconds: attempt.VideoSeconds,
+		TokensEstimated: attempt.TokensEstimated, EstimatedInputTokens: attempt.EstimatedInputTokens, EstimatedOutputTokens: attempt.EstimatedOutputTokens, VideoSeconds: attempt.VideoSeconds,
 		StartedAtMicros:   attempt.StartedAt.UTC().UnixMicro(),
 		CompletedAtMicros: attempt.CompletedAt.UTC().UnixMicro(),
 		Status:            attempt.Status, ErrorClass: attempt.ErrorClass,

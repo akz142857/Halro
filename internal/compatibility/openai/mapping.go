@@ -487,6 +487,7 @@ func decodeUsage(usage *openaiapi.Usage) *semantic.Usage {
 		CacheWriteInputTokens:     usage.CacheWritePromptTokens(),
 		CacheWriteLongInputTokens: usage.CacheWriteLongTokens,
 		CacheWriteTTLPair:         semantic.CacheWriteTTLPair(usage.CacheWriteTTLPair),
+		InputIncomplete:           usage.InputIncomplete,
 		OutputIncomplete:          usage.OutputIncomplete,
 		OutputTokens:              usage.CompletionTokens,
 		ReasoningTokens:           usage.ReasoningTokens(),
@@ -533,6 +534,7 @@ func renderUsage(usage *semantic.Usage) *openaiapi.Usage {
 		CacheWriteTokens:     usage.CacheWriteInputTokens,
 		CacheWriteLongTokens: usage.CacheWriteLongInputTokens,
 		CacheWriteTTLPair:    string(usage.CacheWriteTTLPair),
+		InputIncomplete:      usage.InputIncomplete,
 		OutputIncomplete:     usage.OutputIncomplete,
 	}
 	rendered.SetCachedPromptTokens(usage.CachedInputTokens)

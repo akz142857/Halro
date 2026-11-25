@@ -1947,6 +1947,35 @@ describe("deployment price panel", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  it("identifies async video rates in the timeline, editor, and scheduled confirmation", async () => {
+    vi.mocked(api.deployments).mockResolvedValue({
+      items: [deployment("dep_1", {
+        profile_id: "bedrock.runtime.async.nova-reel-v1.v1",
+        capabilities: { ...existingDeployment.capabilities, chat: false, async_generate: true },
+      })],
+      next_cursor: "",
+    });
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({
+      items: [{ ...activePriceVersion(), input_micros_per_million: 0, output_micros_per_million: 80_000_000_000 }],
+      next_cursor: "",
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
+    expect(await screen.findByText("USD / 百万视频秒")).toBeVisible();
+    expect(screen.getByText(/视频时长 .* \/ 百万视频秒 · 每次调用固定/)).toBeVisible();
+    fireEvent.click(await screen.findByRole("button", { name: "调整价格" }));
+    expect(await screen.findByLabelText("视频时长 USD / 百万视频秒")).toHaveValue("80000");
+    fireEvent.click(screen.getByRole("checkbox", { name: /分时价位/ }));
+    expect(screen.getAllByLabelText("视频时长 USD / 百万视频秒")).toHaveLength(2);
+    fireEvent.change(screen.getByLabelText("服务商时区"), { target: { value: "berlin" } });
+    fireEvent.click(screen.getByRole("option", { name: /Europe\/Berlin/ }));
+    fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
+
+    expect(await screen.findByText("09:00–12:00 · $80000 / 百万视频秒，固定 $0 / 次调用")).toBeVisible();
+    expect(screen.getByText("6 秒视频约为 $0.480000，包含每次调用的固定费用。")).toBeVisible();
+  });
+
   // A failed price read used to render four static characters: no way back, and
   // nothing an assistive reader was told about.
   it("announces a failed price read and offers a retry", async () => {

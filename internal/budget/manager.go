@@ -110,6 +110,7 @@ type LeaseSpec struct {
 type Settlement struct {
 	CompleteResourceRequest bool
 	VideoSeconds            int64
+	EstimatedInputTokens    int64
 	EstimatedOutputTokens   int64
 	CommittedMicrosUSD      int64
 	ProviderInputTokens     int64
@@ -1161,9 +1162,10 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		settlement.ProviderOutputTokens < 0 ||
 		settlement.ProviderCachedInputTokens < 0 ||
 		settlement.ProviderReasoningTokens < 0 ||
-		settlement.PreparedOutputTokens < 0 || settlement.EstimatedOutputTokens < 0 ||
+		settlement.PreparedOutputTokens < 0 || settlement.EstimatedInputTokens < 0 || settlement.EstimatedOutputTokens < 0 ||
+		settlement.EstimatedInputTokens > settlement.ProviderInputTokens ||
 		settlement.EstimatedOutputTokens > settlement.ProviderOutputTokens ||
-		(settlement.TokenEstimated && settlement.EstimatedOutputTokens != 0) {
+		(settlement.TokenEstimated && (settlement.EstimatedInputTokens != 0 || settlement.EstimatedOutputTokens != 0)) {
 		return ErrInvalidAmount
 	}
 	// The tiers partition the input total. A sum that overruns it means a caller
@@ -1204,6 +1206,8 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		tokenSource = ledger.TokenUsageSourceProvider
 		if settlement.TokenEstimated {
 			tokenSource = ledger.TokenUsageSourceEstimate
+		} else if settlement.EstimatedInputTokens > 0 {
+			tokenSource = ledger.TokenUsageSourceMixedInput
 		} else if settlement.EstimatedOutputTokens > 0 {
 			tokenSource = ledger.TokenUsageSourceMixed
 		}
@@ -1239,6 +1243,7 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		InputCostMicrosUSD: inputCost, OutputCostMicrosUSD: outputCost, FixedCostMicrosUSD: fixedCost,
 		ProviderInputTokens:               settlement.ProviderInputTokens,
 		ProviderOutputTokens:              settlement.ProviderOutputTokens,
+		EstimatedInputTokens:              settlement.EstimatedInputTokens,
 		EstimatedOutputTokens:             settlement.EstimatedOutputTokens,
 		ProviderCachedInputTokens:         settlement.ProviderCachedInputTokens,
 		ProviderCacheWriteInputTokens:     settlement.ProviderCacheWriteInputTokens,
@@ -1412,6 +1417,17 @@ func (m *Manager) SettleResource(ctx context.Context, resource domain.ProviderRe
 		return nil
 	}
 	settlement.CompleteResourceRequest = true
+	// Terminal job status often supplies no HTTP error. Give failed jobs
+	// valid Ledger semantics without claiming details from the upstream.
+	if settlement.FailurePhase == "" {
+		switch settlement.Outcome {
+		case "provider_error":
+			settlement.FailurePhase = "provider"
+			settlement.ErrorClass = string(provider.ErrorUnknown)
+		case "resource_usage_unavailable":
+			settlement.FailurePhase = "accounting"
+		}
+	}
 	return m.Settle(ctx, attempt, settlement)
 }
 
@@ -1501,6 +1517,9 @@ func (m *Manager) appendApplyRecord(ctx context.Context, event ledger.Event) (le
 	}
 	m.applyCond.Broadcast()
 	m.applyMu.Unlock()
+	if event.CompleteResourceRequest {
+		m.openRequests.release(event.RequestID)
+	}
 	// The local state must observe ReservationCreated/AttemptStarted before the
 	// request waits for a Replica. Waiting inside the Ledger writer would hold
 	// its lock and serialize unrelated appends behind network latency.

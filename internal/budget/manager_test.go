@@ -150,6 +150,37 @@ func TestTypedFreeLeasePersistsLifecycleWithoutReservingMoney(t *testing.T) {
 	}
 }
 
+func TestResourceCompletionReleasesOpenRequest(t *testing.T) {
+	manager, _, closeLog := newTestManager(t)
+	defer closeLog()
+	ctx := context.Background()
+	request, err := manager.BeginRequest(ctx, "project_resource", "request_resource")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := manager.ReserveLeaseDetailed(ctx, request, 100, LeaseSpec{
+		Mode: ledger.LeaseModeMetered, ReservationMicrosUSD: 10,
+		PriceSnapshot:               testPriceSnapshot(t, domain.BillingModeMetered),
+		TokenGuardPricingViewDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}, AttemptMetadata{ProviderResourceID: "resource_billing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.MarkStarted(ctx, attempt); err != nil {
+		t.Fatal(err)
+	}
+	resource := domain.ProviderResource{ProjectID: request.ProjectID, ID: attempt.ProviderResourceID, AttemptID: attempt.AttemptID}
+	if got := manager.openRequests.count(); got != 1 {
+		t.Fatalf("open requests before job completion = %d, want 1", got)
+	}
+	if err := manager.SettleResource(ctx, resource, Settlement{Outcome: "success"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := manager.openRequests.count(); got != 0 {
+		t.Fatalf("open requests after job completion = %d, want 0", got)
+	}
+}
+
 func TestLeaseDeepCopiesSnapshotAndFixedOnlySettlementIsValidated(t *testing.T) {
 	manager, _, closeLog := newTestManager(t)
 	defer closeLog()

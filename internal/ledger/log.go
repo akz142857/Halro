@@ -40,7 +40,10 @@ const (
 	// the epoch-4 authenticated frame shape; the new epoch is a reader gate for
 	// event semantics, not a weakening or replacement of the chain.
 	frameVersionRunAttribution = 5
-	frameHeaderSize            = 24
+	// frameVersionDeferredAccounting prevents older readers from dropping
+	// resource request finalization and mixed usage semantics during replay.
+	frameVersionDeferredAccounting = 6
+	frameHeaderSize                = 24
 	// chainPreviousHashSize and chainMACSize are appended after the base
 	// 24-byte header for epoch 4 only. The CRC32 field keeps its original
 	// meaning and byte range (header[4:20]||payload) unchanged by their
@@ -55,7 +58,7 @@ const (
 // ReplicationFormatVersion is the Ledger reader/writer epoch advertised in an
 // HA Hello. Keep it tied to the actual frame writer rather than duplicating a
 // number in the app runtime.
-func ReplicationFormatVersion() uint16 { return uint16(frameVersionRunAttribution) }
+func ReplicationFormatVersion() uint16 { return uint16(frameVersionDeferredAccounting) }
 
 var ErrCorrupt = errors.New("ledger is corrupt")
 var ErrUnsupportedVersion = errors.New("ledger version is unsupported")
@@ -100,7 +103,7 @@ type chainVerifier struct {
 }
 
 func authenticatedFrameEpoch(epoch byte) bool {
-	return epoch == frameVersionLedgerIntegrity || epoch == frameVersionRunAttribution
+	return epoch >= frameVersionLedgerIntegrity && epoch <= frameVersionDeferredAccounting
 }
 
 func (v *chainVerifier) verify() bool { return v != nil && len(v.key) == 32 }
@@ -979,7 +982,7 @@ func (l *Log) writeBatch(batch []appendRequest, started time.Time) {
 			requiresConfirmation = true
 		}
 		sequence++
-		frame, nextHash := encodeChainFrameVersion(frameVersionRunAttribution, l.chainKey, sequence, request.event.Kind, request.payload, previousHash)
+		frame, nextHash := encodeChainFrameVersion(eventFrameVersion(request.event), l.chainKey, sequence, request.event.Kind, request.payload, previousHash)
 		if _, err := encoded.Write(frame); err != nil {
 			finish(nil, 0, fmt.Errorf("encode ledger batch: %w", err))
 			return
@@ -1028,7 +1031,7 @@ func (l *Log) writeBatch(batch []appendRequest, started time.Time) {
 	l.chainSequence = sequence
 	l.chainOffset = offset
 	l.chainSawFrames = true
-	l.chainEpoch = frameVersionRunAttribution
+	l.chainEpoch = frameVersionDeferredAccounting
 	l.batches.Add(1)
 	l.writtenRecords.Add(uint64(len(batch)))
 	replicationIndex := uint64(0)
@@ -1073,13 +1076,9 @@ func encodeFrame(sequence uint64, kind EventKind, payload []byte) []byte {
 	return encodeFrameVersion(frameVersionLegacy, sequence, kind, payload)
 }
 
-// eventFrameVersion no longer branches by event shape (ADR 0016): every event
-// this build writes is promoted to the frame-integrity epoch, so there is no
-// window where some new frames are authenticated and others merely
-// checksummed. The function stays, rather than being inlined at its one call
-// site, because "what epoch does a fresh write use" is a fact worth a name.
+// Every event this build writes uses the same authenticated epoch.
 func eventFrameVersion(Event) byte {
-	return frameVersionRunAttribution
+	return frameVersionDeferredAccounting
 }
 
 func encodeFrameVersion(version byte, sequence uint64, kind EventKind, payload []byte) []byte {
@@ -1186,8 +1185,8 @@ func scanFrom(file io.ReadSeeker, generation uint64, sourceOffset, logicalOffset
 		if highestAuthenticatedEpoch > 0 && !authenticatedFrameEpoch(epoch) {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: frame epoch %d follows an authenticated frame", ErrTampered, offset, epoch)
 		}
-		if highestAuthenticatedEpoch == frameVersionRunAttribution && epoch == frameVersionLedgerIntegrity {
-			return Watermark{}, false, fmt.Errorf("%w at offset %d: frame epoch %d follows run-attribution epoch", ErrTampered, offset, epoch)
+		if epoch < highestAuthenticatedEpoch {
+			return Watermark{}, false, fmt.Errorf("%w at offset %d: frame epoch %d follows authenticated epoch %d", ErrTampered, offset, epoch, highestAuthenticatedEpoch)
 		}
 		if authenticatedFrameEpoch(epoch) && epoch > highestAuthenticatedEpoch {
 			highestAuthenticatedEpoch = epoch

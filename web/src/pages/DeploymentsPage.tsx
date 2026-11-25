@@ -36,6 +36,8 @@ import { localizedError } from "../i18n/errors";
 
 import { FilterChips, ListRefresh, ListViews, useListQuery } from "../ListControls";
 
+const asyncVideoProfileID = "bedrock.runtime.async.nova-reel-v1.v1";
+
 export function DeploymentsPage() {
   const { t } = useTranslation();
   const readOnly = useIsReadOnly();
@@ -273,6 +275,7 @@ function DeploymentRow({
   });
   const priceItems = prices.data?.items ?? [];
   const activePrice = priceItems.find((price) => price.status === "active");
+  const billsVideoDuration = deployment.profile_id === asyncVideoProfileID;
   const priceAction = t(prices.isSuccess && !activePrice ? "deployments.setPrice" : "deployments.adjustPrice");
   const priceActionDisabledReason = readOnly ? t("navigation.readOnlyAction")
     : prices.isPending ? t("common.loadingShort")
@@ -538,7 +541,7 @@ function DeploymentRow({
                 fixed it. Repeating it here made the same fact appear three times
                 on one screen, counting the status strip. */}
             {(activePrice?.billing_mode === "metered" || !activePrice) && <div className="detail-facts">
-              {activePrice?.billing_mode === "metered" && (deployment.capabilities.chat || deployment.capabilities.embeddings) && <>
+              {activePrice?.billing_mode === "metered" && !billsVideoDuration && (deployment.capabilities.chat || deployment.capabilities.embeddings) && <>
                 <DetailFact label={t("deployments.inputPrice")} value={money(activePrice.input_micros_per_million)} meta={t("deployments.perMillionTokens")} />
                 {/* Shown even when it equals the input rate: that is itself the
                     fact worth reading, since it means cached prompt tokens are
@@ -548,6 +551,7 @@ function DeploymentRow({
                 <DetailFact label={t("deployments.cacheWriteLongPrice")} value={money(activePrice.cache_write_long_micros_per_million)} meta={t("deployments.perMillionTokens")} />
                 <DetailFact label={t("deployments.outputPrice")} value={money(activePrice.output_micros_per_million)} meta={t("deployments.perMillionTokens")} />
               </>}
+              {activePrice?.billing_mode === "metered" && billsVideoDuration && <DetailFact label={t("deployments.videoDurationPrice")} value={money(activePrice.output_micros_per_million)} meta={t("deployments.perMillionVideoSeconds")} />}
               {activePrice?.billing_mode === "metered" && <DetailFact label={t("deployments.fixedPrice")} value={money(activePrice.fixed_request_micros_usd)} meta={t("deployments.perRequest")} />}
               {/* With a schedule the rates above are only what applies outside
                   the windows, so leaving them to stand alone would read as the
@@ -576,6 +580,7 @@ function DeploymentRow({
                     <div>
                       <strong>{t(`deployments.priceVersionStatus.${price.status}`)} · {t(price.billing_mode === "free" ? "deployments.freeLabel" : "deployments.meteredLabel")}</strong>
                       <small>{dateTime(price.effective_from)} · {priceSourceWords(price.source, t)}{price.schedule ? ` · ${t("deployments.scheduleWindowCount", { count: price.schedule.windows.length })}` : ""}</small>
+                      {billsVideoDuration && price.billing_mode === "metered" && <small>{t("deployments.videoPriceRates", { output: money(price.output_micros_per_million), fixed: money(price.fixed_request_micros_usd) })}</small>}
                     </div>
                     {price.status === "scheduled" && <button
                       className="button ghost"
@@ -772,6 +777,15 @@ function pricingQuarantineReason(deployment: Deployment, t: TFunction) {
 
 function ClockPricingConfirm({ deployment, onClose }: { deployment: Deployment; onClose: () => void }) {
   const { t } = useTranslation();
+  const rates = (price: Pick<DeploymentPriceVersion, "input_micros_per_million" | "cached_input_micros_per_million" | "cache_write_micros_per_million" | "cache_write_long_micros_per_million" | "output_micros_per_million" | "fixed_request_micros_usd">) => {
+    const output = money(price.output_micros_per_million);
+    const fixed = money(price.fixed_request_micros_usd);
+    if (deployment.profile_id === asyncVideoProfileID) return t("deployments.videoPriceRates", { output, fixed });
+    return t("deployments.clockPriceRates", {
+      input: money(price.input_micros_per_million), cached: money(price.cached_input_micros_per_million),
+      short: money(price.cache_write_micros_per_million), long: money(price.cache_write_long_micros_per_million), output, fixed,
+    });
+  };
   const client = useQueryClient();
   const [password, setPassword] = useState("");
   const [totp, setTotp] = useState("");
@@ -798,8 +812,8 @@ function ClockPricingConfirm({ deployment, onClose }: { deployment: Deployment; 
         <DetailFact label={t("deployments.priceTimeline")} value={`v${review.data.price.version}`} meta={review.data.price.id} />
         <DetailFact label={t("deployments.billingMode")} value={t(review.data.price.billing_mode === "free" ? "deployments.freeLabel" : "deployments.meteredLabel")} />
       </div>
-      <p>{t("deployments.clockPriceRates", { input: money(review.data.price.input_micros_per_million), cached: money(review.data.price.cached_input_micros_per_million), short: money(review.data.price.cache_write_micros_per_million), long: money(review.data.price.cache_write_long_micros_per_million), output: money(review.data.price.output_micros_per_million), fixed: money(review.data.price.fixed_request_micros_usd) })}</p>
-      {review.data.price.schedule && <div><p>{review.data.price.schedule.timezone}</p><ul className="price-schedule-summary">{review.data.price.schedule.windows.map((window) => <li key={window.start_minute}>{minuteToClock(window.start_minute)}–{minuteToClock(window.end_minute)} · {t("deployments.clockPriceRates", { input: money(window.input_micros_per_million), cached: money(window.cached_input_micros_per_million), short: money(window.cache_write_micros_per_million), long: money(window.cache_write_long_micros_per_million), output: money(window.output_micros_per_million), fixed: money(window.fixed_request_micros_usd) })}</li>)}</ul></div>}
+      <p>{rates(review.data.price)}</p>
+      {review.data.price.schedule && <div><p>{review.data.price.schedule.timezone}</p><ul className="price-schedule-summary">{review.data.price.schedule.windows.map((window) => <li key={window.start_minute}>{minuteToClock(window.start_minute)}–{minuteToClock(window.end_minute)} · {rates(window)}</li>)}</ul></div>}
       <label className="check-row"><input type="checkbox" checked={confirmed} disabled={review.isFetching || mutation.isPending} onChange={(event) => setConfirmed(event.target.checked)} /><span>{t("deployments.clockPricingAcknowledgement")}</span></label>
     </>}
     <button type="button" className="button ghost" disabled={review.isFetching || mutation.isPending} onClick={() => { setConfirmed(false); void review.refetch(); }}>{t("deployments.clockRefreshReview")}</button>
@@ -874,6 +888,8 @@ function priceSourceWords(source: DeploymentPriceVersion["source"], t: TFunction
 
 function PriceVersionForm({ deployment, current, blocking, onClose }: { deployment: Deployment; current?: DeploymentPriceVersion; blocking?: DeploymentPriceVersion; onClose: () => void }) {
   const { t } = useTranslation();
+  const billsVideoDuration = deployment.profile_id === asyncVideoProfileID;
+  const outputLabel = t(billsVideoDuration ? "deployments.videoOutputUSD" : "deployments.outputUSD");
   const dateTime = useInstantFormatter();
   const queryClient = useQueryClient();
   const [step, setStep] = useState<"details" | "confirm">("details");
@@ -928,8 +944,8 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
   const sourceNeedsNote = sourceKind === "official_public_price" || sourceKind === "contract_price";
   const validSource = !sourceNeedsNote || sourceNote.trim() !== "";
   const validDetails = validPrice && validEffective && validSource && !scheduleProblem;
-  // The worked example prices ordinary input and output.
-  const exampleCost = mode === "free" ? 0 : Number(input) / 1000 + Number(output) / 2000 + Number(fixed);
+  const exampleVariableCost = billsVideoDuration ? Number(output) * 6 / 1_000_000 : Number(input) / 1000 + Number(output) / 2000;
+  const exampleCost = mode === "free" ? 0 : exampleVariableCost + Number(fixed);
   const effectiveLabel = effectiveMode === "now" ? t("deployments.effectiveNow") : validEffective ? dateTime(new Date(scheduledTimestamp).toISOString()) : "—";
   // Someone adjusting a live price is changing what every request costs from
   // the moment they confirm. The version being replaced belongs on the same
@@ -1009,7 +1025,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
           <legend>{t("deployments.billingMode")}</legend>
           <label className={mode === "metered" ? "price-mode-option selected" : "price-mode-option"}>
             <input type="radio" name="price-mode" checked={mode === "metered"} onChange={() => setMode("metered")} />
-            <span><strong>{t("deployments.meteredLabel")}</strong><small>{t("deployments.meteredDescription")}</small></span>
+            <span><strong>{t("deployments.meteredLabel")}</strong><small>{t(billsVideoDuration ? "deployments.meteredVideoDescription" : "deployments.meteredDescription")}</small></span>
           </label>
           <label className={mode === "free" ? "price-mode-option selected" : "price-mode-option"}>
             <input type="radio" name="price-mode" checked={mode === "free"} onChange={() => setMode("free")} />
@@ -1019,7 +1035,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
         {mode === "metered" && <>
           <div className="price-form-grid">
             <Field label={t("deployments.inputUSD")}><input autoComplete="off" inputMode="decimal" required value={input} onChange={(event) => setInput(event.target.value)} /></Field>
-            <Field label={t("deployments.outputUSD")}><input autoComplete="off" inputMode="decimal" required value={output} onChange={(event) => setOutput(event.target.value)} /></Field>
+            <Field label={outputLabel}><input autoComplete="off" inputMode="decimal" required value={output} onChange={(event) => setOutput(event.target.value)} /></Field>
           </div>
           {/* Every provider that reports a cache-read tier bills it well below
               the input rate, so this field is asked for beside the other two
@@ -1038,7 +1054,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
           {/* Some providers publish peak and off-peak rates. Without this the
               operator can only enter one number, and which way the accounting
               is wrong is decided by which number they happen to pick. */}
-          <PriceScheduleFields schedule={schedule} onChange={setSchedule} problem={scheduleProblem} baseRates={{ input, cachedInput: cachedInputValue, cacheWrite, cacheWriteLong, output, fixed }} />
+          <PriceScheduleFields schedule={schedule} onChange={setSchedule} problem={scheduleProblem} billsVideoDuration={billsVideoDuration} baseRates={{ input, cachedInput: cachedInputValue, cacheWrite, cacheWriteLong, output, fixed }} />
           <details className="price-advanced">
             <summary>{t("deployments.advancedPricing")}</summary>
             <Field label={t("deployments.fixedRequestUSD")}><input autoComplete="off" inputMode="decimal" required value={fixed} onChange={(event) => setFixed(event.target.value)} /></Field>
@@ -1069,7 +1085,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
               <div><dt>{t("deployments.cachedInputUSD")}</dt><dd>{priceCell(previousPrice?.cachedInput, cachedInputValue)}</dd></div>
               <div><dt>{t("deployments.cacheWriteUSD")}</dt><dd>{priceCell(previousPrice?.cacheWrite, cacheWriteValue)}</dd></div>
               <div><dt>{t("deployments.cacheWriteLongUSD")}</dt><dd>{priceCell(previousPrice?.cacheWriteLong, cacheWriteLongValue)}</dd></div>
-              <div><dt>{t("deployments.outputUSD")}</dt><dd>{priceCell(previousPrice?.output, output)}</dd></div>
+              <div><dt>{outputLabel}</dt><dd>{priceCell(previousPrice?.output, output)}</dd></div>
               <div><dt>{t("deployments.fixedRequestUSD")}</dt><dd>{priceCell(previousPrice?.fixed, fixed)}</dd></div>
             </>}
             {mode === "metered" && schedule && <div>
@@ -1078,9 +1094,11 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
                 <span>{t("deployments.scheduleZoneSummary", { timezone: schedule.timezone })}</span>
                 <ul className="price-schedule-summary">
                   {schedule.windows.map((window, index) => <li key={index}>
-                    {t("deployments.scheduleWindowSummary", { start: window.start, end: window.end, input: window.input, output: window.output, short: window.cacheWrite ?? window.input, long: window.cacheWriteLong ?? window.input })}
+                    {billsVideoDuration
+                      ? t("deployments.scheduleVideoWindowSummary", { start: window.start, end: window.end, output: window.output, fixed: window.fixed })
+                      : t("deployments.scheduleWindowSummary", { start: window.start, end: window.end, input: window.input, output: window.output, short: window.cacheWrite ?? window.input, long: window.cacheWriteLong ?? window.input })}
                   </li>)}
-                  <li>{t("deployments.scheduleBaseSummary", { input, output, short: cacheWriteValue, long: cacheWriteLongValue })}</li>
+                  <li>{billsVideoDuration ? t("deployments.scheduleVideoBaseSummary", { output, fixed }) : t("deployments.scheduleBaseSummary", { input, output, short: cacheWriteValue, long: cacheWriteLongValue })}</li>
                 </ul>
               </dd>
             </div>}
@@ -1088,7 +1106,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
             <div><dt>{t("deployments.priceSourceKind")}</dt><dd>{t(`deployments.sourceKinds.${sourceKind === "official_public_price" ? "officialPublicPrice" : sourceKind === "contract_price" ? "contractPrice" : sourceKind === "internal_cost" ? "internalCost" : "temporaryEstimate"}`)}</dd></div>
             <div><dt>{t("deployments.sourceAssurance")}</dt><dd>{t("deployments.assertedSource")}</dd></div>
           </dl>
-          <p>{t("deployments.priceExample", { cost: exampleCost.toFixed(6) })}</p>
+          <p>{t(billsVideoDuration ? "deployments.videoPriceExample" : "deployments.priceExample", { cost: exampleCost.toFixed(6) })}</p>
         </section>
         {/* A version that is already effective when it is written can never
             satisfy the cancellation rule (cancelled_at < effective_from), so
@@ -1193,11 +1211,12 @@ export function scheduleDraftProblem(draft: ScheduleDraft): "timezone" | "window
   return undefined;
 }
 
-function PriceScheduleFields({ schedule, onChange, problem, baseRates }: {
+function PriceScheduleFields({ schedule, onChange, problem, baseRates, billsVideoDuration }: {
   schedule: ScheduleDraft | null;
   onChange: (value: ScheduleDraft | null) => void;
   problem?: string;
   baseRates: Omit<ScheduleWindowDraft, "start" | "end">;
+  billsVideoDuration: boolean;
 }) {
   const { t } = useTranslation();
   const update = (index: number, patch: Partial<ScheduleWindowDraft>) => {
@@ -1237,7 +1256,7 @@ function PriceScheduleFields({ schedule, onChange, problem, baseRates }: {
       {/* Both rules hold for every window, so they are stated once. Repeating
           them per card turned a two-window schedule into four lines of the same
           sentence and buried the rates between them. */}
-      <p className="price-schedule-note">{t("deployments.scheduleTimeHint")} {t("deployments.scheduleRateUnit")}</p>
+      <p className="price-schedule-note">{t("deployments.scheduleTimeHint")} {t(billsVideoDuration ? "deployments.scheduleVideoRateUnit" : "deployments.scheduleRateUnit")}</p>
       {/* One window is a card rather than a table row. Six rate columns plus a
           remove button never fit the modal's width, so the table could only
           scroll sideways — which hides the very columns being compared and puts
@@ -1259,7 +1278,7 @@ function PriceScheduleFields({ schedule, onChange, problem, baseRates }: {
           <label><span>{t("deployments.scheduleRateCachedInput")}</span><input autoComplete="off" inputMode="decimal" value={window.cachedInput} onChange={(event) => update(index, { cachedInput: event.target.value })} aria-label={t("deployments.cachedInputUSD")} /></label>
           <label><span>{t("deployments.scheduleRateCacheWrite")}</span><input autoComplete="off" inputMode="decimal" value={window.cacheWrite ?? window.input} onChange={(event) => update(index, { cacheWrite: event.target.value })} aria-label={t("deployments.cacheWriteUSD")} /></label>
           <label><span>{t("deployments.scheduleRateCacheWriteLong")}</span><input autoComplete="off" inputMode="decimal" value={window.cacheWriteLong ?? window.input} onChange={(event) => update(index, { cacheWriteLong: event.target.value })} aria-label={t("deployments.cacheWriteLongUSD")} /></label>
-          <label><span>{t("deployments.scheduleRateOutput")}</span><input autoComplete="off" inputMode="decimal" value={window.output} onChange={(event) => update(index, { output: event.target.value })} aria-label={t("deployments.outputUSD")} /></label>
+          <label><span>{t(billsVideoDuration ? "deployments.videoDurationPrice" : "deployments.scheduleRateOutput")}</span><input autoComplete="off" inputMode="decimal" value={window.output} onChange={(event) => update(index, { output: event.target.value })} aria-label={t(billsVideoDuration ? "deployments.videoOutputUSD" : "deployments.outputUSD")} /></label>
           <label><span>{t("deployments.scheduleRateFixed")}</span><input autoComplete="off" inputMode="decimal" value={window.fixed} onChange={(event) => update(index, { fixed: event.target.value })} aria-label={t("deployments.fixedRequestUSD")} /></label>
         </div>
       </fieldset>)}
@@ -1271,7 +1290,9 @@ function PriceScheduleFields({ schedule, onChange, problem, baseRates }: {
       {/* Saying which rate covers the rest of the day is the difference between
           a schedule the operator can reason about and one where the uncovered
           hours are an unmarked hole. */}
-      <p className="field-hint">{t("deployments.scheduleBaseHint", { input: baseRates.input, output: baseRates.output })}</p>
+      <p className="field-hint">{billsVideoDuration
+        ? t("deployments.scheduleVideoBaseSummary", { output: baseRates.output, fixed: baseRates.fixed })
+        : t("deployments.scheduleBaseHint", { input: baseRates.input, output: baseRates.output })}</p>
       {problem && problem !== "timezone" && <p className="field-hint error">{t(`deployments.scheduleProblem.${problem}`)}</p>}
     </div>}
   </section>;

@@ -38,7 +38,8 @@ readable and return zero for the new counter.
 Usage schema 10 adds `estimated_output_tokens` for the estimated subset of
 an otherwise provider-reported output count and `video_seconds` for
 duration-based asynchronous video. Earlier partitions read both columns as
-zero. Video seconds are separate from token totals.
+zero. Video seconds are separate from token totals. Schema 11 adds
+`estimated_input_tokens` for estimates alongside reported input or output.
 
 ## The console checkpoint
 

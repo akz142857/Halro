@@ -154,10 +154,15 @@ Kubernetes 的 [`halro-ha-statefulset.yaml`](../../deploy/kubernetes/halro-ha-st
 
 - **Replica 备份**：先在该 Replica 上执行 `cluster maintenance on`，确认 readiness 失败而 liveness 仍在；再用 `backup create --replica` 创建加密备份并 `backup verify`。用 `maintenance off` 恢复并等它追平。随后停止 Primary，使用 `cluster report-backup` 记录已验证备份。完整命令及文件权限见 [runbook](../runbooks/ha-operations.md#replica-backup-and-reporting)。
 - **全集群恢复**：隔离所有旧成员和客户端，用已验证的 HA 备份恢复为**新的 incarnation**，再播种所有 Replica。旧 PVC 保留旧 incarnation，不能直接加入新集群；见 [恢复流程](../runbooks/ha-operations.md#whole-cluster-restore)。
-- **升级**：一次只动一个成员。先确认不是当前 Primary，必要时先做 `stepdown`；相邻版本及 schema 兼容性必须按 [HA 测试指南](../verification/ha-test-guide.zh-CN.md) 验证。示例 StatefulSet 使用 `OnDelete`，不会替运维完成升级排序。
+- **兼容版本升级**：先按 [HA 测试指南](../verification/ha-test-guide.zh-CN.md) 验证二进制与 schema 兼容性。相邻版本兼容时逐个升级成员。先确认目标不是当前 Primary，必要时执行 `stepdown`。示例 StatefulSet 使用 `OnDelete`，需要运维安排成员升级顺序。
 
-缓存写入计费将元数据从 schema 42 升到 43。HA 节点要求 schema 一致，新版 Primary
-要求 schema 43 投影。此次升级走离线全集群恢复。暂停写入，确认 Replica 已应用到最终持久索引，
+从 v0.17.0 升级到支持 Batch 和异步推理计费的新版本时，成员兼容版本发生变化，账本将写入认证格式 v6。
+请安排全集群停机升级。暂停写入并验证完整的升级前备份，停止所有成员，更换全部成员的二进制后再启动。
+确认副本追平且 Primary 就绪后再恢复流量。回滚时使用已验证的升级前备份，按
+[全集群恢复流程](../runbooks/ha-operations.md#whole-cluster-restore) 恢复。
+
+之前的缓存写入计费升级将元数据从 schema 42 升到 43。若从 schema 42 升级，需走离线全集群恢复。
+暂停写入，确认 Replica 已应用到最终持久索引，
 再报告经验证的 HA 备份。用新版和新的 incarnation 恢复，然后重新播种 Replica。见
 [全集群恢复流程](../runbooks/ha-operations.md#whole-cluster-restore)。
 

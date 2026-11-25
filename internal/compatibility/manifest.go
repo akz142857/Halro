@@ -719,7 +719,23 @@ func inferenceResourcesEndpointManifests() []EndpointCompatibilityManifest {
 		}
 		if manifests[index].ID == "openai.batches.create.v1" {
 			manifests[index].DocumentedDeviations = append(manifests[index].DocumentedDeviations,
-				"every line of the input is checked against the selected profile before the batch is created, because a batch is routed once for many requests; a line the profile cannot carry fails the batch and names itself")
+				"every line of the input is checked against the selected profile before the batch is created, because a batch is routed once for many requests; a line the profile cannot carry fails the batch and names itself",
+				"every line of the input must address the priced deployment and use a non-streaming body; a generation line needs a positive explicit output token limit for its endpoint, within the Project's bounds",
+				"submission reserves the batch's combined estimated input and output against the Project's budget; settlement uses available result usage, releases the share for proven unexecuted work, and estimates the rest using the original bounds",
+				"the job settles once against its original accounting day; the fixed request fee applies once when billable work was performed")
+		}
+		if manifests[index].ID == "halro.async.create.v1" {
+			manifests[index].DocumentedDeviations = append(manifests[index].DocumentedDeviations,
+				"the Project's budget reserves the requested video duration at submission; the deployment's output rate is USD per million video seconds and its fixed fee applies per invocation",
+				"the provider's status response does not report billable duration; the job settles once using the requested duration and the original accounting day")
+		}
+		switch manifests[index].ID {
+		case "openai.batches.get.v1", "halro.async.get.v1":
+			manifests[index].DocumentedDeviations = append(manifests[index].DocumentedDeviations,
+				"polling a job with a submission budget hold uses normal request slots without charging separately; terminal status can settle the original hold, and background maintenance reconciles jobs that are never polled")
+		case "openai.batches.cancel.v1":
+			manifests[index].DocumentedDeviations = append(manifests[index].DocumentedDeviations,
+				"canceling a batch with a submission budget hold uses normal request slots without charging separately; terminal status can settle the original hold")
 		}
 		// Files, batches and async invocations authenticate through the
 		// project resource plane. It requires inference scope and charges the

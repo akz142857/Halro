@@ -43,7 +43,7 @@ interface ExecutionState {
 }
 
 interface EstimationFlags {
-  tokens: boolean;
+  tokens: "reported" | "conservative" | "includesEstimatedTokens";
   cost: boolean;
 }
 
@@ -505,8 +505,12 @@ export function DeveloperPage() {
               if (attempt < settlementAttempts - 1) await new Promise((resolve) => setTimeout(resolve, settlementRetryMillis));
               continue;
             }
-            const estimated = {
-              tokens: detail.attempts.some((event) => event.tokens_estimated),
+            const tokenAttempts = detail.attempts.filter((event) => event.provider_input_tokens > 0 || event.provider_output_tokens > 0);
+            const hasEstimatedTokens = tokenAttempts.some((event) => event.tokens_estimated);
+            const allTokensEstimated = tokenAttempts.every((event) =>
+              event.token_usage_source === "gateway_estimated" || (!event.token_usage_source && event.tokens_estimated));
+            const estimated: EstimationFlags = {
+              tokens: !hasEstimatedTokens ? "reported" : allTokensEstimated ? "conservative" : "includesEstimatedTokens",
               cost: detail.attempts.some((event) => event.cost_estimated),
             };
             setExecution((current) => current.requestID === correlatedRequestID
@@ -755,7 +759,7 @@ export function DeveloperPage() {
                   {/* Whose count this is. Every other usage surface says so,
                       and a conservative stand-in read as a measurement is the
                       one reading that cannot be corrected later. */}
-                  {settlement && <small className="developer-settlement-note">{t(execution.estimated?.tokens ? "usage.conservative" : "usage.reported")}</small>}
+                  {settlement && <small className="developer-settlement-note">{t(`usage.${execution.estimated?.tokens ?? "reported"}`)}</small>}
                 </div>
                 <div>
                   <small>{t("developer.cost")}</small>
