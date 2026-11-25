@@ -1,6 +1,6 @@
 # Dependency and License Review
 
-Date: 2026-11-16
+Date: 2026-11-25
 
 Halro is distributed under Apache-2.0. The source tree includes the project
 license in `LICENSE`, required attribution in `NOTICE`, and the runtime
@@ -17,16 +17,16 @@ module and lock files.
 
 | Module | Version | License | Distribution scope |
 |---|---:|---|---|
-| `github.com/aws/aws-sdk-go-v2` | 1.47.8 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/config` | 1.33.17 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/credentials` | 1.20.17 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.62.5 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2` | 1.48.0 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/config` | 1.33.19 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/credentials` | 1.21.1 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.63.0 | Apache-2.0 | runtime |
 | `github.com/aws/smithy-go` | 1.28.9 | Apache-2.0 | runtime |
 | `github.com/go-chi/chi/v5` | 5.5.0 | MIT | runtime |
 | `github.com/google/jsonschema-go` | 0.4.3 | MIT | test/release tooling |
 | `github.com/parquet-go/parquet-go` | 0.32.0 | Apache-2.0 | runtime |
 | `go.etcd.io/bbolt` | 1.5.0 | MIT | runtime |
-| `golang.org/x/crypto` | 0.58.0 | BSD-3-Clause | runtime |
+| `golang.org/x/crypto` | 0.59.0 | BSD-3-Clause | runtime |
 | `golang.org/x/sys` | 0.50.0 | BSD-3-Clause | runtime |
 | `gopkg.in/yaml.v3` | 3.0.1 | MIT and Apache-2.0 | runtime |
 
@@ -134,14 +134,14 @@ is linked into the Go runtime.
 
 | Package | Version | License |
 |---|---:|---|
-| `@hookform/resolvers` | 7.0.5 | MIT |
+| `@hookform/resolvers` | 7.0.6 | MIT |
 | `@tanstack/react-query` | 5.107.1 | MIT |
-| `i18next` | 27.1.0 | MIT |
+| `i18next` | 27.1.3 | MIT |
 | `qrcode` | 1.5.4 | MIT |
 | `react` | 19.3.1 | MIT |
 | `react-dom` | 19.3.1 | MIT |
-| `react-hook-form` | 7.91.0 | MIT |
-| `react-i18next` | 18.0.1 | MIT |
+| `react-hook-form` | 7.92.0 | MIT |
+| `react-i18next` | 18.0.2 | MIT |
 | `uplot` | 1.6.32 | MIT |
 | `zod` | 4.6.7 | MIT |
 
@@ -606,6 +606,33 @@ modules also move. All 15 modules retain byte-identical LICENSE and, where
 present, NOTICE files. The module path set and distribution notices are
 unchanged. The existing Parquet compression security pins are preserved.
 
+The 2026-11-25 Go runtime refresh (#533) updates four direct AWS SDK
+modules, ten indirect AWS modules, and `golang.org/x/crypto`. The module
+path sets in `go.mod` and `go.sum` are unchanged. The LICENSE and NOTICE
+files, where present, are byte-identical for all 15 updated modules. The
+AWS SDK now defaults to retry behavior 2.1. The KMS adapter still configures
+one attempt per SDK invocation.
+
+The 2026-11-25 Admin UI refresh (#532) updates four runtime packages:
+`@hookform/resolvers` to 7.0.6, `i18next` to 27.1.3,
+`react-hook-form` to 7.92.0, and `react-i18next` to 18.0.2.
+The two build/test dependencies are `vite` 8.3.8 and `jsdom` 31.0.1.
+All six remain MIT with byte-identical LICENSE files. The lockfile adds
+and removes no package paths. The embedded console is rebuilt from the
+updated lockfile.
+
+The 2026-11-25 Python Anthropic SDK compatibility update (#531)
+upgrades `anthropic` from 2.7.0 to 2.9.0. The hash-locked wheel retains
+byte-identical Apache-2.0 and MIT license files and the vendored
+httpx-aiohttp license and notice. No transitive versions change.
+These SDKs are confined to compatibility tests.
+
+The 2026-11-25 Python OpenAI SDK compatibility update (#530)
+upgrades `openai` from 3.48.0 to 3.52.0. The hash-locked wheel retains
+byte-identical Apache-2.0 and vendored httpx-aiohttp license files. The
+combined lock keeps Anthropic 2.9.0 with no transitive version changes.
+These SDKs are confined to compatibility tests.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -617,16 +644,16 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `2d3a0ad8b1288f6766cf9a2c5eb8c6d7deea037e`
-- `go.sum`: `6f8c4480662e038e09ec5182f9682a76bda7213c`
-- `web/package.json`: `83106c440c9f277dfc71d343a99eaf42695dbde9`
-- `web/package-lock.json`: `0ad71689c04c45e1891bb4debf0d944d6aa71dea`
+- `go.mod`: `c9166192bc3ee5f0c3f3d3a282a3dcc18b588b44`
+- `go.sum`: `fa1db6415f270cc09ab06b5b4694a1bcc78922b5`
+- `web/package.json`: `654a40d723e005f7f4603eebde214526ed29a010`
+- `web/package-lock.json`: `85aeb9d673fd173a36bd159ff1bcbdc481496461`
 - `tests/compatibility/go/go.mod`: `773676f6449c95c2b9f3ea98d70003de7c4aa014`
 - `tests/compatibility/go/go.sum`: `504b5da47dd9e08145d2f8fcf0afc8f6a445d91c`
 - `tests/compatibility/node/package.json`: `9ea13eaa9cbe048115e33eb6eb672e48025db057`
 - `tests/compatibility/node/package-lock.json`: `4e9519004b74a3696acaa9a9f1829e2dc5c31609`
-- `tests/compatibility/python/requirements.in`: `7a97cfab0a029086015babb6ee01fd00cf4428a7`
-- `tests/compatibility/python/requirements.txt`: `c1b7932c641ad2109ebd105e4b87b335bfd38656`
+- `tests/compatibility/python/requirements.in`: `83faff2527d7acc243f2228fd1bcb3426f8ce8d1`
+- `tests/compatibility/python/requirements.txt`: `6cb02e8a11186c547815065caa42589f671f8a2e`
 
 The Python lock hash records the 2026-11-15 OpenTelemetry patch above.
 All ten hashes moved for the 2026-10-23 refreshes recorded above, and
