@@ -6,6 +6,17 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-26
+
+### Changed
+
+- Budget Batch and asynchronous video jobs when submitted and settle once
+  against the pinned price and accounting day. Batch generation items require
+  an explicit output limit. Status polling does not charge the job's fixed fee.
+- Keep terminal job outcomes and durations out of interactive request metrics.
+- Refresh the AWS SDK, Go cryptography, console dependencies, and official
+  compatibility-test SDKs. The dependency license review records exact versions.
+
 ### Fixed
 
 - Report cache-write charges based on inherited rates or an unreported
@@ -18,10 +29,8 @@ semantic versioning.
 - Honor fixed-fee exemptions on resource polls, including recovered attempts.
 - Estimate the missing output of interrupted streams while preserving reported
   tokens and cache tiers.
-- Reserve Batch and asynchronous video costs at submission. Settle once at
-  completion or reconcile unpolled jobs in resource maintenance.
-- Recover deferred job settlements after transient storage failures and keep
-  terminal job outcomes and durations out of the interactive request metrics.
+- Recover deferred settlements and release abandoned reservations after
+  transient storage failures. Reconcile jobs the client never polls.
 - Show the estimated token subsets in call details and label asynchronous video
   rates by duration. Preserve TLS setup errors when a handshake times out.
 
@@ -29,7 +38,8 @@ semantic versioning.
 
 - Upgrade all members of an HA cluster together. Resource settlements and
   mixed stream usage require the new peer accounting contract and Ledger
-  epoch 6. Restore a verified pre-upgrade backup when rolling back.
+  epoch 6. Standalone keeps metadata schema 43 and the existing data directory.
+  Restore a verified pre-upgrade backup when rolling back.
 
 ## [0.17.0] - 2026-11-19
 
@@ -3109,6 +3119,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.18.0]: https://github.com/akz142857/Halro/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/akz142857/Halro/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/akz142857/Halro/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/akz142857/Halro/compare/v0.14.0...v0.15.0
