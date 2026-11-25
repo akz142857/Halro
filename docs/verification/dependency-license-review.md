@@ -134,14 +134,14 @@ is linked into the Go runtime.
 
 | Package | Version | License |
 |---|---:|---|
-| `@hookform/resolvers` | 7.0.5 | MIT |
+| `@hookform/resolvers` | 7.0.6 | MIT |
 | `@tanstack/react-query` | 5.107.1 | MIT |
-| `i18next` | 27.1.0 | MIT |
+| `i18next` | 27.1.3 | MIT |
 | `qrcode` | 1.5.4 | MIT |
 | `react` | 19.3.1 | MIT |
 | `react-dom` | 19.3.1 | MIT |
-| `react-hook-form` | 7.91.0 | MIT |
-| `react-i18next` | 18.0.1 | MIT |
+| `react-hook-form` | 7.92.0 | MIT |
+| `react-i18next` | 18.0.2 | MIT |
 | `uplot` | 1.6.32 | MIT |
 | `zod` | 4.6.7 | MIT |
 
@@ -613,6 +613,14 @@ files, where present, are byte-identical for all 15 updated modules. The
 AWS SDK now defaults to retry behavior 2.1. The KMS adapter still configures
 one attempt per SDK invocation.
 
+The 2026-11-25 Admin UI refresh (#532) updates four runtime packages:
+`@hookform/resolvers` to 7.0.6, `i18next` to 27.1.3,
+`react-hook-form` to 7.92.0, and `react-i18next` to 18.0.2.
+The two build/test dependencies are `vite` 8.3.8 and `jsdom` 31.0.1.
+All six remain MIT with byte-identical LICENSE files. The lockfile adds
+and removes no package paths. The embedded console is rebuilt from the
+updated lockfile.
+
 ## Drift gate
 
 The 2026-11-09 console preview update adds only the `preview:console` script
@@ -626,8 +634,8 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `c9166192bc3ee5f0c3f3d3a282a3dcc18b588b44`
 - `go.sum`: `fa1db6415f270cc09ab06b5b4694a1bcc78922b5`
-- `web/package.json`: `83106c440c9f277dfc71d343a99eaf42695dbde9`
-- `web/package-lock.json`: `0ad71689c04c45e1891bb4debf0d944d6aa71dea`
+- `web/package.json`: `654a40d723e005f7f4603eebde214526ed29a010`
+- `web/package-lock.json`: `85aeb9d673fd173a36bd159ff1bcbdc481496461`
 - `tests/compatibility/go/go.mod`: `773676f6449c95c2b9f3ea98d70003de7c4aa014`
 - `tests/compatibility/go/go.sum`: `504b5da47dd9e08145d2f8fcf0afc8f6a445d91c`
 - `tests/compatibility/node/package.json`: `9ea13eaa9cbe048115e33eb6eb672e48025db057`
